@@ -1,0 +1,30 @@
+[project]
+name = "cairn-report"
+version = "0.1.0"
+description = "Commentable research reports from Markdown and Hydra run outputs: overview and direction reports, live run values, figure provenance, and an append-only comment log."
+readme = "README.md"
+authors = [
+    { name = "Christian Döring", email = "christian.doering@tum.de" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "latex2mathml>=3.77",
+    "markdown-it-py>=3.0",
+    "matplotlib>=3.8",
+    "mdit-py-plugins>=0.4",
+    "plotly>=5.20",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+cairn-report = "cairn_report.cli:main"
+
+[project.urls]
+Repository = "https://github.com/DoeringChristian/cairn-report"
+
+[build-system]
+requires = ["uv_build>=0.12.22,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest>=8"]

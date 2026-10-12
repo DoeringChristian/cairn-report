@@ -1,0 +1,87 @@
+"""Project configuration: where reports, runs, and build output live, and the page style.
+
+Everything has a default, so most projects need no configuration. To change
+something, add a `cairn-report.toml` at the project root:
+
+    reports_dir = "reports"            # report content: Markdown, fragments, media, comments
+    output_dir = "generated/reports"   # build output, one folder per report slug
+    outputs_dir = "outputs"            # Hydra run directories read by the reports
+
+    [style]
+    css = ["reports/style.css"]        # extra stylesheets, applied after the default style
+    template_dir = "reports/template"  # files here replace the packaged page files by name
+
+The project root is the nearest folder, starting at the working directory, that
+contains `cairn-report.toml`, `pixi.toml`, or `pyproject.toml`.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+CONFIG_FILE = "cairn-report.toml"
+ROOT_MARKERS = (CONFIG_FILE, "pixi.toml", "pyproject.toml")
+
+
+@dataclass(frozen=True)
+class Config:
+    project: Path
+    reports_dir: Path
+    output_dir: Path
+    outputs_dir: Path
+    extra_css: tuple[Path, ...] = field(default_factory=tuple)
+    template_dir: Path | None = None
+
+    @property
+    def source(self) -> Path | None:
+        path = self.project / CONFIG_FILE
+        return path if path.is_file() else None
+
+
+def find_project(start: Path | None = None) -> Path:
+    start = Path(start or Path.cwd()).resolve()
+    for folder in [start, *start.parents]:
+        if any((folder / marker).is_file() for marker in ROOT_MARKERS):
+            return folder
+    return start
+
+
+def load_config(project: Path | str | None = None) -> Config:
+    """Read cairn-report.toml (if any) and resolve every path against the project root."""
+    root = Path(project).resolve() if project else find_project()
+    data: dict = {}
+    if (root / CONFIG_FILE).is_file():
+        data = tomllib.loads((root / CONFIG_FILE).read_text())
+    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style"}
+    if unknown:
+        raise ValueError(f"{root / CONFIG_FILE}: unknown keys {sorted(unknown)}")
+    style = data.get("style", {})
+    unknown_style = set(style) - {"css", "template_dir"}
+    if unknown_style:
+        raise ValueError(f"{root / CONFIG_FILE}: unknown [style] keys {sorted(unknown_style)}")
+
+    def path(value: str | None, default: str | None) -> Path | None:
+        if value is None and default is None:
+            return None
+        resolved = (root / (value if value is not None else default)).resolve()
+        if root not in [resolved, *resolved.parents]:
+            raise ValueError(f"{root / CONFIG_FILE}: {value!r} points outside the project")
+        return resolved
+
+    css = tuple(path(item, None) for item in style.get("css", []))
+    for sheet in css:
+        if not sheet.is_file() or sheet.suffix != ".css":
+            raise ValueError(f"{root / CONFIG_FILE}: style css {sheet} is not a .css file")
+    template_dir = path(style.get("template_dir"), None)
+    if template_dir is not None and not template_dir.is_dir():
+        raise ValueError(f"{root / CONFIG_FILE}: style template_dir {template_dir} is not a folder")
+    return Config(
+        project=root,
+        reports_dir=path(data.get("reports_dir"), "reports"),
+        output_dir=path(data.get("output_dir"), "generated/reports"),
+        outputs_dir=path(data.get("outputs_dir"), "outputs"),
+        extra_css=css,
+        template_dir=template_dir,
+    )
