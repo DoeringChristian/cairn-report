@@ -26,6 +26,11 @@ function hydrateFigure(card) {
   } else {
     card.tabIndex = 0; card.setAttribute("role", "button"); card.onclick = () => openFigure(index); card.onkeydown = event => { if (event.key === "Enter" || event.key === " ") openFigure(index); };
     card.append(commentIcon(target, item.line));
+    const image = card.querySelector("img");
+    if (image) { /* frame each image at its own aspect ratio; very wide ones take the full row */
+      const fit = () => { if (!image.naturalWidth) return; const ratio = image.naturalWidth / image.naturalHeight; card.style.setProperty("--figure-ratio", Math.min(Math.max(ratio, 0.75), 10).toFixed(3)); card.classList.toggle("is-wide", ratio > 2); card.classList.toggle("is-tall", ratio < 1); };
+      image.complete ? fit() : image.addEventListener("load", fit, {once: true});
+    }
   }
 }
 Promise.all([fetch("report-data.json").then(r => r.json()), fetch("narrative.html").then(r => r.text())]).then(([data, narrative]) => {
