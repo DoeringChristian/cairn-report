@@ -1,5 +1,9 @@
 let figures = [], active = 0, zoom = 1, panX = 0, panY = 0, pendingSelection = null, comments = [], saveTimer = null;
 const $ = selector => document.querySelector(selector);
+/* The builder puts versioned URLs on this script tag: the files change name when their content does, so the
+   browser can keep them; only index.html is checked on each visit. */
+const PAGE = document.currentScript?.dataset || {};
+const PLOTLY_SRC = PAGE.plotly || "plotly.min.js";  // loaded on first use
 const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
 /* Directions live at <root>reports/<slug>/ and the overview at <root>; <root> is "/" on the
    project server and "/p/<project>/" on a hub, so every server address starts from it. */
@@ -14,7 +18,22 @@ const isFigureTarget = target => target.startsWith("figure:");
 function commentFor(target) { return [...comments].reverse().find(row => row.target === target); }
 function commentIcon(target, line = "") { const button = el("button", "image-comment"); button.type = "button"; button.title = "Comment on image"; button.setAttribute("aria-label", "Comment on image"); button.innerHTML = COMMENT_ICON; button.onclick = event => { event.preventDefault(); event.stopPropagation(); openComment(target, line, "", button.getBoundingClientRect(), commentFor(target)); }; return button; }
 async function plotSpec(figure) { if (!figure._spec) { const response = await fetch(figure.src); if (!response.ok) throw new Error(`Could not load ${figure.src}`); figure._spec = await response.json(); } return figure._spec; }
-async function renderPlot(node, figure, full = false) { const spec = await plotSpec(figure); const layout = {...(spec.layout || {}), autosize: true}; const config = {responsive: true, displaylogo: false, ...(spec.config || {})};
+/* Plotly is large: fetch it only when the first interactive figure comes near the screen. */
+let plotlyLoading = null;
+function loadPlotly() {
+  if (window.Plotly) return Promise.resolve(window.Plotly);
+  return plotlyLoading ||= new Promise((resolve, reject) => {
+    const script = document.createElement("script"); script.src = PLOTLY_SRC; script.async = true;
+    script.onload = () => resolve(window.Plotly); script.onerror = () => { plotlyLoading = null; reject(new Error("Could not load Plotly")); };
+    document.head.append(script);
+  });
+}
+/* Figures load and plots render only when they approach the viewport, so long reports open fast. */
+const nearObserver = "IntersectionObserver" in window ? new IntersectionObserver(entries => entries.forEach(entry => {
+  if (entry.isIntersecting) { nearObserver.unobserve(entry.target); const action = entry.target._near; entry.target._near = null; action?.(); }
+}), {rootMargin: "1200px 0px"}) : null;
+function whenNear(node, action) { if (!nearObserver) { action(); return; } node._near = action; nearObserver.observe(node); }
+async function renderPlot(node, figure, full = false) { const [spec] = await Promise.all([plotSpec(figure), loadPlotly()]); const layout = {...(spec.layout || {}), autosize: true}; const config = {responsive: true, displaylogo: false, ...(spec.config || {})};
   if (full) delete layout.height;
   else { layout.margin = {...(layout.margin || {}), t: Math.max(layout.margin?.t ?? 0, 48)}; Object.assign(config, {displayModeBar: true, scrollZoom: false, modeBarButtonsToRemove: ["sendDataToCloud", "select2d", "lasso2d", "autoScale2d", "hoverClosestCartesian", "hoverCompareCartesian", "toggleSpikelines"]}); } // Card: compact tool bar in the reserved top margin; scroll zoom stays off so page scrolling works; full tools live in the lightbox.
   await Plotly.react(node, spec.data || [], layout, config); }
@@ -26,24 +45,34 @@ function hydrateFigure(card) {
   card.classList.add("comment-anchor");
   if (item.type === "plotly") {
     const expand = el("button", "figure-expand", "⛶"); expand.type = "button"; expand.title = "Open interactive figure"; expand.setAttribute("aria-label", "Open interactive figure"); expand.onclick = event => { event.stopPropagation(); openFigure(index); };
-    card.append(expand, commentIcon(target, item.line)); renderPlot(card.querySelector(".plotly-preview"), item);
+    card.append(expand, commentIcon(target, item.line)); whenNear(card, () => renderPlot(card.querySelector(".plotly-preview"), item).catch(() => card.classList.add("is-failed")));
   } else {
     card.tabIndex = 0; card.setAttribute("role", "button"); card.onclick = () => openFigure(index); card.onkeydown = event => { if (event.key === "Enter" || event.key === " ") openFigure(index); };
     card.append(commentIcon(target, item.line));
     const image = card.querySelector("img");
-    if (image) { /* frame each image at its own aspect ratio; very wide ones take the full row */
+    if (image) {
+      /* The builder sets the card's shape from the image size; for an image it could not measure, take it on load. */
       const fit = () => { if (!image.naturalWidth) return; const ratio = image.naturalWidth / image.naturalHeight; card.style.setProperty("--figure-ratio", Math.min(Math.max(ratio, 0.75), 10).toFixed(3)); card.classList.toggle("is-wide", ratio > 2); card.classList.toggle("is-tall", ratio < 1); };
-      image.complete ? fit() : image.addEventListener("load", fit, {once: true});
+      if (!card.style.getPropertyValue("--figure-ratio")) image.addEventListener("load", fit, {once: true});
+      if (image.dataset.src) whenNear(card, () => { image.src = image.dataset.src; });
     }
   }
 }
-Promise.all([fetch("report-data.json").then(r => r.json()), fetch("narrative.html").then(r => r.text())]).then(([data, narrative]) => {
+/* The header appears as soon as the small report-data.json arrives; the text follows, then figures as they near the screen. */
+const reportData = fetch(PAGE.reportData || "report-data.json").then(r => r.json());
+const narrativeText = fetch(PAGE.narrative || "narrative.html").then(r => r.text());
+$("#report-prose").setAttribute("aria-busy", "true");
+reportData.then(data => {
   document.title = data.title; $("#title").textContent = data.title; $("#subtitle").textContent = data.subtitle;
   $("#status").textContent = data.status; $("#status").hidden = !data.status; $("#report-summary").textContent = data.summary || ""; $("#report-summary").hidden = !data.summary; if (data.overview) { const back = $("#overview-link"); back.textContent = `← ${data.overview.title}`; back.href = siteHref(data.overview.href); back.title = "Back to this direction in the project overview"; back.hidden = false; } $("#updated").textContent = `Updated · ${data.updated}`;
-  $("#report-prose").innerHTML = narrative;
+});
+Promise.all([reportData, narrativeText]).then(([data, narrative]) => {
+  const prose = $("#report-prose"); prose.innerHTML = narrative; prose.removeAttribute("aria-busy");
   document.querySelectorAll("#report-prose h2[id]").forEach(heading => { const link = el("a", null, heading.textContent); link.href = `#${heading.id}`; $("#report-nav").append(link); });
   loadReportList(data);
-  bindFiguresInDocumentOrder(); bindSelectionComments(); loadComments(); revealHashTarget();
+  bindFiguresInDocumentOrder(); bindSelectionComments(); loadComments();
+  if (location.hash) revealHashTarget(); else restorePosition();
+  trackPosition();
 });
 // Content arrives after load, so the browser cannot scroll to #anchor links (backlinks, report: links) by itself.
 function revealHashTarget() {
@@ -53,6 +82,49 @@ function revealHashTarget() {
   setTimeout(() => target.classList.remove("is-link-target"), 2200);
 }
 window.addEventListener("hashchange", revealHashTarget);
+
+/* Remember where the reader was, per report, as "this block, this many pixels from the top": that survives
+   rebuilds and late layout better than a raw scroll offset. A #anchor in the URL always wins. */
+const positionKey = `cairn-report-position:${siteRoot}${reportSlug}`;
+if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+function readingAnchor() {
+  for (const block of document.querySelectorAll("#report-prose [data-source-line]")) {
+    const box = block.getBoundingClientRect();
+    if (box.bottom > 0) return {line: block.dataset.sourceLine, offset: Math.round(box.top), y: Math.round(scrollY)};
+  }
+  return {y: Math.round(scrollY)};
+}
+function savePosition() { try { localStorage.setItem(positionKey, JSON.stringify(readingAnchor())); } catch (_) {} }
+function restorePosition() {
+  let saved = null; try { saved = JSON.parse(localStorage.getItem(positionKey) || "null"); } catch (_) {}
+  if (!saved) return;
+  let moved = false; const stop = () => { moved = true; };
+  ["wheel", "touchstart", "keydown", "pointerdown"].forEach(type => addEventListener(type, stop, {once: true, passive: true}));
+  const apply = () => {
+    if (moved) return;
+    const block = saved.line && document.querySelector(`#report-prose [data-source-line="${CSS.escape(saved.line)}"]`);
+    scrollTo({top: block ? block.getBoundingClientRect().top + scrollY - saved.offset : saved.y, behavior: "instant"});
+  };
+  apply(); document.fonts?.ready.then(apply); setTimeout(apply, 400);  // again once fonts and late layout settle
+}
+function trackPosition() {
+  let pending = false;
+  addEventListener("scroll", () => { if (!pending) { pending = true; setTimeout(() => { pending = false; savePosition(); }, 300); } }, {passive: true});
+  addEventListener("pagehide", savePosition);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") savePosition(); });
+}
+
+/* Hovering another report in the sidebar fetches its text ahead of the click (served from cache afterwards). */
+async function prefetchReport(href) {
+  const base = new URL(href, location.href); base.hash = ""; base.search = "";
+  try {
+    const page = await (await fetch(base)).text();  // its index.html names the versioned data files
+    for (const key of ["data-report-data", "data-narrative"]) {
+      const match = page.match(new RegExp(`${key}="([^"]+)"`)); if (!match) continue;
+      const link = document.createElement("link"); link.rel = "prefetch"; link.href = new URL(match[1], base).href; document.head.append(link);
+    }
+  } catch (_) {}
+}
 
 // The sidebar lists every report in the project so related branches are one click apart.
 async function loadReportList(data) {
@@ -70,6 +142,7 @@ async function loadReportList(data) {
     link.href = siteHref(overview && data.overview ? data.overview.href : report.href);
     link.title = overview ? "Project overview" : (report.subtitle || report.title);
     if (report.slug === reportSlug) link.setAttribute("aria-current", "page");
+    else { link.addEventListener("pointerenter", () => prefetchReport(link.href), {once: true}); link.addEventListener("focus", () => prefetchReport(link.href), {once: true}); }
     list.append(link);
   });
   $("#report-list-section").hidden = false;

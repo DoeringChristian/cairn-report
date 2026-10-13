@@ -99,6 +99,25 @@ log.text("solver", solver_log)               # logs/solver.txt
 code location that logged it. `read_scalars(run)` and `read_artifacts(run)`
 return the latest value per name and the latest entry per file.
 
+## Loading and caching
+
+Reports stay fast as they grow:
+
+- The page files and Plotly are shared by every report in `generated/reports/_static/`,
+  named by content hash and stored gzipped as well, so the browser downloads them
+  once and keeps them; each report's `index.html` points at them and at versioned
+  URLs of its own data (`narrative.html?v=...`).
+- Figures and Plotly load only as they approach the screen; Plotly itself loads
+  with the first interactive figure. Cards keep their final size while loading,
+  because the build records each image's dimensions.
+- The header appears first, then the text, then figures; switching back to a
+  report already seen costs only its small `index.html`.
+- Each report remembers the reader's position in this browser and returns to it
+  on reload (a `#anchor` in the URL takes precedence).
+
+Both servers send `immutable` caching for hashed and versioned files, ETags with
+`no-cache` for everything else, and the gzip copies when the browser accepts them.
+
 ## Writing reports
 
 Front matter names a report (`title`, `subtitle`, `status`, and for directions a
@@ -202,7 +221,13 @@ HttpOnly, SameSite=Strict session cookie. With only an SSH tunnel
 url = "https://hub.example.org"
 project = "my-study"                              # default: the folder name
 token_file = "~/.config/cairn-report/hub-token"   # chmod 600; or CAIRN_HUB_TOKEN
+exclude = [".submitit/**/*.pkl"]                  # never pushed (see below)
 ```
+
+`exclude` takes gitignore-style globs on project paths (`outputs/...`,
+`reports/...`, `generated/reports/...`): `*` and `?` stay within one folder, `**`
+spans folders, a pattern without a leading `/` matches at any depth, and a
+folder pattern excludes everything inside it.
 
 ```bash
 cairn-report push                                  # one sync

@@ -72,6 +72,8 @@ class Handler(BaseHTTPRequestHandler):
             if match.group(2) is None:
                 return self._redirect(f"/reports/{match.group(1)}/")
             return self._generated(match.group(1), match.group(2))
+        if path.startswith("/_static/"):  # shared, content-hashed page files
+            return self._generated("_static", path[len("/_static"):])
         if OVERVIEW in self.reports and not path.startswith(("/reports/", "/api/")):
             return self._generated(OVERVIEW, path)
         self.send_error(404)
@@ -124,12 +126,36 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(body or b"{}")
 
     def _file(self, path: Path) -> None:
-        body = path.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        """A built file with HTTP caching: hashed or versioned URLs never change, everything else revalidates."""
+        query = urlparse(self.path).query
+        immutable = "/_static/" in self.path or re.search(r"(^|&)v=[0-9a-f]+", query) is not None
+        info = path.stat()
+        etag = f'"{info.st_mtime_ns:x}-{info.st_size:x}"'
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "public, max-age=31536000, immutable" if immutable else "no-cache",
+            "Vary": "Accept-Encoding",
+        }
+        if self.headers.get("If-None-Match") == etag:
+            return self._send(304, b"", None, headers)
+        compressed = path.with_name(path.name + ".gz")
+        if "gzip" in self.headers.get("Accept-Encoding", "") and compressed.is_file():
+            headers["Content-Encoding"] = "gzip"
+            body = compressed.read_bytes()
+        else:
+            body = path.read_bytes()
+        self._send(200, body, mimetypes.guess_type(path.name)[0] or "application/octet-stream", headers)
+
+    def _send(self, status: int, body: bytes, kind: str | None, headers: dict) -> None:
+        self.send_response(status)
+        if kind:
+            self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
+        for key, value in headers.items():
+            self.send_header(key, value)
         self.end_headers()
-        self.wfile.write(body)
+        if body:
+            self.wfile.write(body)
 
     def _redirect(self, location: str) -> None:
         self.send_response(301)

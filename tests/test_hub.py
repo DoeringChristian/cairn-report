@@ -1,5 +1,6 @@
 import http.client
 import json
+import re
 import shutil
 import sys
 import threading
@@ -121,6 +122,19 @@ def test_rejects_bad_uploads_and_paths(hub, project):
     assert status == 409 and json.loads(data)["missing"] == ["b" * 64]
 
 
+def test_push_exclude_patterns(hub, project):
+    submitit = project / "outputs" / "demo" / "2026-01-01_00-00-00" / ".submitit" / "1_0"
+    submitit.mkdir(parents=True)
+    (submitit / "1_0_submitted.pkl").write_bytes(b"pickle")
+    (submitit / "1_0_log.out").write_text("log")
+    config_file = project / "cairn-report.toml"
+    config_file.write_text(config_file.read_text() + 'exclude = [".submitit/**/*.pkl"]\n')
+    push(load_config(project))
+    files = tree(hub)
+    assert "outputs/demo/2026-01-01_00-00-00/.submitit/1_0/1_0_log.out" in files
+    assert not any(path.endswith(".pkl") for path in files)
+
+
 def test_token_never_in_config(tmp_path):
     (tmp_path / "cairn-report.toml").write_text('[hub]\ntoken = "secret"\n')
     with pytest.raises(ValueError, match="never put the hub token"):
@@ -141,6 +155,12 @@ def test_reports_served_and_comments_round_trip(hub, project):
     assert call(hub, "GET", "/p/study/reports/local-fitting/report-data.json")[0] == 200
     narrative = call(hub, "GET", "/p/study/reports/local-fitting/narrative.html")[2].decode()
     assert 'href="/reports/' not in narrative and 'href="../../' in narrative  # links work under /p/study/
+    page = call(hub, "GET", "/p/study/reports/local-fitting/")[2].decode()
+    script = re.search(r'src="\.\./\.\./(_static/report\.[0-9a-f]+\.js)"', page).group(1)
+    status, headers, _ = call(hub, "GET", f"/p/study/{script}", headers={"Accept-Encoding": "gzip"})
+    assert status == 200 and headers["Content-Encoding"] == "gzip" and "immutable" in headers["Cache-Control"]
+    versioned = re.search(r'data-narrative="([^"]+)"', page).group(1)
+    assert "immutable" in call(hub, "GET", f"/p/study/reports/local-fitting/{versioned}")[1]["Cache-Control"]
     status, _, runs = call(hub, "GET", "/runs/study/")
     assert b"completed" in runs and b"latest" in runs
 

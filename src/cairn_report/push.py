@@ -139,6 +139,33 @@ def project_name(config: Config) -> str:
 # --------------------------------------------------------------------- scan
 
 
+def exclusion(patterns: list[str]):
+    """A matcher for gitignore-style globs on project-relative paths.
+
+    `*` and `?` stay within one folder, `**` spans folders; a pattern without a leading `/`
+    matches at any depth (".submitit/**/*.pkl" matches outputs/a/1/.submitit/0/x.pkl), and a
+    pattern ending in `/` (or naming a folder) excludes everything inside it.
+    """
+    expressions = []
+    for pattern in patterns:
+        anchored = pattern.startswith("/")
+        body = pattern.strip("/")
+        regex, index = "", 0
+        while index < len(body):
+            if body.startswith("**/", index):
+                regex, index = regex + "(?:.*/)?", index + 3
+            elif body.startswith("**", index):
+                regex, index = regex + ".*", index + 2
+            elif body[index] == "*":
+                regex, index = regex + "[^/]*", index + 1
+            elif body[index] == "?":
+                regex, index = regex + "[^/]", index + 1
+            else:
+                regex, index = regex + re.escape(body[index]), index + 1
+        expressions.append(re.compile(("" if anchored else "(?:.*/)?") + regex + "(?:/.*)?"))
+    return lambda path: any(expression.fullmatch(path) for expression in expressions)
+
+
 def trees(config: Config) -> list[tuple[Path, str]]:
     return [(config.outputs_dir, "outputs"), (config.reports_dir, "reports"), (config.output_dir, "site")]
 
@@ -150,9 +177,15 @@ def skipped(name: str) -> bool:
 def scan(config: Config) -> dict[str, dict]:
     """Every pushable file and relative symlink, keyed by its path on the hub."""
     found: dict[str, dict] = {}
+    excluded = exclusion(config.hub.get("exclude", []))
+    project = config.project.resolve()
     for local, prefix in trees(config):
         if not local.is_dir():
             continue
+        try:  # patterns match project paths (outputs/..., reports/..., generated/reports/...)
+            base = local.resolve().relative_to(project).as_posix()
+        except ValueError:  # a tree configured outside the project: match on its hub path
+            base = prefix
         for directory, folders, files in os.walk(local):
             here = Path(directory)
             keep = []
@@ -169,6 +202,8 @@ def scan(config: Config) -> dict[str, dict]:
                     continue
                 path = here / name
                 key = f"{prefix}/{path.relative_to(local).as_posix()}"
+                if excluded(f"{base}/{path.relative_to(local).as_posix()}"):
+                    continue
                 if path.is_symlink():
                     target = os.readlink(path)
                     if not os.path.isabs(target):

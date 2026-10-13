@@ -1,6 +1,6 @@
 [project]
 name = "cairn-report"
-version = "0.4.0"
+version = "0.5.0"
 description = "Commentable research reports from Markdown and Hydra run outputs: overview and direction reports, live run values, figure provenance, and an append-only comment log."
 readme = "README.md"
 authors = [

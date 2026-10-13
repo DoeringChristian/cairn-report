@@ -16,6 +16,7 @@ something, add a `cairn-report.toml` at the project root:
     project = "my-study"               # default: the project folder name
     token_file = "~/.config/cairn-report/hub-token"  # or CAIRN_HUB_TOKEN; never the token itself
     interval = 30                      # seconds between pushes with --watch
+    exclude = [".submitit/**/*.pkl"]   # files never pushed: gitignore-style globs (*, ?, **) on project paths
 
     [logger]
     backends = ["local"]               # "local", "mlflow", or both
@@ -83,7 +84,9 @@ def load_config(project: Path | str | None = None) -> Config:
     hub = data.get("hub", {})
     if "token" in hub:
         raise ValueError(f"{root / CONFIG_FILE}: never put the hub token in the config; use token_file or CAIRN_HUB_TOKEN")
-    unknown_hub = set(hub) - {"url", "project", "token_file", "interval"}
+    unknown_hub = set(hub) - {"url", "project", "token_file", "interval", "exclude"}
+    if not isinstance(hub.get("exclude", []), list) or not all(isinstance(item, str) for item in hub.get("exclude", [])):
+        raise ValueError(f"{root / CONFIG_FILE}: [hub] exclude must be a list of glob patterns")
     if unknown_hub:
         raise ValueError(f"{root / CONFIG_FILE}: unknown [hub] keys {sorted(unknown_hub)}")
 

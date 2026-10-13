@@ -48,6 +48,7 @@ import json
 import math
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from numbers import Number
 from pathlib import Path
@@ -55,6 +56,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,95}")
 THIS_FILE = Path(__file__).resolve()
+_RESOLVED: dict[str, Path] = {}  # code file name -> resolved path, for origin lookups
 
 
 def _now() -> str:
@@ -353,21 +355,24 @@ class RunLogger:
         return self.root / relative
 
     def _relative(self, file: str) -> str:
-        path = Path(file).resolve()
+        path = _RESOLVED.get(file) or Path(file).resolve()
         try:
             return path.relative_to(self.project).as_posix()
         except ValueError:
             return path.as_posix()
 
     def _origin(self) -> dict:
-        """The first frame outside this module: where the experiment called the logger."""
-        for frame in inspect.stack()[1:]:
-            if Path(frame.filename).resolve() != THIS_FILE:
-                return {
-                    "file": self._relative(frame.filename),
-                    "line": frame.lineno,
-                    "function": frame.function,
-                }
+        """The first frame outside this module: where the experiment called the logger.
+
+        Walks frames directly (inspect.stack() would read source context for every frame on every call)."""
+        frame = sys._getframe(1)
+        while frame is not None:
+            name = frame.f_code.co_filename
+            if name not in _RESOLVED:
+                _RESOLVED[name] = Path(name).resolve()
+            if _RESOLVED[name] != THIS_FILE:
+                return {"file": self._relative(name), "line": frame.f_lineno, "function": frame.f_code.co_name}
+            frame = frame.f_back
         return {}
 
     def _code_location(self, function: Callable) -> dict:

@@ -186,3 +186,10 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 .rail { overflow-y: auto; overscroll-behavior: contain; }
 .rail .rail-actions { margin-top: 18px; }
 .rail-note { padding-top: 18px; }
+
+/* While the report text loads: a calm placeholder instead of an empty page. */
+#report-prose[aria-busy="true"] { min-height: 60vh; }
+#report-prose[aria-busy="true"]::before { content: "Loading report…"; display: block; padding: 40px 0; color: var(--muted); }
+/* Figure cards hold their final shape while the image loads. */
+.figure-card img:not([src]) { background: var(--accent-soft, #dcebe5); }
+.figure-card.is-failed .plotly-preview::before { content: "This interactive figure could not be loaded."; display: block; padding: 24px; color: var(--muted); }

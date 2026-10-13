@@ -1,3 +1,3 @@
 """cairn-report: commentable research reports built from Markdown and Hydra run outputs."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

@@ -13,7 +13,7 @@ each other with `[text](report:<slug>#anchor)` (the overview is
 
 from __future__ import annotations
 
-import base64
+import gzip
 import contextlib
 import csv
 import hashlib
@@ -312,6 +312,7 @@ class Build:
         self.runs: set[str] = set()
         self.mlflow_runs: dict[str, dict] = {}
         self.mirrors: dict[str, dict | None] = {}
+        self.sizes: dict[str, tuple[int, int] | None] = {}
         self.ids: set[str] = set()
         self.findings: list[dict] = []
         self.figures = 0
@@ -499,7 +500,53 @@ class Build:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(resolved, target)
         trace = self.run_trace(relative, line)
-        return f"{ASSETS}/{relative.as_posix()}", trace.get("label", relative.as_posix()), trace
+        self.sizes[f"{ASSETS}/{relative.as_posix()}"] = image_size(resolved)
+        version = self.sources[relative.as_posix()][:12]  # content hash: the URL changes when the file does
+        return f"{ASSETS}/{relative.as_posix()}?v={version}", trace.get("label", relative.as_posix()), trace
+
+    def generated_asset(self, data: bytes, suffix: str) -> str:
+        """Store build-made figure bytes (executed Matplotlib, Graphviz) as a file named by its hash."""
+        name = f"{hashlib.sha256(data).hexdigest()[:16]}{suffix}"
+        target = self.generated / ASSETS / "generated" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        self.sizes[f"{ASSETS}/generated/{name}"] = image_size(target)
+        return f"{ASSETS}/generated/{name}?v={name.split('.')[0][:12]}"  # named by content: cache for good
+
+
+def image_size(path: Path) -> tuple[int, int] | None:
+    """Pixel size of a PNG, GIF, JPEG, or SVG, read from its header (None if unknown)."""
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(64 * 1024)
+    except OSError:
+        return None
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+        return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return int.from_bytes(head[6:8], "little"), int.from_bytes(head[8:10], "little")
+    if head[:2] == b"\xff\xd8":
+        index = 2
+        while index + 9 < len(head):
+            if head[index] != 0xFF:
+                index += 1
+                continue
+            marker, length = head[index + 1], int.from_bytes(head[index + 2:index + 4], "big")
+            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                return int.from_bytes(head[index + 7:index + 9], "big"), int.from_bytes(head[index + 5:index + 7], "big")
+            index += 2 + length
+        return None
+    text = head.decode("utf-8", errors="ignore")
+    match = re.search(r"<svg\b[^>]*>", text, re.S)
+    if match:
+        tag = match.group(0)
+        box = re.search(r'viewBox="\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)', tag)
+        width, height = (re.search(rf'\b{key}="([\d.]+)(?:px|pt)?"', tag) for key in ("width", "height"))
+        if width and height:
+            return round(float(width.group(1))), round(float(height.group(1)))
+        if box:
+            return round(float(box.group(1))), round(float(box.group(2)))
+    return None
 
 
 def mlflow_link(record: dict, inside: str) -> dict:
@@ -522,6 +569,7 @@ def figure_card(
     source: str = "",
     kind: str = "image",
     trace: dict | None = None,
+    size: tuple[int, int] | None = None,
 ) -> str:
     """One gallery card. `trace` says where the figure came from and is shown in the lightbox."""
     build.figures += 1
@@ -529,15 +577,23 @@ def figure_card(
         "report": f"{build.markdown.relative_to(PROJECT).as_posix()}:{line}",
         **(trace or {}),
     }
+    classes, style, dims = "figure-card", "", ""
+    if kind == "plotly":
+        classes += " plotly-card"
+    elif size and size[0] > 0 and size[1] > 0:  # the card's final shape, before the image arrives
+        ratio = size[0] / size[1]
+        classes += " is-wide" if ratio > 2 else " is-tall" if ratio < 1 else ""
+        style = f' style="--figure-ratio:{min(max(ratio, 0.75), 10):.3f}"'
+        dims = f' width="{size[0]}" height="{size[1]}"'
     attrs = (
-        f'class="figure-card{" plotly-card" if kind == "plotly" else ""}" id="{esc(fid)}" '
+        f'class="{classes}"{style} id="{esc(fid)}" '
         f'data-figure-id="{esc(fid)}" data-figure-type="{kind}" data-src="{esc(src)}" '
         f'data-line="{line}" data-comment-target="figure:{esc(fid)}" data-trace="{esc(json.dumps(trace))}"'
     )
     media = (
         '<div class="plotly-preview"></div>'
         if kind == "plotly"
-        else (f'<img src="{esc(src)}" alt="{esc(title)}">')
+        else f'<img data-src="{esc(src)}" alt="{esc(title)}"{dims} decoding="async">'  # loaded near the viewport
     )
     copy = f"<h3>{esc(title)}</h3>"
     if caption:
@@ -743,6 +799,7 @@ def render(build: Build) -> str:
             caption=token.attrGet("title") or "",
             line=line,
             source=source,
+            size=build.sizes.get(src.split("?")[0]),
             kind=kind,
             trace=trace,
         )
@@ -806,8 +863,8 @@ def render(build: Build) -> str:
                 figure_card(
                     build,
                     fid=fid,
-                    src="data:image/png;base64,"
-                    + base64.b64encode(payload.getvalue()).decode(),
+                    src=(generated := build.generated_asset(payload.getvalue(), ".png")),
+                    size=build.sizes.get(generated.split("?")[0]),
                     title=title,
                     caption=f"Generated by report.md line {line}",
                     line=line,
@@ -916,14 +973,12 @@ def render(build: Build) -> str:
             raise ValueError(f"{path}:{line}: Graphviz failed: {result.stderr.strip()}")
         title = options_.get("title", "Diagram")
         fid = build.unique(options_.get("id") or f"fig-{slug(title)}", line)
-        svg = (
-            "data:image/svg+xml;base64,"
-            + base64.b64encode(result.stdout.encode()).decode()
-        )
+        svg = build.generated_asset(result.stdout.encode(), ".svg")
         card = figure_card(
             build,
             fid=fid,
             src=svg,
+            size=build.sizes.get(svg.split("?")[0]),
             title=title,
             caption=options_.get("caption", ""),
             line=line,
@@ -1008,21 +1063,65 @@ def page_ids(slug: str) -> set[str] | None:
     return set(re.findall(r'\sid="([^"]+)"', narrative.read_text()))
 
 
+STATIC = "_static"  # page files shared by every report, named by content hash so browsers cache them for good
+STATIC_NAMES: dict[str, str] | None = None
+
+
+def write_static() -> dict[str, str]:
+    """Write the shared page files (and gzip copies) once; returns original name -> hashed name."""
+    folder = OUTPUT_ROOT / STATIC
+    folder.mkdir(parents=True, exist_ok=True)
+    files = {name: page_file(name).read_bytes() for name in PAGE_FILES if name != "index.html"}
+    files["plotly.min.js"] = get_plotlyjs().encode()
+    for index, sheet in enumerate(CONFIG.extra_css if CONFIG else ()):
+        files[f"custom-{index}.css"] = sheet.read_bytes()
+    names = {}
+    for name, data in files.items():
+        stem, extension = name.split(".", 1)
+        hashed = f"{stem}.{hashlib.sha256(data).hexdigest()[:12]}.{extension}"
+        target = folder / hashed
+        if not target.is_file():
+            target.write_bytes(data)
+            (folder / f"{hashed}.gz").write_bytes(gzip.compress(data, compresslevel=9, mtime=0))
+        names[name] = hashed
+    return names
+
+
+def prune_static(names: dict[str, str]) -> None:
+    """After a full build, drop shared files no report refers to any more."""
+    keep = set(names.values()) | {f"{name}.gz" for name in names.values()}
+    for file in (OUTPUT_ROOT / STATIC).iterdir():
+        if file.name not in keep:
+            file.unlink()
+
+
+def page_html(slug: str, names: dict[str, str], versions: dict[str, str]) -> str:
+    """The report's index.html: shared hashed page files, and versioned URLs of this report's data,
+    so everything but index.html itself can be cached for good."""
+    prefix = ("" if slug == OVERVIEW else "../../") + STATIC + "/"
+    page = page_file("index.html").read_text()
+    page = re.sub(r'\s*<script src="plotly\.min\.js"></script>', "", page)  # loaded on demand by report.js
+    page = re.sub(
+        r'(href|src)="(report\.css|report-extra\.css|report\.js)"',
+        lambda match: f'{match.group(1)}="{prefix}{names[match.group(2)]}"',
+        page,
+    )
+    page = page.replace(f'<script src="{prefix}{names["report.js"]}"',
+                        f'<script src="{prefix}{names["report.js"]}" data-plotly="{prefix}{names["plotly.min.js"]}" '
+                        f'data-narrative="narrative.html?v={versions["narrative.html"]}" '
+                        f'data-report-data="report-data.json?v={versions["report-data.json"]}"', 1)
+    extra = [f'  <link rel="stylesheet" href="{prefix}{hashed}">' for name, hashed in names.items() if name.startswith("custom-")]
+    if extra:  # project styles load after the default ones, so they override them
+        page = page.replace("</head>", "\n".join(extra) + "\n</head>", 1)
+    return page
+
+
 def build_report(slug: str, folder: Path) -> Build:
     build = Build(slug, folder)
     if build.generated.exists():
         shutil.rmtree(build.generated)
     build.generated.mkdir(parents=True)
-    for name in PAGE_FILES:
-        shutil.copy2(page_file(name), build.generated / name)
-    extra = []
-    for index, sheet in enumerate(CONFIG.extra_css if CONFIG else ()):
-        shutil.copy2(sheet, build.generated / f"custom-{index}.css")
-        extra.append(f'  <link rel="stylesheet" href="custom-{index}.css">')
-    if extra:  # project styles load after the default ones, so they override them
-        page = (build.generated / "index.html").read_text()
-        (build.generated / "index.html").write_text(page.replace("</head>", "\n".join(extra) + "\n</head>", 1))
-    (build.generated / "plotly.min.js").write_text(get_plotlyjs())
+    names = STATIC_NAMES or write_static()
     narrative = render(build)
     if not build.meta.get("title"):
         raise ValueError(f"{build.markdown}: front matter needs a title")
@@ -1051,6 +1150,8 @@ def build_report(slug: str, folder: Path) -> Build:
         "links_to": sorted({link["slug"] for link in build.links}),
     }
     (build.generated / "report-data.json").write_text(json.dumps(data, indent=2) + "\n")
+    versions = {name: digest(build.generated / name)[:12] for name in ("narrative.html", "report-data.json")}
+    (build.generated / "index.html").write_text(page_html(slug, names, versions))  # the one file browsers revalidate
     builder = [Path(__file__).resolve(), *(page_file(name) for name in PAGE_FILES), *(CONFIG.extra_css if CONFIG else ())]
     manifest = {
         "built_at": datetime.now(timezone.utc).isoformat(),
@@ -1073,7 +1174,7 @@ def build_report(slug: str, folder: Path) -> Build:
         "runtime": {
             "python": sys.version.split()[0],
             "packages": {name: package_version(name) for name in RENDER_PACKAGES},
-            "plotly.js": {"version": get_plotlyjs_version(), "sha256": digest(build.generated / "plotly.min.js")},
+            "plotly.js": {"version": get_plotlyjs_version(), "sha256": digest(OUTPUT_ROOT / STATIC / names["plotly.min.js"])},
             "graphviz": graphviz_version(),
         },
     }
@@ -1109,7 +1210,11 @@ def build_all(config: Config | None = None, report: str | None = None) -> list[B
     if report and report not in reports:
         raise SystemExit(f"unknown report {report!r}; reports: {', '.join(reports)}")
     selected = {report: reports[report]} if report else reports
+    global STATIC_NAMES
+    STATIC_NAMES = write_static()
     builds = [build_report(slug, folder) for slug, folder in selected.items()]
+    if not report:
+        prune_static(STATIC_NAMES)
     check_links(builds, reports)
     for build in builds:
         print(f"Built {build.slug}: {build.generated.relative_to(PROJECT)}/index.html ({build.figures} figures, {len(build.findings)} findings)")

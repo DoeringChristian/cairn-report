@@ -64,3 +64,15 @@ def test_report_reads_logged_run(tmp_path):
     assert ">0.125</span>" in (out / "narrative.html").read_text()
     manifest = json.loads((out / "manifest.json").read_text())
     assert "outputs/demo/2026-01-01_00-00-00/metrics.jsonl" in manifest["sources"]
+
+
+def test_origin_capture_is_cheap(tmp_path):
+    import time
+
+    log = RunLogger(tmp_path / "run", backends=["local"])
+    start = time.perf_counter()
+    for step in range(2000):
+        log.scalar("loss", 1.0 / (step + 1), step=step)
+    per_call = (time.perf_counter() - start) / 2000
+    assert per_call < 0.001, f"{per_call * 1e6:.0f} µs per scalar"
+    assert read_jsonl(tmp_path / "run" / "metrics.jsonl")[0]["origin"]["function"] == "test_origin_capture_is_cheap"

@@ -406,7 +406,9 @@ class HubHandler(BaseHTTPRequestHandler):
                 return self.send_error(404)
             return self._json(200, comments.fold(self._comment_records(name, slug, tree)), download=action == "export")
         match = re.fullmatch(r"reports/([a-z0-9][a-z0-9-]*)(/.*)?", rest)
-        if match and match.group(1) != OVERVIEW:
+        if rest.startswith("_static/"):  # shared, content-hashed page files
+            file = f"site/{rest}"
+        elif match and match.group(1) != OVERVIEW:
             if match.group(2) is None:
                 return self._send(301, b"", headers={"Location": f"/p/{name}/reports/{match.group(1)}/"})
             file = f"site/{match.group(1)}/{match.group(2)[1:] or 'index.html'}"
@@ -417,7 +419,11 @@ class HubHandler(BaseHTTPRequestHandler):
             if not rest and not any(path.startswith("site/") for path in tree):
                 return self._send(303, b"", headers={"Location": f"/runs/{name}/"})  # runs only, no reports yet
             return self.send_error(404)
-        return self._blob(entry, file)
+        immutable = rest.startswith("_static/") or re.search(r"(^|&)v=[0-9a-f]+", urlparse(self.path).query) is not None
+        compressed = tree.get(file + ".gz")
+        if compressed and "sha256" in compressed and "gzip" in self.headers.get("Accept-Encoding", ""):
+            return self._blob(compressed, file, immutable=immutable, encoding="gzip")
+        return self._blob(entry, file, immutable=immutable)
 
     def _report_list(self, name: str, tree: dict) -> list[dict]:
         slugs = sorted(
@@ -582,9 +588,12 @@ class HubHandler(BaseHTTPRequestHandler):
             raise ValueError("payload must be a JSON object")
         return value
 
-    def _blob(self, entry: dict, path: str, download: bool = False):
+    def _blob(self, entry: dict, path: str, download: bool = False, immutable: bool = False, encoding: str | None = None):
         etag = f'"{entry["sha256"]}"'
-        headers = {"ETag": etag, "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"}
+        headers = {"ETag": etag, "X-Content-Type-Options": "nosniff", "Vary": "Accept-Encoding",
+                   "Cache-Control": "private, max-age=31536000, immutable" if immutable else "no-cache"}
+        if encoding:
+            headers["Content-Encoding"] = encoding
         if self.headers.get("If-None-Match") == etag:
             return self._send(304, b"", headers=headers)
         blob = self.store.blob_path(entry["sha256"])
