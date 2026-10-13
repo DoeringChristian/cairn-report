@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from . import __version__
@@ -23,13 +24,8 @@ def cmd_serve(args) -> None:
 def cmd_push(args) -> None:
     from .push import push
 
-    command = args.command[1:] if args.command[:1] == ["--"] else args.command
-    what = "all"
-    if command and command[0] in ("report", "runs") and args.command[:1] != ["--"]:
-        what, command = command[0], command[1:]
-        command = command[1:] if command[:1] == ["--"] else command
-    raise SystemExit(push(load_config(args.project), what=what, watch=args.watch, interval=args.interval,
-                          command=command or None, url=args.url, allow_http=args.allow_http))
+    raise SystemExit(push(load_config(args.project), what=args.what, watch=args.watch, interval=args.interval,
+                          command=args.command or None, url=args.url, allow_http=args.allow_http))
 
 
 def cmd_pull(args) -> None:
@@ -112,8 +108,8 @@ def main(argv: list[str] | None = None) -> None:
     push = hub_client(commands.add_parser("push", help="push the report (a new version) and runs to the hub"))
     push.add_argument("--watch", action="store_true", help="keep pushing every --interval seconds until stopped")
     push.add_argument("--interval", type=float, help="seconds between pushes (default: [hub] interval or 30)")
-    push.add_argument("command", nargs=argparse.REMAINDER,
-                      help="[report|runs] [-- <command...>]: push only one kind; run a command and push while it runs")
+    push.add_argument("what", nargs="?", choices=("all", "report", "runs"), default="all",
+                      help="push the report and runs (all, the default), or only one of them")
     push.set_defaults(run=cmd_push)
     pull = hub_client(commands.add_parser("pull", help="bring the report (and runs) back from the hub"))
     pull.add_argument("--runs", nargs="*", metavar="RUN", help="also pull runs (all, or these run names / run paths)")
@@ -138,7 +134,15 @@ def main(argv: list[str] | None = None) -> None:
     hub_serve.add_argument("--insecure-cookies", action="store_true", help="browser login over plain HTTP (SSH tunnel)")
     hub_serve.set_defaults(run=cmd_hub_serve)
 
+    argv = list(sys.argv[1:] if argv is None else argv)
+    command = []
+    if "--" in argv:  # `push ... -- <command...>`: everything after -- is the command to run
+        cut = argv.index("--")
+        argv, command = argv[:cut], argv[cut + 1:]
     args = parser.parse_args(argv)
+    args.command = command
+    if command and args.run is not cmd_push:
+        parser.error("only `push` takes a command after --")
     args.run(args)
 
 

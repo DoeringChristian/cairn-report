@@ -203,3 +203,17 @@ def test_report_reads_runs_from_the_hub(hub, client):
     assert trace["hub"]["run"] == RUN and trace["hub"]["url"].endswith(f"/runs/study/{RUN}/")
     manifest = json.loads((client / "generated" / "reports" / "alpha" / "manifest.json").read_text())
     assert manifest["hub_runs"][0]["run"] == RUN
+
+
+def test_push_arguments_parse_in_any_order(monkeypatch):
+    import cairn_report.cli as cli
+    import cairn_report.push as push_module
+
+    calls = []
+    monkeypatch.setattr(push_module, "push", lambda config, **kw: calls.append(kw) or 0)
+    for argv, expected in ((["push", "runs", "--watch", "--", "bash", "-c", "x"], ("runs", True, ["bash", "-c", "x"])),
+                           (["push", "--watch", "--", "echo"], ("all", True, ["echo"])),
+                           (["push", "report"], ("report", False, None))):
+        with pytest.raises(SystemExit):
+            cli.main(argv)
+        assert (calls[-1]["what"], calls[-1]["watch"], calls[-1]["command"]) == expected
