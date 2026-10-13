@@ -193,3 +193,6 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 /* Figure cards hold their final shape while the image loads. */
 .figure-card img:not([src]) { background: var(--accent-soft, #dcebe5); }
 .figure-card.is-failed .plotly-preview::before { content: "This interactive figure could not be loaded."; display: block; padding: 24px; color: var(--muted); }
+
+/* The site title next to the brand mark is text, not another mark. */
+.brand .site-title { display: inline; width: auto; height: auto; border-radius: 0; background: none; color: inherit; }

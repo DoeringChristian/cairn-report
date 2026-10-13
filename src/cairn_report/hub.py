@@ -1,22 +1,23 @@
-"""Hub: one server that keeps many projects' runs and reports, pushed by `cairn-report push`.
+"""Hub: an artifact store for reports and runs, with push and pull, behind one token.
 
     <root>/
-      token                         the single access token (created by `cairn-report hub init`)
-      blobs/<aa>/<sha256-rest>      file contents, content-addressed, written once, never changed
-      projects/<name>/files.jsonl   append-only index: one line per new version of a path
-      projects/<name>/comments/<slug>.jsonl   comments written on the hub (append-only)
+      token                                 the single access token (`cairn-report hub init`)
+      blobs/<aa>/<sha256-rest>              file contents, content-addressed, written once
+      projects/<name>/report.jsonl          the report: one line per pushed version (its full file list)
+      projects/<name>/runs.jsonl            runs: one line per new version of a run file (append-only)
 
-A pushed project has three trees: `outputs/` (Hydra runs), `reports/` (report
-sources and comment logs), and `site/` (the built reports). The hub never
-deletes or overwrites a stored version: a changed file is a new index line, and
-a file deleted on the client stays on the hub. Reports are built by the client;
-the hub only serves their static output and never executes pushed code.
+A project's report is versioned as a whole: every push that changes it appends
+a complete list of its files (`source/...`: the report folder, `site/...`: the
+built pages), so any version can be viewed or pulled again. Runs grow file by
+file, as the logger or a push sends them; a run file's earlier versions stay
+recorded. Nothing stored is ever deleted or overwritten, and the hub never
+executes pushed code: reports are built where they are written.
 
     /                               every project
-    /p/<name>/                      the project's overview report; /p/<name>/reports/<slug>/ a direction
+    /p/<name>/                      the latest report version; /p/<name>@<n>/ version n
     /runs/<name>/[<path>/]          the project's runs and their files
-    /files/<name>/<path>            one stored file (latest version)
-    /api/v1/...                     push, index, and comment API (bearer token)
+    /files/<name>/runs/<path>       one run file; /files/<name>/report/<path>[?version=n] a report file
+    /api/v1/...                     push, pull, and listing API
 
 Every route needs the token: `Authorization: Bearer <token>` for clients, or the
 session cookie set by /login for browsers. Run the hub behind an HTTPS reverse
@@ -44,43 +45,65 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import __version__, comments
+from . import __version__
+from .logger import read_jsonl
 
 PROJECT_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
-SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
-TREES = ("outputs", "reports", "site")
-OVERVIEW = "overview"
+REPORT_TREES = ("source", "site")
 COOKIE = "cairn_hub"
 SESSION_LABEL = b"cairn-hub-session-v1"
 MIN_TOKEN = 32
 MAX_JSON = 64 * 1024 * 1024
 CHUNK = 1 << 20
-COMMENT_ROUTE = re.compile(r"api/reports/([a-z0-9][a-z0-9-]*)/comments(?:/(export|clear|delete))?")
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def valid_path(path) -> bool:
-    """A relative POSIX path inside one of the pushed trees, without `.`/`..` or control characters."""
+def valid_path(path, roots: tuple[str, ...] | None = None) -> bool:
+    """A relative POSIX path without `.`/`..`, empty parts, or control characters (inside `roots` if given)."""
     if not isinstance(path, str) or not 0 < len(path) <= 1024 or "\\" in path:
         return False
     parts = path.split("/")
-    return (
-        len(parts) > 1
-        and parts[0] in TREES
-        and all(part not in ("", ".", "..") and not any(ord(char) < 32 for char in part) for part in parts)
-    )
+    if roots is not None and (len(parts) < 2 or parts[0] not in roots):
+        return False
+    return all(part not in ("", ".", "..") and not any(ord(char) < 32 for char in part) for part in parts)
 
 
-def link_target(path: str, target) -> str | None:
+def link_target(path: str, target, roots: tuple[str, ...] | None = None) -> str | None:
     """Where a relative symlink at `path` points, if it stays inside the same tree."""
     if not isinstance(target, str) or not target or target.startswith("/") or "\\" in target or len(target) > 1024:
         return None
     resolved = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
-    return resolved if valid_path(resolved) and resolved.split("/")[0] == path.split("/")[0] else None
+    if not valid_path(resolved, roots):
+        return None
+    if roots is not None and resolved.split("/")[0] != path.split("/")[0]:
+        return None
+    return resolved
+
+
+def clean_entries(entries, roots: tuple[str, ...] | None) -> list[dict]:
+    """Validated {path, sha256, size[, mtime]} or {path, link} entries."""
+    if not isinstance(entries, list) or len(entries) > 200_000:
+        raise ValueError("entries must be a list")
+    clean = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not valid_path(entry.get("path"), roots):
+            raise ValueError(f"invalid entry path: {str(entry)[:200]}")
+        if "link" in entry:
+            if link_target(entry["path"], entry["link"], roots) is None:
+                raise ValueError(f"{entry['path']}: link must stay inside its tree")
+            clean.append({"path": entry["path"], "link": entry["link"]})
+            continue
+        sha, size = entry.get("sha256"), entry.get("size")
+        if not isinstance(sha, str) or not SHA256.fullmatch(sha) or not isinstance(size, int) or size < 0:
+            raise ValueError(f"{entry['path']}: needs sha256 and size")
+        mtime = entry.get("mtime")
+        clean.append({"path": entry["path"], "sha256": sha, "size": size,
+                      "mtime": mtime if isinstance(mtime, (int, float)) else None})
+    return clean
 
 
 def read_token(path: Path) -> str:
@@ -99,13 +122,23 @@ def init_root(root: Path) -> Path:
         raise SystemExit(f"{token_file} already exists; delete it first to rotate the token")
     descriptor = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w") as handle:
+        os.fchmod(handle.fileno(), 0o600)  # explicit: default ACLs may ignore the creation mode
         handle.write(secrets.token_urlsafe(32) + "\n")
     Store(root)
     return token_file
 
 
+def _append_lines(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 class Store:
-    """Blobs plus one append-only file index per project; safe for concurrent requests."""
+    """Blobs, one versioned report and one run-file index per project; safe for concurrent requests."""
 
     def __init__(self, root: Path):
         self.root = root
@@ -113,7 +146,8 @@ class Store:
         for folder in (self.blobs, self.projects, self.tmp):
             folder.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
-        self.trees: dict[str, dict[str, dict]] = {}
+        self.runs_cache: dict[str, dict[str, dict]] = {}
+        self.report_cache: dict[str, list[dict]] = {}
 
     # ------------------------------------------------------------------ blobs
 
@@ -149,75 +183,87 @@ class Store:
         finally:
             temporary.unlink(missing_ok=True)
 
-    # ------------------------------------------------------------- the index
+    def missing(self, entries: list[dict]) -> list[str]:
+        return sorted({entry["sha256"] for entry in entries if "sha256" in entry and not self.has_blob(entry["sha256"])})
+
+    # ---------------------------------------------------------------- projects
 
     def project_names(self) -> list[str]:
-        return sorted(folder.name for folder in self.projects.iterdir() if (folder / "files.jsonl").is_file())
+        return sorted(folder.name for folder in self.projects.iterdir()
+                      if (folder / "report.jsonl").is_file() or (folder / "runs.jsonl").is_file())
 
-    def tree(self, name: str) -> dict[str, dict]:
-        """The latest entry per path (a shallow copy, safe to read without the lock)."""
+    def known(self, name: str) -> bool:
+        return bool(PROJECT_NAME.fullmatch(name)) and name in self.project_names()
+
+    # ------------------------------------------------------------------ report
+
+    def versions(self, name: str) -> list[dict]:
         with self.lock:
-            return dict(self._tree(name))
+            if name not in self.report_cache:
+                self.report_cache[name] = read_jsonl(self.projects / name / "report.jsonl")
+            return list(self.report_cache[name])
 
-    def _tree(self, name: str) -> dict[str, dict]:
-        if name not in self.trees:
-            index = self.projects / name / "files.jsonl"
-            self.trees[name] = {entry["path"]: entry for entry in comments.read_log(index)}
-        return self.trees[name]
+    def report(self, name: str, version: int | None = None) -> dict | None:
+        versions = self.versions(name)
+        if not versions:
+            return None
+        if version is None:
+            return versions[-1]
+        return next((entry for entry in versions if entry["version"] == version), None)
 
-    def update(self, name: str, entries: list) -> tuple[int, list[str]]:
-        """Append the entries that differ from the current index. Returns (appended, missing blobs)."""
-        clean = []
-        for entry in entries:
-            if not isinstance(entry, dict) or not valid_path(entry.get("path")):
-                raise ValueError(f"invalid entry path: {str(entry)[:200]}")
-            if "link" in entry:
-                if link_target(entry["path"], entry["link"]) is None:
-                    raise ValueError(f"{entry['path']}: link must stay inside its tree")
-                clean.append({"path": entry["path"], "link": entry["link"]})
-            else:
-                sha, size = entry.get("sha256"), entry.get("size")
-                if not isinstance(sha, str) or not SHA256.fullmatch(sha) or not isinstance(size, int) or size < 0:
-                    raise ValueError(f"{entry['path']}: needs sha256 and size")
-                mtime = entry.get("mtime")
-                clean.append({"path": entry["path"], "sha256": sha, "size": size,
-                              "mtime": mtime if isinstance(mtime, (int, float)) else None})
-        missing = sorted({entry["sha256"] for entry in clean if "sha256" in entry and not self.has_blob(entry["sha256"])})
+    def push_report(self, name: str, entries: list) -> tuple[int | None, list[str], bool]:
+        """Record a new report version. Returns (version, missing blobs, created)."""
+        clean = clean_entries(entries, REPORT_TREES)
+        missing = self.missing(clean)
+        if missing:
+            return None, missing, False
+        files = sorted(clean, key=lambda entry: entry["path"])
+        with self.lock:
+            versions = self.report_cache.setdefault(name, read_jsonl(self.projects / name / "report.jsonl"))
+            if versions and _same_files(versions[-1]["entries"], files):
+                return versions[-1]["version"], [], False  # unchanged: no new version
+            record = {"version": (versions[-1]["version"] + 1) if versions else 1, "time": now(), "entries": files}
+            _append_lines(self.projects / name / "report.jsonl", [record])
+            versions.append(record)
+            return record["version"], [], True
+
+    # -------------------------------------------------------------------- runs
+
+    def runs(self, name: str) -> dict[str, dict]:
+        """The latest entry per run path (a copy, safe to read without the lock)."""
+        with self.lock:
+            return dict(self._runs(name))
+
+    def _runs(self, name: str) -> dict[str, dict]:
+        if name not in self.runs_cache:
+            self.runs_cache[name] = {entry["path"]: entry for entry in read_jsonl(self.projects / name / "runs.jsonl")}
+        return self.runs_cache[name]
+
+    def push_runs(self, name: str, entries: list) -> tuple[int, list[str]]:
+        """Append the run entries that differ from the current index. Returns (appended, missing blobs)."""
+        clean = clean_entries(entries, None)
+        missing = self.missing(clean)
         if missing:
             return 0, missing
         with self.lock:
-            tree = self._tree(name)
-            changed = [entry for entry in clean if self._differs(tree.get(entry["path"]), entry)]
+            index = self._runs(name)
+            changed = [entry for entry in clean if _differs(index.get(entry["path"]), entry)]
+            stamp = now()
+            for entry in changed:
+                entry["time"] = stamp
+                index[entry["path"]] = entry
             if changed:
-                folder = self.projects / name
-                folder.mkdir(exist_ok=True)
-                stamp = now()
-                with (folder / "files.jsonl").open("a", encoding="utf-8") as handle:
-                    for entry in changed:
-                        entry["time"] = stamp
-                        handle.write(json.dumps(entry) + "\n")
-                        tree[entry["path"]] = entry
-                    handle.flush()
-                    os.fsync(handle.fileno())
+                _append_lines(self.projects / name / "runs.jsonl", changed)
         return len(changed), []
 
-    @staticmethod
-    def _differs(old: dict | None, new: dict) -> bool:
-        if old is None:
-            return True
-        if "link" in new:
-            return old.get("link") != new["link"]
-        return old.get("sha256") != new["sha256"]
-
-    def resolve(self, name: str, path: str, tree: dict | None = None) -> dict | None:
+    def resolve(self, tree: dict[str, dict], path: str, roots: tuple[str, ...] | None = None) -> dict | None:
         """The file entry at `path`, following stored symlinks (for example `latest`) on the way."""
-        tree = tree if tree is not None else self.tree(name)
         for _ in range(16):
             parts = path.split("/")
             for index in range(1, len(parts) + 1):
                 entry = tree.get("/".join(parts[:index]))
                 if entry and "link" in entry:
-                    base = link_target("/".join(parts[:index]), entry["link"])
+                    base = link_target("/".join(parts[:index]), entry["link"], roots)
                     if base is None:
                         return None
                     path = "/".join([base, *parts[index:]])
@@ -227,9 +273,6 @@ class Store:
                 return entry if entry and "sha256" in entry else None
         return None
 
-    def comment_log(self, name: str, slug: str) -> Path:
-        return self.projects / name / "comments" / f"{slug}.jsonl"
-
     def read_json(self, entry: dict | None):
         if not entry:
             return None
@@ -238,8 +281,20 @@ class Store:
         except (OSError, ValueError):
             return None
 
-    def read_lines(self, entry: dict | None) -> list[dict]:
-        return comments.read_log(self.blob_path(entry["sha256"])) if entry else []
+
+def _same_files(old: list[dict], new: list[dict]) -> bool:
+    def strip(entries):
+        return [(entry["path"], entry.get("sha256"), entry.get("link")) for entry in entries]
+
+    return strip(old) == strip(new)
+
+
+def _differs(old: dict | None, new: dict) -> bool:
+    if old is None:
+        return True
+    if "link" in new:
+        return old.get("link") != new["link"]
+    return old.get("sha256") != new["sha256"]
 
 
 # ---------------------------------------------------------------------- pages
@@ -269,12 +324,16 @@ def page(title: str, body: str) -> bytes:
     ).encode()
 
 
-def size_text(size: int) -> str:
+def size_text(size: float) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if size < 1024 or unit == "GB":
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
     return str(size)
+
+
+def stamp_text(value: str) -> str:
+    return html.escape(value[:19].replace("T", " ")) + " UTC" if value else ""
 
 
 class HubHandler(BaseHTTPRequestHandler):
@@ -296,47 +355,53 @@ class HubHandler(BaseHTTPRequestHandler):
         morsel = SimpleCookie(self.headers.get("Cookie", "")).get(COOKIE)
         return bool(morsel) and hmac.compare_digest(morsel.value.encode(), self.session.encode())
 
-    def _same_origin(self) -> bool:
-        """Cookie-authenticated writes must be JSON from this origin (with SameSite=Strict, against CSRF)."""
-        if not self.headers.get("Content-Type", "").startswith("application/json"):
-            return False
-        origin = self.headers.get("Origin")
-        return origin is None or urlparse(origin).netloc == self.headers.get("Host")
-
     # ----------------------------------------------------------------- routes
 
     def do_GET(self):
         url = urlparse(self.path)
-        path = unquote(url.path)
+        path, query = unquote(url.path), parse_qs(url.query)
         if path == "/login":
-            return self._login_page(parse_qs(url.query).get("next", ["/"])[0])
+            return self._login_page(query.get("next", ["/"])[0])
         if path == "/logout":
             return self._send(303, b"", headers={"Location": "/login", "Set-Cookie": self._cookie_header("", 0)})
         if not (self._bearer() or self._cookie()):
-            if path.startswith("/api/") or "/api/" in path:
+            if path.startswith("/api/"):
                 return self._json(401, {"error": "missing or invalid token"})
             return self._send(303, b"", headers={"Location": "/login?next=" + quote(url.path)})
         if path == "/":
             return self._index()
         if path == "/api/v1/projects":
-            return self._json(200, [self._project_summary(name) for name in self.store.project_names()])
-        match = re.fullmatch(r"/api/v1/projects/([^/]+)/tree", path)
-        if match and PROJECT_NAME.fullmatch(match.group(1)):
-            if match.group(1) not in self.store.project_names():
-                return self._json(404, {"error": f"no project {match.group(1)!r}"})
-            return self._json(200, list(self.store.tree(match.group(1)).values()))
-        match = re.fullmatch(r"/files/([^/]+)/(.+)", path)
-        if match and self._known(match.group(1)):
-            entry = self.store.resolve(match.group(1), match.group(2))
-            return self._blob(entry, match.group(2), download=True) if entry else self.send_error(404)
+            return self._json(200, [self._summary(name) for name in self.store.project_names()])
+        match = re.fullmatch(r"/api/v1/projects/([^/]+)/(report|report/versions|runs)", path)
+        if match:
+            name, what = match.groups()
+            if not self.store.known(name):
+                return self._json(404, {"error": f"no project {name!r}"})
+            if what == "runs":
+                return self._json(200, list(self.store.runs(name).values()))
+            if what == "report/versions":
+                return self._json(200, [{"version": v["version"], "time": v["time"], "files": len(v["entries"])}
+                                        for v in self.store.versions(name)])
+            record = self.store.report(name, self._version(query))
+            return self._json(200, record) if record else self._json(404, {"error": "no such report version"})
+        match = re.fullmatch(r"/files/([^/]+)/(report|runs)/(.+)", path)
+        if match and self.store.known(match.group(1)):
+            name, kind, inside = match.groups()
+            if kind == "runs":
+                entry = self.store.resolve(self.store.runs(name), inside)
+            else:
+                record = self.store.report(name, self._version(query))
+                entry = self.store.resolve({e["path"]: e for e in record["entries"]}, inside, REPORT_TREES) if record else None
+            return self._blob(entry, inside, download=True) if entry else self.send_error(404)
         match = re.fullmatch(r"/runs/([^/]+)/(.*)", path)
-        if match and self._known(match.group(1)):
-            return self._runs(match.group(1), match.group(2).strip("/"))
-        match = re.fullmatch(r"/p/([^/]+)(/.*)?", path)
-        if match and self._known(match.group(1)):
-            if match.group(2) is None:
-                return self._send(301, b"", headers={"Location": f"/p/{match.group(1)}/"})
-            return self._site(match.group(1), match.group(2)[1:])
+        if match and self.store.known(match.group(1)):
+            return self._runs_page(match.group(1), match.group(2).strip("/"))
+        match = re.fullmatch(r"/p/([^/@]+)(?:@(\d+))?(/.*)?", path)
+        if match and self.store.known(match.group(1)):
+            name, version, rest = match.groups()
+            if rest is None:
+                return self._send(301, b"", headers={"Location": f"{path}/"})
+            return self._site(name, int(version) if version else None, rest[1:])
         self.send_error(404)
 
     def do_PUT(self):
@@ -350,12 +415,10 @@ class HubHandler(BaseHTTPRequestHandler):
         except ValueError:
             return self._json(411, {"error": "Content-Length required"})
         if size < 0 or size > self.max_blob:
-            self.close_connection = True
             return self._json(413, {"error": f"blob larger than {self.max_blob} bytes"})
         try:
             created = self.store.put_blob(match.group(1), self.rfile, size)
         except ValueError as error:
-            self.close_connection = True
             return self._json(400, {"error": str(error)})
         self._json(201 if created else 200, {"sha256": match.group(1), "created": created})
 
@@ -363,181 +426,136 @@ class HubHandler(BaseHTTPRequestHandler):
         path = unquote(urlparse(self.path).path)
         if path == "/login":
             return self._login()
-        match = re.fullmatch(r"/api/v1/projects/([^/]+)/(missing|tree)", path)
-        if match:
-            if not self._bearer():
-                return self._json(401, {"error": "missing or invalid token"})
-            name = match.group(1)
+        if not self._bearer():
+            return self._json(401, {"error": "missing or invalid token"})
+        try:
+            payload = self._payload(MAX_JSON)
+            if path == "/api/v1/blobs/missing":
+                hashes = payload.get("sha256", [])
+                if not isinstance(hashes, list) or len(hashes) > 200_000 or not all(isinstance(h, str) and SHA256.fullmatch(h) for h in hashes):
+                    raise ValueError("sha256 must be a list of hex digests")
+                return self._json(200, {"missing": [h for h in hashes if not self.store.has_blob(h)]})
+            match = re.fullmatch(r"/api/v1/projects/([^/]+)/(report|runs)", path)
+            if not match:
+                return self.send_error(404)
+            name, kind = match.groups()
             if not PROJECT_NAME.fullmatch(name):
-                return self._json(400, {"error": "invalid project name"})
-            try:
-                payload = self._payload(MAX_JSON)
-                if match.group(2) == "missing":
-                    hashes = payload.get("sha256", [])
-                    if not isinstance(hashes, list) or len(hashes) > 200_000 or not all(isinstance(h, str) and SHA256.fullmatch(h) for h in hashes):
-                        raise ValueError("sha256 must be a list of hex digests")
-                    return self._json(200, {"missing": [h for h in hashes if not self.store.has_blob(h)]})
-                entries = payload.get("entries", [])
-                if not isinstance(entries, list) or len(entries) > 200_000:
-                    raise ValueError("entries must be a list")
-                appended, missing = self.store.update(name, entries)
+                raise ValueError("invalid project name")
+            if kind == "report":
+                version, missing, created = self.store.push_report(name, payload.get("entries"))
                 if missing:
                     return self._json(409, {"error": "upload these blobs first", "missing": missing})
-                return self._json(200, {"updated": appended})
-            except (ValueError, json.JSONDecodeError) as error:
-                return self._json(400, {"error": str(error)})
-        match = re.fullmatch(r"/p/([^/]+)/(.+)", path)
-        if match and self._known(match.group(1)) and COMMENT_ROUTE.fullmatch(match.group(2)):
-            if not (self._bearer() or (self._cookie() and self._same_origin())):
-                return self._json(401, {"error": "missing or invalid token"})
-            return self._comment_post(match.group(1), *COMMENT_ROUTE.fullmatch(match.group(2)).groups())
-        self.send_error(404)
+                return self._json(201 if created else 200, {"version": version, "created": created})
+            appended, missing = self.store.push_runs(name, payload.get("entries"))
+            if missing:
+                return self._json(409, {"error": "upload these blobs first", "missing": missing})
+            return self._json(200, {"updated": appended})
+        except (ValueError, json.JSONDecodeError) as error:
+            return self._json(400, {"error": str(error)})
+
+    @staticmethod
+    def _version(query: dict) -> int | None:
+        value = query.get("version", [None])[0]
+        return int(value) if value and value.isdigit() else None
 
     # ---------------------------------------------------------------- reports
 
-    def _site(self, name: str, rest: str):
-        tree = self.store.tree(name)
-        if rest == "api/reports":
-            return self._json(200, self._report_list(name, tree))
-        match = COMMENT_ROUTE.fullmatch(rest)
-        if match:
-            slug, action = match.groups()
-            if f"site/{slug}/report-data.json" not in tree:
-                return self.send_error(404)
-            return self._json(200, comments.fold(self._comment_records(name, slug, tree)), download=action == "export")
-        match = re.fullmatch(r"reports/([a-z0-9][a-z0-9-]*)(/.*)?", rest)
-        if rest.startswith("_static/"):  # shared, content-hashed page files
-            file = f"site/{rest}"
-        elif match and match.group(1) != OVERVIEW:
-            if match.group(2) is None:
-                return self._send(301, b"", headers={"Location": f"/p/{name}/reports/{match.group(1)}/"})
-            file = f"site/{match.group(1)}/{match.group(2)[1:] or 'index.html'}"
-        else:
-            file = f"site/{OVERVIEW}/{rest or 'index.html'}"
-        entry = tree.get(file) if valid_path(file) else None
-        if not entry or "sha256" not in entry:
-            if not rest and not any(path.startswith("site/") for path in tree):
-                return self._send(303, b"", headers={"Location": f"/runs/{name}/"})  # runs only, no reports yet
+    def _site(self, name: str, version: int | None, rest: str):
+        record = self.store.report(name, version)
+        if record is None:
+            if version is None:  # runs only, no report yet
+                return self._send(303, b"", headers={"Location": f"/runs/{name}/"})
             return self.send_error(404)
-        immutable = rest.startswith("_static/") or re.search(r"(^|&)v=[0-9a-f]+", urlparse(self.path).query) is not None
-        compressed = tree.get(file + ".gz")
+        files = {entry["path"]: entry for entry in record["entries"]}
+        file = f"site/{rest}" if rest else "site/index.html"
+        if rest and not rest.endswith("/") and f"{file}/index.html" in files:
+            return self._send(301, b"", headers={"Location": urlparse(self.path).path + "/"})
+        if file.endswith("/"):
+            file += "index.html"
+        entry = files.get(file) if valid_path(file) else None
+        if not entry or "sha256" not in entry:
+            return self.send_error(404)
+        immutable = "/_static/" in f"/{rest}" or re.search(r"(^|&)v=[0-9a-f]+", urlparse(self.path).query) is not None
+        compressed = files.get(file + ".gz")
         if compressed and "sha256" in compressed and "gzip" in self.headers.get("Accept-Encoding", ""):
             return self._blob(compressed, file, immutable=immutable, encoding="gzip")
         return self._blob(entry, file, immutable=immutable)
 
-    def _report_list(self, name: str, tree: dict) -> list[dict]:
-        slugs = sorted(
-            path.split("/")[1] for path in tree
-            if re.fullmatch(r"site/[a-z0-9][a-z0-9-]*/report-data\.json", path)
-        )
-        ordered = ([OVERVIEW] if OVERVIEW in slugs else []) + [slug for slug in slugs if slug != OVERVIEW]
-        reports = []
-        for slug in ordered:
-            data = self.store.read_json(tree[f"site/{slug}/report-data.json"]) or {}
-            reports.append({
-                "slug": slug,
-                "title": data.get("title", slug),
-                "subtitle": data.get("subtitle", ""),
-                "status": data.get("status", ""),
-                "updated": data.get("updated", ""),
-                "summary": data.get("summary", ""),
-                "links_to": data.get("links_to", []),
-                "href": "" if slug == OVERVIEW else f"reports/{slug}/",
-            })
-        return reports
-
-    def _comment_records(self, name: str, slug: str, tree: dict) -> list[dict]:
-        """The project's pushed comment log merged with comments written on the hub."""
-        pushed = "reports/knowledge/comments.jsonl" if slug == OVERVIEW else f"reports/{slug}/knowledge/comments.jsonl"
-        return comments.merge(self.store.read_lines(tree.get(pushed)), comments.read_log(self.store.comment_log(name, slug)))
-
-    def _comment_post(self, name: str, slug: str, action: str | None):
-        tree = self.store.tree(name)
-        if f"site/{slug}/report-data.json" not in tree or action == "export":
-            return self.send_error(404)
-        try:
-            payload = self._payload(comments.MAX_PAYLOAD, allow_empty=action == "clear")
-            with self.store.lock:  # one writer at a time per hub keeps the fold consistent
-                rows, status, body = comments.apply(self._comment_records(name, slug, tree), action, payload)
-                comments.append(self.store.comment_log(name, slug), rows)
-            self._json(status, body)
-        except (ValueError, json.JSONDecodeError) as error:
-            self._json(400, {"error": str(error)})
-
     # ------------------------------------------------------------ hub pages
 
-    def _known(self, name: str) -> bool:
-        return bool(PROJECT_NAME.fullmatch(name)) and (self.store.projects / name / "files.jsonl").is_file()
-
-    def _project_summary(self, name: str) -> dict:
-        tree = self.store.tree(name)
-        files = [entry for entry in tree.values() if "sha256" in entry]
-        runs = {path.rsplit("/", 1)[0] for path in tree if path.startswith("outputs/") and path.endswith("/run.json")}
+    def _summary(self, name: str) -> dict:
+        runs = self.store.runs(name)
+        record = self.store.report(name)
+        files = [entry for entry in runs.values() if "sha256" in entry]
+        times = [entry.get("time", "") for entry in runs.values()] + ([record["time"]] if record else [])
+        site = (self.store.read_json(next((e for e in record["entries"] if e["path"] == "site/site.json"), None))
+                if record else None) or {}
         return {
             "name": name,
-            "files": len(files),
-            "bytes": sum(entry["size"] for entry in files),
-            "runs": len(runs),
-            "reports": f"site/{OVERVIEW}/index.html" in tree or any(path.endswith("/index.html") and path.startswith("site/") for path in tree),
-            "updated": max((entry.get("time", "") for entry in tree.values()), default=""),
+            "report": {"version": record["version"], "time": record["time"], "title": site.get("title")} if record else None,
+            "runs": len({path.rsplit("/", 1)[0] for path in runs if path.endswith("/run.json")}),
+            "run_files": len(files),
+            "run_bytes": sum(entry["size"] for entry in files),
+            "updated": max(times, default=""),
         }
 
     def _index(self):
         rows = []
-        for summary in sorted((self._project_summary(name) for name in self.store.project_names()),
+        for summary in sorted((self._summary(name) for name in self.store.project_names()),
                               key=lambda item: item["updated"], reverse=True):
             name = html.escape(summary["name"])
-            report = f'<a href="/p/{name}/">reports</a>' if summary["reports"] else '<span class="muted">no reports yet</span>'
+            report = summary["report"]
+            report_cell = (f'<a href="/p/{name}/">{html.escape(report["title"] or "report")}</a>'
+                           f' <span class="muted">v{report["version"]}</span>') if report else '<span class="muted">none</span>'
             rows.append(
-                f"<tr><td><strong>{name}</strong></td><td>{report}</td>"
-                f'<td><a href="/runs/{name}/">{summary["runs"]} runs</a></td>'
-                f'<td>{summary["files"]} files · {size_text(summary["bytes"])}</td>'
-                f'<td class="muted">{html.escape(summary["updated"][:19].replace("T", " "))} UTC</td></tr>'
+                f"<tr><td><strong>{name}</strong></td><td>{report_cell}</td>"
+                f'<td><a href="/runs/{name}/">{summary["runs"]} runs</a> '
+                f'<span class="muted">{summary["run_files"]} files · {size_text(summary["run_bytes"])}</span></td>'
+                f'<td class="muted">{stamp_text(summary["updated"])}</td></tr>'
             )
         table = (
-            '<div class="wrap"><table><thead><tr><th>Project</th><th>Reports</th><th>Runs</th><th>Files</th>'
+            '<div class="wrap"><table><thead><tr><th>Project</th><th>Report</th><th>Runs</th>'
             f'<th>Last push</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
-            if rows else '<p class="muted">No project has pushed yet. Run <code>cairn-report push</code> in a project.</p>'
+            if rows else '<p class="muted">Nothing pushed yet. Run <code>cairn-report push</code> in a project.</p>'
         )
-        body = f'<h1>Research hub</h1><p class="muted">Every pushed project, newest first. <a href="/logout">Log out</a></p>{table}'
-        self._send(200, page("Research hub", body), "text/html; charset=utf-8")
+        body = f'<h1>Hub</h1><p class="muted">Every pushed project, newest first. <a href="/logout">Log out</a></p>{table}'
+        self._send(200, page("Hub", body), "text/html; charset=utf-8")
 
-    def _runs(self, name: str, sub: str):
-        tree = self.store.tree(name)
+    def _runs_page(self, name: str, sub: str):
+        runs = self.store.runs(name)
         escaped = html.escape(name)
         crumbs = f'<div class="crumbs"><a href="/">Hub</a> / <a href="/runs/{escaped}/">{escaped}</a>'
-        if not sub:  # every run: outputs/<run-name>/<timestamp>/run.json
-            runs = []
-            for path in sorted(tree, reverse=True):
-                match = re.fullmatch(r"outputs/([^/]+)/([^/]+)/run\.json", path)
-                if match:
-                    status = (self.store.read_json(tree[path]) or {}).get("status", "unknown")
-                    latest = tree.get(f"outputs/{match.group(1)}/latest", {}).get("link", "").rstrip("/") == match.group(2)
-                    files = [entry for key, entry in tree.items() if key.startswith(f"outputs/{match.group(1)}/{match.group(2)}/") and "sha256" in entry]
-                    runs.append((match.group(1), match.group(2), status, latest, len(files), sum(e["size"] for e in files)))
-            runs.sort(key=lambda run: (run[0], run[1]), reverse=False)
-            rows = "".join(
-                f'<tr><td><a href="/runs/{escaped}/outputs/{html.escape(run)}/{html.escape(stamp)}/">{html.escape(run)}</a></td>'
-                f"<td>{html.escape(stamp)}{' · <strong>latest</strong>' if latest else ''}</td>"
-                f'<td><span class="badge {html.escape(status)}">{html.escape(status)}</span></td>'
-                f"<td>{count} files · {size_text(size)}</td></tr>"
-                for run, stamp, status, latest, count, size in runs
-            )
-            report = f' · <a href="/p/{escaped}/">reports</a>' if any(path.startswith("site/") for path in tree) else ""
-            body = (f"{crumbs}</div><h1>{escaped}</h1><p class=\"muted\">Runs pushed from the project's <code>outputs/</code>{report}</p>"
+        if not sub:  # every run: <run-name>/<timestamp>/run.json
+            rows = []
+            for path in sorted(runs):
+                match = re.fullmatch(r"([^/]+)/([^/]+)/run\.json", path)
+                if not match:
+                    continue
+                run, stamp = match.groups()
+                status = (self.store.read_json(runs[path]) or {}).get("status", "unknown")
+                latest = runs.get(f"{run}/latest", {}).get("link", "").rstrip("/") == stamp
+                files = [e for key, e in runs.items() if key.startswith(f"{run}/{stamp}/") and "sha256" in e]
+                rows.append(
+                    f'<tr><td><a href="/runs/{escaped}/{html.escape(run)}/{html.escape(stamp)}/">{html.escape(run)}</a></td>'
+                    f"<td>{html.escape(stamp)}{' · <strong>latest</strong>' if latest else ''}</td>"
+                    f'<td><span class="badge {html.escape(str(status))}">{html.escape(str(status))}</span></td>'
+                    f"<td>{len(files)} files · {size_text(sum(e['size'] for e in files))}</td></tr>"
+                )
+            report = f' · <a href="/p/{escaped}/">report</a>' if self.store.report(name) else ""
+            body = (f'{crumbs}</div><h1>{escaped}</h1><p class="muted">Runs{report}</p>'
                     '<div class="wrap"><table><thead><tr><th>Run</th><th>Started</th><th>Status</th><th>Files</th></tr></thead>'
-                    f"<tbody>{rows or '<tr><td colspan=4 class=muted>No runs yet.</td></tr>'}</tbody></table></div>")
+                    f"<tbody>{''.join(rows) or '<tr><td colspan=4 class=muted>No runs yet.</td></tr>'}</tbody></table></div>")
             return self._send(200, page(f"{name} runs", body), "text/html; charset=utf-8")
         if not valid_path(sub):
             return self.send_error(404)
         prefix = sub + "/"
-        files = sorted((path, entry) for path, entry in tree.items() if path.startswith(prefix))
+        files = sorted((path, entry) for path, entry in runs.items() if path.startswith(prefix))
         if not files:
             return self.send_error(404)
         rows = "".join(
-            f'<tr><td><a href="/files/{escaped}/{quote(path)}">{html.escape(path[len(prefix):])}</a></td>'
+            f'<tr><td><a href="/files/{escaped}/runs/{quote(path)}">{html.escape(path[len(prefix):])}</a></td>'
             f"<td>{size_text(entry['size']) if 'sha256' in entry else '→ ' + html.escape(entry['link'])}</td>"
-            f"<td class=\"muted\">{html.escape(entry.get('time', '')[:19].replace('T', ' '))}</td></tr>"
+            f'<td class="muted">{stamp_text(entry.get("time", ""))}</td></tr>'
             for path, entry in files
         )
         body = (f"{crumbs} / {html.escape(sub)}</div><h1>{html.escape(sub.rsplit('/', 1)[-1])}</h1>"
@@ -548,7 +566,7 @@ class HubHandler(BaseHTTPRequestHandler):
     def _login_page(self, target: str, failed: bool = False):
         target = target if target.startswith("/") and not target.startswith("//") and "\\" not in target else "/"
         message = '<p class="failed">That token is not valid.</p>' if failed else ""
-        body = (f"<h1>Research hub</h1><p class=\"muted\">Enter the hub token.</p>{message}"
+        body = (f"<h1>Hub</h1><p class=\"muted\">Enter the hub token.</p>{message}"
                 f'<form method="post" action="/login"><input type="hidden" name="next" value="{html.escape(target)}">'
                 '<input type="password" name="token" autocomplete="current-password" required autofocus>'
                 "<button type=\"submit\">Open hub</button></form>")
@@ -582,8 +600,8 @@ class HubHandler(BaseHTTPRequestHandler):
             raise ValueError("invalid payload size")
         return self.rfile.read(size) if size else b""
 
-    def _payload(self, limit: int, allow_empty: bool = False) -> dict:
-        value = json.loads(self._body(limit, allow_empty) or b"{}")
+    def _payload(self, limit: int) -> dict:
+        value = json.loads(self._body(limit) or b"{}")
         if not isinstance(value, dict):
             raise ValueError("payload must be a JSON object")
         return value
@@ -623,11 +641,8 @@ class HubHandler(BaseHTTPRequestHandler):
         if body:
             self.wfile.write(body)
 
-    def _json(self, status: int, value, download: bool = False) -> None:
-        headers = {"Cache-Control": "no-store"}
-        if download:
-            headers["Content-Disposition"] = 'attachment; filename="report-comments.json"'
-        self._send(status, json.dumps(value).encode(), "application/json", headers)
+    def _json(self, status: int, value) -> None:
+        self._send(status, json.dumps(value).encode(), "application/json", {"Cache-Control": "no-store"})
 
     def log_message(self, format, *args):  # one line per request, without the token
         sys.stderr.write(f"{self.log_date_time_string()} {self.address_string()} {format % args}\n")

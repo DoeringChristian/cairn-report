@@ -1,14 +1,16 @@
-"""Build the project's reports from Markdown.
+"""Build a tree of reports from Markdown into a static site.
 
-    reports/report.md          the overview (super-report), served at /
-    reports/<slug>/report.md   one report per research direction or idea
-    generated/reports/<slug>/  build output (the overview's slug is "overview")
+A report is a folder with a `report.md` (front matter + Markdown), an optional
+`assets/` folder, and optional child reports (sub-folders with their own
+`report.md`). The configured report folder is the root of the tree:
 
-Paths and style come from `cairn_report.config` (an optional cairn-report.toml).
-Directions are built first; the overview's ```reports``` fence then lists them
-with the short `summary` from each direction's front matter. Reports link to
-each other with `[text](report:<slug>#anchor)` (the overview is
-`report:overview`), and the build checks that every target exists.
+    reports/report.md            ->  generated/reports/index.html
+    reports/<a>/report.md        ->  generated/reports/<a>/index.html
+    reports/<a>/<b>/report.md    ->  generated/reports/<a>/<b>/index.html
+
+Pages link to each other with `[text](report:<path>#anchor)` (`report:/` is the
+root), checked at build time. The output is static: any web server, the
+project server, or a hub can serve it.
 """
 
 from __future__ import annotations
@@ -50,10 +52,10 @@ PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
 CONFIG: Config | None = None
 PROJECT = REPORTS_ROOT = OUTPUT_ROOT = OUTPUTS = Path()
-SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
-OVERVIEW = "overview"  # slug of the super-report at reports/report.md
-RESERVED = {OVERVIEW, "knowledge", "fragments", "media"}
-REPORT_LINK = re.compile(r"report:([a-z0-9][a-z0-9-]*)(?:#([A-Za-z0-9_.:-]+))?$")
+SEGMENT = re.compile(r"[a-z0-9][a-z0-9_-]{0,62}")
+REPORT_LINK = re.compile(r"report:(/|[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_-]*)*)(?:#([A-Za-z0-9_.:-]+))?$")
+SKIPPED = {"assets"}
+  # folder names that are never reports (also anything starting with "_" or ".")
 PAGE_FILES = ("index.html", "report.css", "report-extra.css", "report.js")
 ASSETS = "assets"
 
@@ -90,11 +92,7 @@ def tooling_info() -> dict:
     info["extra_css"] = [str(path.relative_to(PROJECT)) for path in (CONFIG.extra_css if CONFIG else ())]
     return info
 
-FINDING_STATES = ("tentative", "supported", "contradicted", "superseded")
 GRAPHVIZ_ENGINES = ("dot", "neato", "fdp", "sfdp", "circo", "twopi")
-SUMMARY_MAX_CHARS = 400
-RAW_HTML_MAX_LINES = 20
-RAW_HTML_MAX_CHARS = 1_500
 UNSAFE_HTML = re.compile(
     r"<(?:script|iframe|object|embed|link|base|meta)\b"
     r"|\son[a-z]+\s*="
@@ -254,28 +252,43 @@ def typed_numbers(markdown: str) -> list[dict]:
     return hits
 
 
+def HUB_RUNS_DIR(project: Path) -> Path:
+    """Where runs downloaded from a hub are kept for reports."""
+    return Path(project) / "generated" / "hub-runs"
+
+
 def discover_reports() -> dict[str, Path]:
-    """Research directions (reports/<slug>/report.md) first, then the overview (reports/report.md)."""
-    if not REPORTS_ROOT.is_dir():
+    """Every report in the tree, keyed by its path below the root ("" is the root), children first."""
+    if not (REPORTS_ROOT / "report.md").is_file():
         return {}
-    reports = {
-        folder.name: folder
-        for folder in sorted(REPORTS_ROOT.iterdir())
-        if folder.is_dir() and folder.name not in RESERVED and SLUG.fullmatch(folder.name)
-        and (folder / "report.md").is_file()
-    }
-    if (REPORTS_ROOT / "report.md").is_file():
-        reports[OVERVIEW] = REPORTS_ROOT
-    return reports
+    found: dict[str, Path] = {}
+
+    def walk(folder: Path, key: str) -> None:
+        for child in sorted(folder.iterdir()):
+            if (child.is_dir() and not child.name.startswith(("_", ".")) and child.name not in SKIPPED
+                    and SEGMENT.fullmatch(child.name) and (child / "report.md").is_file()):
+                walk(child, f"{key}/{child.name}" if key else child.name)
+        found[key] = folder
+
+    walk(REPORTS_ROOT, "")
+    return found
 
 
-def output_dir(slug: str) -> Path:
-    return OUTPUT_ROOT / slug
+def depth(key: str) -> int:
+    return len(key.split("/")) if key else 0
 
 
-def report_href(slug: str) -> str:
+def parent_of(key: str) -> str | None:
+    return None if not key else key.rsplit("/", 1)[0] if "/" in key else ""
+
+
+def output_dir(key: str) -> Path:
+    return OUTPUT_ROOT / key if key else OUTPUT_ROOT
+
+
+def report_href(key: str) -> str:
     """A report's address relative to the site root, so a site works under any prefix (e.g. a hub)."""
-    return "" if slug == OVERVIEW else f"reports/{slug}/"
+    return f"{key}/" if key else ""
 
 
 def page_href(target: str, current: str, anchor: str | None = None) -> str:
@@ -283,35 +296,40 @@ def page_href(target: str, current: str, anchor: str | None = None) -> str:
     fragment = f"#{anchor}" if anchor else ""
     if target == current:
         return fragment or "./"
-    up = "" if current == OVERVIEW else "../../"
-    return (up + report_href(target) or "./") + fragment
+    return ("../" * depth(current) + report_href(target) or "./") + fragment
 
 
-def overview_backlink(slug: str) -> dict | None:
-    """Every direction page links back to its card in the overview."""
-    overview = REPORTS_ROOT / "report.md"
-    if slug == OVERVIEW or not overview.is_file():
-        return None
-    match = re.match(r"---\n(.*?)\n---", overview.read_text(), re.S)
+def front_matter_title(folder: Path | None) -> str:
+    """A report's title from its front matter (its folder name if it has none), without building it."""
+    if folder is None:
+        return ""
+    match = re.match(r"---\n(.*?)\n---", (folder / "report.md").read_text(), re.S)
     title = (yaml.safe_load(match.group(1)) or {}).get("title") if match else None
-    return {"title": title or "Project overview", "href": f"#direction-{slug}"}  # relative to the site root
+    return str(title or folder.name)
+
+
+def card_id(key: str) -> str:
+    """The id of a report's card on its parent page."""
+    return "report-" + key.replace("/", "-")
 
 
 class Build:
     """State gathered while rendering one report: sources, runs, ids, findings, links."""
 
-    def __init__(self, slug: str, folder: Path):
-        self.slug = slug
+    def __init__(self, key: str, folder: Path):
+        self.key = key
         self.markdown = folder / "report.md"
         self.content_root = folder
-        self.generated = output_dir(slug)
+        self.generated = output_dir(key)
         self.meta: dict = {}
         self.links: list[dict] = []
         self.typed: list[dict] = []
         self.sources: dict[str, str] = {}
-        self.runs: set[str] = set()
+        self.runs: dict[str, str | None] = {}  # run path -> status from its run.json (None if it has none)
         self.mlflow_runs: dict[str, dict] = {}
         self.mirrors: dict[str, dict | None] = {}
+        self.hub_index = None
+        self.hub_runs: dict[str, dict] = {}
         self.sizes: dict[str, tuple[int, int] | None] = {}
         self.ids: set[str] = set()
         self.findings: list[dict] = []
@@ -333,25 +351,13 @@ class Build:
         return resolved
 
     def require_run(self, run_root: Path, where: str) -> dict:
-        """The one completion contract: report evidence needs run.json with status completed.
-
-        Records run.json and the run's provenance manifest and patch in the manifest.
-        """
+        """Record a run the report reads: its run.json (if any), provenance files, and status in the manifest."""
         status_file = run_root / "run.json"
-        if not status_file.is_file():
-            raise ValueError(
-                f"{where}: {run_root} has no run.json, so it cannot count as completed"
-            )
-        status = json.loads(status_file.read_text())
-        if status.get("status") != "completed":
-            raise ValueError(
-                f"{where}: {run_root} is {status.get('status')!r}, not completed"
-            )
-        self.track(status_file)
+        status = json.loads(self.track(status_file).read_text()) if status_file.is_file() else {}
         for name in ("manifest.json", "working-tree.patch"):
             if (run_root / "provenance" / name).is_file():
                 self.track(run_root / "provenance" / name)
-        self.runs.add(str(run_root.resolve().relative_to(PROJECT.resolve())))
+        self.runs[run_root.resolve().relative_to(PROJECT.resolve()).as_posix()] = status.get("status")
         return status
 
     def artifact_index(self, run_root: Path) -> dict[str, dict]:
@@ -379,9 +385,13 @@ class Build:
         status = self.require_run(run_root, f"{self.markdown}:{line}")
         inside = file.relative_to(run_root).as_posix()
         mlflow = json.loads((run_root / "mlflow-run.json").read_text()) if (run_root / "mlflow-run.json").is_file() else None
-        trace["run"] = (mlflow or {}).get("run_dir") or run_root.relative_to(project).as_posix()
-        trace["path"] = inside if mlflow else trace["path"]
-        trace["label"] = f"{trace['run']}/{inside}" if mlflow else relative.as_posix()
+        hub = json.loads((run_root / "hub-run.json").read_text()) if (run_root / "hub-run.json").is_file() else None
+        trace["run"] = (mlflow or {}).get("run_dir") or (hub or {}).get("run") or run_root.relative_to(project).as_posix()
+        snapshot = bool(mlflow or hub)
+        trace["path"] = inside if snapshot else trace["path"]
+        trace["label"] = f"{trace['run']}/{inside}" if snapshot else relative.as_posix()
+        if hub:
+            trace["hub"] = {"run": hub["run"], "url": hub["url"]}
         entry = self.artifact_index(run_root).get(inside)
         if entry:
             trace["origin"] = entry.get("origin")
@@ -408,6 +418,9 @@ class Build:
         cache = (project / self.mlflow_settings().get("cache_dir", "generated/mlflow")).resolve()
         if cache in file.parents:
             return cache / file.relative_to(cache).parts[0]
+        hub_cache = HUB_RUNS_DIR(project).resolve()
+        if hub_cache in file.parents and len(file.relative_to(hub_cache).parts) > 2:
+            return hub_cache / Path(*file.relative_to(hub_cache).parts[:2])
         parts = relative.parts
         if parts[0] != OUTPUTS.resolve().relative_to(project).parts[0] or len(parts) < 4:
             return None
@@ -421,6 +434,10 @@ class Build:
         """A read file as readers know it: MLflow snapshot files by their run, not by cache path."""
         cache = (PROJECT.resolve() / self.mlflow_settings().get("cache_dir", "generated/mlflow")).resolve()
         file = PROJECT.resolve() / source
+        hub_cache = HUB_RUNS_DIR(PROJECT).resolve()
+        if hub_cache in file.parents:
+            name, stamp, *inside = file.relative_to(hub_cache).parts
+            return f"{name}/{stamp} (hub)/{'/'.join(inside)}"
         if cache not in file.parents:
             return source
         run_id, *inside = file.relative_to(cache).parts
@@ -448,16 +465,63 @@ class Build:
     def mlflow_settings(self) -> dict:
         return CONFIG.logger["mlflow"] if CONFIG else {}
 
+    def uses_hub(self) -> bool:
+        return CONFIG is not None and "hub" in CONFIG.logger["backends"]
+
     def resolve_run(self, name: str, timestamp: str, where: str) -> Path:
-        """outputs/<name>/<timestamp>, or its MLflow run when the evidence is not local."""
+        """outputs/<name>/<timestamp>; when its evidence is not local, the run from the hub, then from MLflow."""
         local = OUTPUTS / name / timestamp
-        if self.uses_mlflow() and not (local.exists() and self.has_evidence(local.resolve())):
+        local_evidence = local.exists() and self.has_evidence(local.resolve())
+        if self.uses_hub() and not local_evidence:
+            try:
+                return self.hub_run(name, timestamp, where)
+            except LookupError:
+                if not self.uses_mlflow() and not local.exists():
+                    raise ValueError(f"{where}: no run {name}/{timestamp} locally or on the hub") from None
+        if self.uses_mlflow() and not local_evidence:
             if local.exists():
                 return self.mlflow_run(where, run_dir=local.resolve().relative_to(PROJECT.resolve()).as_posix())
             return self.mlflow_run(where, name=name)
         resolved = local.resolve(strict=True)
         self.require_run(resolved, where)
         return resolved
+
+    def hub_run(self, name: str, timestamp: str, where: str) -> Path:
+        """A run from the hub's run index, downloaded (verified) into generated/hub-runs/<name>/<timestamp>/."""
+        from urllib.parse import quote
+
+        from .push import _download, connect, project_name
+
+        if self.hub_index is None:
+            hub = connect(CONFIG)
+            status, entries = hub.json("GET", f"/api/v1/projects/{project_name(CONFIG)}/runs", expect=(200, 404))
+            self.hub_index = (hub, {entry["path"]: entry for entry in entries} if status == 200 else {})
+        hub, index = self.hub_index
+        stamp = timestamp
+        if timestamp == "latest":
+            link = index.get(f"{name}/latest", {}).get("link")
+            stamps = sorted(path.split("/")[1] for path in index if path.startswith(f"{name}/") and path.count("/") == 2
+                            and path.endswith("/run.json"))
+            stamp = link.rstrip("/") if link else (stamps[-1] if stamps else None)
+        prefix = f"{name}/{stamp}/"
+        files = {path: entry for path, entry in index.items() if stamp and path.startswith(prefix)}
+        if not files:
+            raise LookupError(f"{name}/{timestamp}")
+        target = HUB_RUNS_DIR(PROJECT) / name / stamp
+        project = project_name(CONFIG)
+        for path, entry in files.items():
+            local = target / path[len(prefix):]
+            if "link" in entry:
+                if not local.is_symlink():
+                    local.parent.mkdir(parents=True, exist_ok=True)
+                    local.symlink_to(entry["link"])
+            else:
+                _download(hub, f"/files/{project}/runs/{quote(path)}", local, entry["sha256"])
+        record = {"run": f"{name}/{stamp}", "url": f"{hub.url}/runs/{project}/{name}/{stamp}/"}
+        (target / "hub-run.json").write_text(json.dumps(record) + "\n")
+        self.require_run(target, where)
+        self.hub_runs[record["run"]] = {**record, "snapshot": target.relative_to(PROJECT.resolve()).as_posix()}
+        return target
 
     @staticmethod
     def has_evidence(folder: Path) -> bool:
@@ -617,22 +681,19 @@ def render(build: Build) -> str:
         return build.mlflow_run(f"{path}: mlflow_run({run_id or run_dir or name!r})", run_id=run_id, name=name, run_dir=run_dir)
 
     def run_trials(study: Path) -> list[dict]:
-        """Every trial of a completed Hydra multirun study, in trial order.
+        """The trials of a Hydra multirun folder (numbered sub-folders), in trial order.
 
         Each entry has `trial`, `dir`, `overrides` (from .hydra/overrides.yaml), and
-        `status`; the study's run.json must say completed (StudyCompletion writes it).
+        `status` (from the trial's run.json, or None).
         """
         study = Path(study).resolve(strict=True)
-        status = build.require_run(study, f"{path}: run_trials({study.name!r})")
-        if status.get("kind") != "study":
-            raise ValueError(f"{path}: {study} is a single run, not a multirun study")
+        build.require_run(study, f"{path}: run_trials({study.name!r})")
         trials = []
-        for entry in status.get("trials", []):
-            folder = study / entry["trial"]
+        for folder in sorted((child for child in study.iterdir() if child.is_dir() and child.name.isdigit()), key=lambda f: int(f.name)):
             overrides_file = folder / ".hydra" / "overrides.yaml"
             overrides = yaml.safe_load(build.track(overrides_file).read_text()) if overrides_file.is_file() else []
-            trial_status = json.loads(build.track(folder / "run.json").read_text()).get("status")
-            trials.append({"trial": entry["trial"], "dir": folder, "overrides": overrides or [], "status": trial_status})
+            status = build.require_run(folder, f"{path}: run_trials({study.name!r})").get("status")
+            trials.append({"trial": folder.name, "dir": folder, "overrides": overrides or [], "status": status})
         return trials
 
     def read_json(file):
@@ -736,18 +797,8 @@ def render(build: Build) -> str:
                     child.meta["line"] = line_of(token)
             if token.type == "admonition_open" and token.meta.get("tag") == "finding":
                 words = token.info.split()
-                state_name = words[1] if len(words) > 1 else ""
-                if state_name not in FINDING_STATES:
-                    raise ValueError(
-                        f"{path}:{line_of(token)}: finding needs a status, one of {', '.join(FINDING_STATES)}"
-                    )
+                state_name = words[1] if len(words) > 1 else ""  # any status word the author uses
                 title = tokens[index + 2].content
-                if TYPED_NUMBER.search(title) or "{{" in title:
-                    raise ValueError(
-                        f"{path}:{line_of(token)}: finding title {title!r} contains a result number; "
-                        "state the claim qualitatively and give the numbers in the body as {{ }} values "
-                        "(the finding id is derived from the title)"
-                    )
                 fid = build.unique(f"finding-{slug(title)}", line_of(token))
                 token.attrSet("id", fid)
                 token.attrSet("data-comment-target", f"finding:{fid}")
@@ -820,7 +871,7 @@ def render(build: Build) -> str:
         if info and info[0] in GRAPHVIZ_ENGINES:
             return graphviz(token, line)
         if info[:1] == ["reports"]:
-            return direction_cards(token, line)
+            return child_cards(token, line)
         return (
             f'<div data-source-line="{line}">'
             + default_fence(tokens, idx, options, env)
@@ -881,12 +932,6 @@ def render(build: Build) -> str:
 
     def raw_html(token, line):
         markup = token.content
-        if markup.count("\n") > RAW_HTML_MAX_LINES or len(markup) > RAW_HTML_MAX_CHARS:
-            raise ValueError(
-                f"{path}:{line}: html raw block exceeds {RAW_HTML_MAX_LINES} lines or "
-                f"{RAW_HTML_MAX_CHARS} characters; move it to reports/fragments/<name>.html "
-                "and reference it with an `html include` fence"
-            )
         check_html(markup, f"{path}:{line}")
         return f'<div class="raw-html" data-source-line="{line}">{markup}</div>'
 
@@ -896,12 +941,9 @@ def render(build: Build) -> str:
             raise ValueError(
                 f"{path}:{line}: html include takes exactly one fragment path"
             )
-        fragments = build.content_root / "fragments"
         fragment = (build.content_root / names[0]).resolve()
-        if fragments.resolve() not in fragment.parents:
-            raise ValueError(
-                f"{path}:{line}: fragments must live under the report's fragments/"
-            )
+        if build.content_root.resolve() not in fragment.parents:
+            raise ValueError(f"{path}:{line}: included HTML must live inside the report's folder")
         if fragment.suffix != ".html" or not fragment.is_file():
             raise ValueError(f"{path}:{line}: missing HTML fragment {names[0]}")
         build.track(fragment)
@@ -909,32 +951,33 @@ def render(build: Build) -> str:
         source = esc(fragment.relative_to(PROJECT.resolve()))
         return f'<div class="raw-html" data-source-line="{line}" data-source-file="{source}">{markup}</div>'
 
-    def direction_cards(token, line):
-        """The overview's index of research directions: one card per direction report."""
-        if build.slug != OVERVIEW:
-            raise ValueError(f"{path}:{line}: a reports fence belongs in the overview, reports/report.md")
-        directions = {slug: folder for slug, folder in discover_reports().items() if slug != OVERVIEW}
-        wanted = token.content.split() or list(directions)
+    def child_cards(token, line):
+        """A card per child report (or the named children): status, title, summary, findings, update time."""
+        reports = discover_reports()
+        children = {key.rsplit("/", 1)[-1]: key for key in reports if parent_of(key) == build.key}
+        wanted = token.content.split() or list(children)
         cards = []
-        for slug_ in wanted:
-            if slug_ not in directions:
-                raise ValueError(f"{path}:{line}: no research direction {slug_!r} (have: {', '.join(directions)})")
-            data_file = output_dir(slug_) / "report-data.json"
+        for name in wanted:
+            if name not in children:
+                raise ValueError(f"{path}:{line}: no child report {name!r} (have: {', '.join(children) or 'none'})")
+            key = children[name]
+            data_file = output_dir(key) / "report-data.json"
             if not data_file.is_file():
-                raise ValueError(f"{path}:{line}: direction {slug_!r} is not built; build all reports")
+                raise ValueError(f"{path}:{line}: child report {name!r} is not built; build all reports")
             data = json.loads(data_file.read_text())
-            build.track(directions[slug_] / "report.md")
-            build.links.append({"slug": slug_, "anchor": None, "line": line})
+            build.track(reports[key] / "report.md")
+            build.links.append({"key": key, "anchor": None, "line": line})
             counts = {}
             for finding in data.get("findings", []):
-                counts[finding["state"]] = counts.get(finding["state"], 0) + 1
-            tally = " · ".join(f"{count} {state}" for state, count in sorted(counts.items())) or "no findings yet"
+                if finding["state"]:
+                    counts[finding["state"]] = counts.get(finding["state"], 0) + 1
+            tally = " · ".join(f"{count} {state}" for state, count in sorted(counts.items()))
+            details = " · ".join(part for part in (tally, f"updated {data.get('updated', '')}") if part)
             status = f'<span class="direction-status">{esc(data["status"])}</span>' if data.get("status") else ""
             cards.append(
-                f'<article class="direction-card" id="direction-{esc(slug_)}" data-comment-target="direction:{esc(slug_)}">'
-                f'{status}<h3><a href="{esc(page_href(slug_, build.slug))}">{esc(data["title"])}</a></h3>'
-                f'<p>{esc(data.get("summary", ""))}</p>'
-                f'<small>{esc(tally)} · updated {esc(data.get("updated", ""))}</small></article>'
+                f'<article class="direction-card" id="{card_id(key)}" data-comment-target="report:{esc(key)}">'
+                f'{status}<h3><a href="{esc(page_href(key, build.key))}">{esc(data["title"])}</a></h3>'
+                f'<p>{esc(data.get("summary", ""))}</p><small>{esc(details)}</small></article>'
             )
         return f'<div class="direction-grid" data-source-line="{line}">{"".join(cards)}</div>'
 
@@ -1025,17 +1068,18 @@ def render(build: Build) -> str:
     )
 
     def link_open(tokens, idx, options, env):
-        """`report:<slug>#anchor` links another report; targets are checked after the build."""
+        """`report:<path>#anchor` links another report; targets are checked after the build."""
         token = tokens[idx]
         href = token.attrGet("href") or ""
         if href.startswith("report:"):
             line = token.meta.get("line", 0)
             match = REPORT_LINK.match(href)
             if not match:
-                raise ValueError(f"{path}:{line}: malformed report link {href!r}; use report:<slug>#anchor")
+                raise ValueError(f"{path}:{line}: malformed report link {href!r}; use report:<path>#anchor (report:/ is the root)")
             target, anchor = match.groups()
-            build.links.append({"slug": target, "anchor": anchor, "line": line})
-            token.attrSet("href", page_href(target, build.slug, anchor))
+            target = "" if target == "/" else target
+            build.links.append({"key": target, "anchor": anchor, "line": line})
+            token.attrSet("href", page_href(target, build.key, anchor))
             token.attrSet("class", "report-link")
         return default_link(tokens, idx, options, env)
 
@@ -1055,9 +1099,9 @@ def render(build: Build) -> str:
     return rendered
 
 
-def page_ids(slug: str) -> set[str] | None:
+def page_ids(key: str) -> set[str] | None:
     """Anchors of a built report (headings, findings, figures), or None if never built."""
-    narrative = output_dir(slug) / "narrative.html"
+    narrative = output_dir(key) / "narrative.html"
     if not narrative.is_file():
         return None
     return set(re.findall(r'\sid="([^"]+)"', narrative.read_text()))
@@ -1095,10 +1139,11 @@ def prune_static(names: dict[str, str]) -> None:
             file.unlink()
 
 
-def page_html(slug: str, names: dict[str, str], versions: dict[str, str]) -> str:
+def page_html(key: str, names: dict[str, str], versions: dict[str, str]) -> str:
     """The report's index.html: shared hashed page files, and versioned URLs of this report's data,
     so everything but index.html itself can be cached for good."""
-    prefix = ("" if slug == OVERVIEW else "../../") + STATIC + "/"
+    root = "../" * depth(key)
+    prefix = root + STATIC + "/"
     page = page_file("index.html").read_text()
     page = re.sub(r'\s*<script src="plotly\.min\.js"></script>', "", page)  # loaded on demand by report.js
     page = re.sub(
@@ -1108,6 +1153,7 @@ def page_html(slug: str, names: dict[str, str], versions: dict[str, str]) -> str
     )
     page = page.replace(f'<script src="{prefix}{names["report.js"]}"',
                         f'<script src="{prefix}{names["report.js"]}" data-plotly="{prefix}{names["plotly.min.js"]}" '
+                        f'data-root="{root or "./"}" data-report="{esc(key)}" '
                         f'data-narrative="narrative.html?v={versions["narrative.html"]}" '
                         f'data-report-data="report-data.json?v={versions["report-data.json"]}"', 1)
     extra = [f'  <link rel="stylesheet" href="{prefix}{hashed}">' for name, hashed in names.items() if name.startswith("custom-")]
@@ -1116,53 +1162,50 @@ def page_html(slug: str, names: dict[str, str], versions: dict[str, str]) -> str
     return page
 
 
-def build_report(slug: str, folder: Path) -> Build:
-    build = Build(slug, folder)
-    if build.generated.exists():
-        shutil.rmtree(build.generated)
-    build.generated.mkdir(parents=True)
+OWN_FILES = ("index.html", "narrative.html", "report-data.json", "manifest.json")
+
+
+def build_report(key: str, folder: Path) -> Build:
+    build = Build(key, folder)
+    build.generated.mkdir(parents=True, exist_ok=True)
+    for name in OWN_FILES:  # only this report's files: child reports live in sub-folders of its output
+        (build.generated / name).unlink(missing_ok=True)
+    if (build.generated / ASSETS).exists():
+        shutil.rmtree(build.generated / ASSETS)
     names = STATIC_NAMES or write_static()
     narrative = render(build)
-    if not build.meta.get("title"):
-        raise ValueError(f"{build.markdown}: front matter needs a title")
-    if slug != OVERVIEW and not str(build.meta.get("summary", "")).strip():
-        raise ValueError(
-            f"{build.markdown}: a research direction needs a front matter `summary:` "
-            "(one to three sentences, shown in the overview)"
-        )
-    if len(str(build.meta.get("summary", ""))) > SUMMARY_MAX_CHARS:
-        raise ValueError(
-            f"{build.markdown}: summary is {len(str(build.meta['summary']))} characters; keep it to one to "
-            f"three sentences (at most {SUMMARY_MAX_CHARS}) and move detail into the Abstract"
-        )
     (build.generated / "narrative.html").write_text(narrative)
+    parent = parent_of(key)
     data = {
-        "slug": slug,
-        "title": build.meta["title"],
+        "key": key,
+        "title": str(build.meta.get("title") or (folder.name if key else "Report")),
         "subtitle": build.meta.get("subtitle", ""),
         "status": build.meta.get("status", ""),
         "summary": str(build.meta.get("summary", "")).strip(),
-        "href": report_href(slug),
-        "overview": overview_backlink(slug),
+        "eyebrow": build.meta.get("eyebrow", ""),
+        "href": report_href(key),
+        "parent": None if parent is None else {"key": parent, "title": front_matter_title(discover_reports().get(parent)),
+                                               "href": report_href(parent) + f"#{card_id(key)}"},
+        "source": build.markdown.relative_to(PROJECT).as_posix(),
         "updated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "findings": build.findings,
         "source_runs": sorted(build.runs),
-        "links_to": sorted({link["slug"] for link in build.links}),
+        "links_to": sorted({link["key"] for link in build.links}),
     }
     (build.generated / "report-data.json").write_text(json.dumps(data, indent=2) + "\n")
     versions = {name: digest(build.generated / name)[:12] for name in ("narrative.html", "report-data.json")}
-    (build.generated / "index.html").write_text(page_html(slug, names, versions))  # the one file browsers revalidate
+    (build.generated / "index.html").write_text(page_html(key, names, versions))  # the one file browsers revalidate
     builder = [Path(__file__).resolve(), *(page_file(name) for name in PAGE_FILES), *(CONFIG.extra_css if CONFIG else ())]
     manifest = {
         "built_at": datetime.now(timezone.utc).isoformat(),
-        "report": slug,
+        "report": key,
         "code_revision": code_revision(),
         "markdown_source": str(build.markdown.relative_to(PROJECT)),
         "markdown_sha256": digest(build.markdown),
-        "selection": "outputs/<run-name>/latest resolved once at build time (or the matching MLflow run when the "
-                     "evidence is in MLflow); runs need run.json status completed",
-        "source_runs": sorted(build.runs),
+        "selection": "run:<name> resolves outputs/<name>/latest once at build time (or the matching MLflow run)",
+        "source_runs": dict(sorted(build.runs.items())),
         "mlflow_runs": sorted(build.mlflow_runs.values(), key=lambda run: run["run_id"]),
+        "hub_runs": sorted(build.hub_runs.values(), key=lambda run: run["run"]),
         "report_links": build.links,
         "typed_numbers": build.typed,
         "sources": dict(sorted(build.sources.items())),
@@ -1182,45 +1225,64 @@ def build_report(slug: str, folder: Path) -> Build:
     return build
 
 
+def write_site(reports: dict[str, Path]) -> None:
+    """site.json: every built report (title, status, summary, place in the tree), for each page's navigation."""
+    entries = []
+    for key in sorted(reports, key=lambda key: (key != "", key)):
+        data_file = output_dir(key) / "report-data.json"
+        if data_file.is_file():
+            data = json.loads(data_file.read_text())
+            entries.append({field: data.get(field) for field in ("key", "title", "subtitle", "status", "summary", "href")}
+                           | {"depth": depth(key), "parent": parent_of(key)})
+    page = CONFIG.page if CONFIG else {}
+    site = {"title": entries[0]["title"] if entries else "Reports", "reports": entries,
+            "copy_preamble": page.get("copy_preamble", "")}
+    (OUTPUT_ROOT / "site.json").write_text(json.dumps(site, indent=2) + "\n")
+
+
 def check_links(builds: list[Build], reports: dict[str, Path]) -> None:
     """Every report: link must name an existing report and, if given, an existing anchor."""
     problems = []
+    names = ", ".join(key or "/" for key in reports)
     for build in builds:
         for link in build.links:
             where = f"{build.markdown}:{link['line']}"
-            if link["slug"] not in reports:
-                problems.append(f"{where}: no report named {link['slug']!r} (reports: {', '.join(reports)})")
+            shown = link["key"] or "/"
+            if link["key"] not in reports:
+                problems.append(f"{where}: no report {shown!r} (reports: {names})")
                 continue
             if link["anchor"]:
-                ids = page_ids(link["slug"])
+                ids = page_ids(link["key"])
                 if ids is None:
-                    problems.append(f"{where}: report {link['slug']!r} is not built; build all reports")
+                    problems.append(f"{where}: report {shown!r} is not built; build all reports")
                 elif link["anchor"] not in ids:
-                    problems.append(f"{where}: report {link['slug']!r} has no anchor #{link['anchor']}")
+                    problems.append(f"{where}: report {shown!r} has no anchor #{link['anchor']}")
     if problems:
         raise ValueError("broken report links:\n  " + "\n  ".join(problems))
 
 
 def build_all(config: Config | None = None, report: str | None = None) -> list[Build]:
-    """Build every report (or one) and check cross-report links; print a short summary."""
+    """Build every report (or one, by its path) and check report links; print one line per report."""
     configure(config or load_config())
     reports = discover_reports()
     if not reports:
-        raise SystemExit(f"no reports found: expected {REPORTS_ROOT}/report.md and/or {REPORTS_ROOT}/<slug>/report.md")
-    if report and report not in reports:
-        raise SystemExit(f"unknown report {report!r}; reports: {', '.join(reports)}")
-    selected = {report: reports[report]} if report else reports
+        raise SystemExit(f"no report found: expected {REPORTS_ROOT / 'report.md'}")
+    key = None if report is None else report.strip("/")
+    if key is not None and key not in reports:
+        raise SystemExit(f"unknown report {report!r}; reports: {', '.join(k or '/' for k in reports)}")
     global STATIC_NAMES
+    if key is None and OUTPUT_ROOT.exists():  # a full build starts clean, keeping the shared files
+        for child in OUTPUT_ROOT.iterdir():
+            if child.name != STATIC:
+                shutil.rmtree(child) if child.is_dir() else child.unlink()
     STATIC_NAMES = write_static()
-    builds = [build_report(slug, folder) for slug, folder in selected.items()]
-    if not report:
+    selected = {key: reports[key]} if key is not None else reports  # children before parents
+    builds = [build_report(key_, folder) for key_, folder in selected.items()]
+    if key is None:
         prune_static(STATIC_NAMES)
+    write_site(reports)
     check_links(builds, reports)
     for build in builds:
-        print(f"Built {build.slug}: {build.generated.relative_to(PROJECT)}/index.html ({build.figures} figures, {len(build.findings)} findings)")
-        if build.typed:
-            shown = ", ".join(f"{hit['line']}:{hit['text']}" for hit in build.typed[:12])
-            more = f" (+{len(build.typed) - 12} more)" if len(build.typed) > 12 else ""
-            print(f"  typed numbers in {build.markdown.relative_to(PROJECT)} (line:text): {shown}{more}")
-            print("  results must be {{ }} values from run files; leave only design constants typed")
+        print(f"Built {build.key or '/'}: {build.generated.relative_to(PROJECT)}/index.html "
+              f"({build.figures} figures, {len(build.findings)} findings, {len(build.typed)} typed numbers)")
     return builds

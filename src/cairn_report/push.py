@@ -1,14 +1,16 @@
-"""Push a project's runs and reports to a hub, or restore a project from a hub.
+"""Push reports and runs to a hub, and pull them back.
 
-    cairn-report push                          one sync of outputs/, reports/, and the built reports
-    cairn-report push --watch                  sync every [hub] interval seconds until stopped
-    cairn-report push --watch -- <command...>  run a command (e.g. an experiment), sync while it
-                                               runs and once more after it exits; returns its exit code
-    cairn-report fetch <project> <dest>        download a project's latest files from the hub
+    cairn-report push [report|runs]            send the report (a new version) and/or the runs
+    cairn-report push --watch [-- <command>]   keep sending every [hub] interval seconds; with a
+                                               command, while it runs and once more after it exits
+    cairn-report pull [--runs] [--version N]   bring the report (and runs) back into the project
+    cairn-report pull --name P --into DIR      restore project P into an empty folder
 
-Only changed files are sent: contents are addressed by SHA-256, the hub reports
-which ones it lacks, and every upload is verified by the hub. Hashes are cached
-by size and modification time, so a watch loop rereads only files that changed.
+The report is the configured report folder (`reports_dir`: sources, `source/...` on the
+hub) plus its built pages (`output_dir`, `site/...`), versioned as a whole. Runs are
+the files under `outputs_dir`, sent file by file. Only content the hub lacks is
+uploaded (addressed by SHA-256, verified by the hub); hashes are cached by size and
+modification time, so repeated pushes reread only changed files.
 """
 
 from __future__ import annotations
@@ -89,8 +91,7 @@ class Hub:
         if response.status == 401:
             raise HubError("the hub rejected the token")
         if response.status not in expect:
-            detail = data[:300].decode(errors="replace")
-            raise HubError(f"{method} {path}: HTTP {response.status} {detail}")
+            raise HubError(f"{method} {path}: HTTP {response.status} {data[:300].decode(errors='replace')}")
         return response.status, data
 
     def json(self, method: str, path: str, value=None, expect=(200,)):
@@ -104,6 +105,13 @@ class Hub:
             self.request("PUT", f"/api/v1/blobs/{sha}", body=Limited(handle, size),
                          headers={"Content-Length": str(size), "Content-Type": "application/octet-stream"},
                          expect=(200, 201))
+
+    def missing(self, hashes: list[str]) -> set[str]:
+        missing: set[str] = set()
+        for start in range(0, len(hashes), BATCH):
+            _, answer = self.json("POST", "/api/v1/blobs/missing", {"sha256": hashes[start:start + BATCH]})
+            missing.update(answer["missing"])
+        return missing
 
 
 # ----------------------------------------------------------------- settings
@@ -166,54 +174,51 @@ def exclusion(patterns: list[str]):
     return lambda path: any(expression.fullmatch(path) for expression in expressions)
 
 
-def trees(config: Config) -> list[tuple[Path, str]]:
-    return [(config.outputs_dir, "outputs"), (config.reports_dir, "reports"), (config.output_dir, "site")]
-
-
 def skipped(name: str) -> bool:
     return name in SKIP_NAMES or name.endswith(".tmp")
 
 
-def scan(config: Config) -> dict[str, dict]:
-    """Every pushable file and relative symlink, keyed by its path on the hub."""
+def scan(local: Path, prefix: str, config: Config, skip_folder=None) -> dict[str, dict]:
+    """Every file and relative symlink under `local`, keyed `<prefix>/<path inside local>` (prefix may be "")."""
     found: dict[str, dict] = {}
+    if not local.is_dir():
+        return found
     excluded = exclusion(config.hub.get("exclude", []))
     project = config.project.resolve()
-    for local, prefix in trees(config):
-        if not local.is_dir():
-            continue
-        try:  # patterns match project paths (outputs/..., reports/..., generated/reports/...)
-            base = local.resolve().relative_to(project).as_posix()
-        except ValueError:  # a tree configured outside the project: match on its hub path
-            base = prefix
-        for directory, folders, files in os.walk(local):
-            here = Path(directory)
-            keep = []
-            for name in folders:
-                if skipped(name):
-                    continue
-                if (here / name).is_symlink():
-                    files.append(name)  # recorded as a link, never followed
-                else:
-                    keep.append(name)
-            folders[:] = keep
-            for name in files:
-                if skipped(name):
-                    continue
-                path = here / name
-                key = f"{prefix}/{path.relative_to(local).as_posix()}"
-                if excluded(f"{base}/{path.relative_to(local).as_posix()}"):
-                    continue
-                if path.is_symlink():
-                    target = os.readlink(path)
-                    if not os.path.isabs(target):
-                        found[key] = {"link": target}
-                    continue
-                try:
-                    info = path.stat()
-                except FileNotFoundError:  # removed while scanning
-                    continue
-                found[key] = {"file": path, "size": info.st_size, "mtime_ns": info.st_mtime_ns}
+    try:  # patterns match project paths (outputs/..., reports/..., generated/reports/...)
+        base = local.resolve().relative_to(project).as_posix()
+    except ValueError:
+        base = prefix or local.name
+    for directory, folders, files in os.walk(local):
+        here = Path(directory)
+        keep = []
+        for name in folders:
+            path = here / name
+            if skipped(name) or (skip_folder and skip_folder(path)):
+                continue
+            if path.is_symlink():
+                files.append(name)  # recorded as a link, never followed
+            else:
+                keep.append(name)
+        folders[:] = keep
+        for name in files:
+            if skipped(name):
+                continue
+            path = here / name
+            inside = path.relative_to(local).as_posix()
+            if excluded(f"{base}/{inside}"):
+                continue
+            key = f"{prefix}/{inside}" if prefix else inside
+            if path.is_symlink():
+                target = os.readlink(path)
+                if not os.path.isabs(target):
+                    found[key] = {"link": target}
+                continue
+            try:
+                info = path.stat()
+            except FileNotFoundError:  # removed while scanning
+                continue
+            found[key] = {"file": path, "size": info.st_size, "mtime_ns": info.st_mtime_ns}
     return found
 
 
@@ -228,103 +233,150 @@ class HashCache:
         except (OSError, ValueError):
             self.entries = {}
         self.dirty = False
+        self.lock = threading.Lock()
 
-    def sha(self, key: str, info: dict) -> str:
+    def sha(self, file: Path, info: dict) -> str:
+        key = str(file)
         cached = self.entries.get(key)
         if cached and cached[0] == info["size"] and cached[1] == info["mtime_ns"]:
             return cached[2]
         digest = hashlib.sha256()
-        with info["file"].open("rb") as handle:
+        with file.open("rb") as handle:
             while chunk := handle.read(1 << 20):
                 digest.update(chunk)
-        self.entries[key] = [info["size"], info["mtime_ns"], digest.hexdigest()]
-        self.dirty = True
-        return self.entries[key][2]
+        with self.lock:
+            self.entries[key] = [info["size"], info["mtime_ns"], digest.hexdigest()]
+            self.dirty = True
+        return digest.hexdigest()
 
-    def forget(self, key: str) -> None:
-        self.entries.pop(key, None)
-        self.dirty = True
+    def forget(self, file: Path) -> None:
+        with self.lock:
+            self.entries.pop(str(file), None)
+            self.dirty = True
 
     def save(self) -> None:
-        if not self.dirty:
-            return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.entries))
-        os.replace(temporary, self.path)
-        self.dirty = False
+        with self.lock:
+            if not self.dirty:
+                return
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(f".{os.getpid()}.tmp")
+            temporary.write_text(json.dumps(self.entries))
+            os.replace(temporary, self.path)
+            self.dirty = False
 
 
-# --------------------------------------------------------------------- push
+def entries_for(files: dict[str, dict], cache: HashCache) -> tuple[list[dict], dict[str, Path]]:
+    """Hub entries for scanned files, and a local source file for each content hash."""
+    entries, sources = [], {}
+    for key, info in files.items():
+        if "link" in info:
+            entries.append({"path": key, "link": info["link"]})
+            continue
+        try:
+            sha = cache.sha(info["file"], info)
+        except FileNotFoundError:
+            continue
+        entries.append({"path": key, "sha256": sha, "size": info["size"], "mtime": info["mtime_ns"] / 1e9})
+        sources.setdefault(sha, (info["file"], info["size"]))
+    return entries, sources
 
 
-class Pusher:
-    def __init__(self, hub: Hub, config: Config, name: str, workers: int = 4):
-        self.hub, self.config, self.name, self.workers = hub, config, name, workers
+def upload_missing(hub: Hub, sources: dict[str, tuple[Path, int]], cache: HashCache, workers: int = 4) -> tuple[set[str], int]:
+    """Upload the contents the hub lacks. Returns (hashes that failed, bytes sent)."""
+    missing = hub.missing(sorted(sources))
+    failed: set[str] = set()
+
+    def send(sha: str) -> int:
+        file, size = sources[sha]
+        try:
+            hub.upload(sha, file, size)
+            return size
+        except (HubError, OSError) as error:  # changed while uploading, or a network error: retry next time
+            cache.forget(file)
+            failed.add(sha)
+            print(f"warning: {file} not uploaded ({error}); retrying next push", file=sys.stderr)
+            return 0
+
+    with ThreadPoolExecutor(workers) as pool:
+        sent = sum(pool.map(send, sorted(missing)))
+    return failed, sent
+
+
+class RunPusher:
+    """Sends run files under `outputs_dir` (or one run folder below it) as they change."""
+
+    def __init__(self, hub: Hub, config: Config, name: str, folder: Path | None = None):
+        self.hub, self.config, self.name = hub, config, name
+        self.outputs = config.outputs_dir.resolve()
+        self.folder = (folder or self.outputs).resolve()
         self.cache = HashCache(config.project)
         self.remote: dict[str, dict] | None = None
 
-    def _remote(self) -> dict[str, dict]:
-        if self.remote is None:
-            status, entries = self.hub.json("GET", f"/api/v1/projects/{self.name}/tree", expect=(200, 404))
-            self.remote = {entry["path"]: entry for entry in entries} if status == 200 else {}
-        return self.remote
-
     def once(self) -> tuple[int, int]:
-        """One sync. Returns (files updated on the hub, bytes uploaded)."""
-        remote, local = self._remote(), scan(self.config)
-        changed, sources = [], {}
-        for key, info in local.items():
-            if "link" in info:
-                if remote.get(key, {}).get("link") != info["link"]:
-                    changed.append({"path": key, "link": info["link"]})
-                continue
-            try:
-                sha = self.cache.sha(key, info)
-            except FileNotFoundError:
-                continue
-            if remote.get(key, {}).get("sha256") != sha:
-                changed.append({"path": key, "sha256": sha, "size": info["size"], "mtime": info["mtime_ns"] / 1e9})
-                sources.setdefault(sha, (key, info))
+        if self.remote is None:
+            status, entries = self.hub.json("GET", f"/api/v1/projects/{self.name}/runs", expect=(200, 404))
+            self.remote = {entry["path"]: entry for entry in entries} if status == 200 else {}
+        prefix = self.folder.relative_to(self.outputs).as_posix() if self.folder != self.outputs else ""
+        files = scan(self.folder, "" if prefix == "." else prefix, self.config)
+        entries, sources = entries_for(files, self.cache)
+        changed = [entry for entry in entries if _changed(self.remote.get(entry["path"]), entry)]
         self.cache.save()
         if not changed:
             return 0, 0
-        missing = []
-        hashes = sorted(sources)
-        for start in range(0, len(hashes), BATCH):
-            _, answer = self.hub.json("POST", f"/api/v1/projects/{self.name}/missing", {"sha256": hashes[start:start + BATCH]})
-            missing += answer["missing"]
-        failed, sent = set(), 0
-
-        def send(sha: str) -> int:
-            key, info = sources[sha]
-            try:
-                self.hub.upload(sha, info["file"], info["size"])
-                return info["size"]
-            except (HubError, OSError) as error:  # changed while uploading, or a network error: retry next sync
-                self.cache.forget(key)
-                failed.add(sha)
-                print(f"warning: {key} not uploaded ({error}); retrying next sync", file=sys.stderr)
-                return 0
-
-        with ThreadPoolExecutor(self.workers) as pool:
-            sent = sum(pool.map(send, missing))
+        failed, sent = upload_missing(self.hub, {e["sha256"]: sources[e["sha256"]] for e in changed if "sha256" in e}, self.cache)
         ready = [entry for entry in changed if entry.get("sha256") not in failed]
         updated = 0
         for start in range(0, len(ready), BATCH):
-            _, answer = self.hub.json("POST", f"/api/v1/projects/{self.name}/tree", {"entries": ready[start:start + BATCH]})
+            _, answer = self.hub.json("POST", f"/api/v1/projects/{self.name}/runs", {"entries": ready[start:start + BATCH]})
             updated += answer["updated"]
         for entry in ready:
-            remote[entry["path"]] = entry
+            self.remote[entry["path"]] = entry
         self.cache.save()
         return updated, sent
 
 
-def push(config: Config, watch: bool = False, interval: float | None = None, command: list[str] | None = None,
-         url: str | None = None, allow_http: bool = False) -> int:
+class ReportPusher:
+    """Sends the report folder and its built pages as one new version, when anything changed."""
+
+    def __init__(self, hub: Hub, config: Config, name: str):
+        self.hub, self.config, self.name = hub, config, name
+        self.cache = HashCache(config.project)
+
+    def once(self) -> tuple[int | None, bool, int]:
+        """Returns (version, created, bytes sent)."""
+        source = self.config.reports_dir.resolve()
+        site = self.config.output_dir.resolve()
+        nested = site if source in site.parents else None  # never push the build output twice
+        files = scan(source, "source", self.config, skip_folder=(lambda path: path.resolve() == nested) if nested else None)
+        files.update(scan(site, "site", self.config))
+        if not any(key.startswith("source/") for key in files):
+            return None, False, 0
+        entries, sources = entries_for(files, self.cache)
+        failed, sent = upload_missing(self.hub, sources, self.cache)
+        self.cache.save()
+        if failed:
+            raise HubError(f"{len(failed)} report files were not uploaded; push again")
+        status, answer = self.hub.json("POST", f"/api/v1/projects/{self.name}/report", {"entries": entries}, expect=(200, 201))
+        return answer["version"], answer["created"], sent
+
+
+def _changed(old: dict | None, new: dict) -> bool:
+    if old is None:
+        return True
+    if "link" in new:
+        return old.get("link") != new["link"]
+    return old.get("sha256") != new["sha256"]
+
+
+# -------------------------------------------------------------------- push
+
+
+def push(config: Config, what: str = "all", watch: bool = False, interval: float | None = None,
+         command: list[str] | None = None, url: str | None = None, allow_http: bool = False) -> int:
     hub = connect(config, url, allow_http)
     name = project_name(config)
-    pusher = Pusher(hub, config, name)
+    runs = RunPusher(hub, config, name) if what in ("all", "runs") else None
+    report = ReportPusher(hub, config, name) if what in ("all", "report") else None
     interval = float(interval or config.hub.get("interval", 30))
     stop = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
@@ -336,10 +388,18 @@ def push(config: Config, watch: bool = False, interval: float | None = None, com
     def sync(final: bool = False) -> bool:
         nonlocal failures
         try:
-            updated, sent = pusher.once()
+            messages = []
+            if runs:
+                updated, sent = runs.once()
+                if updated or final:
+                    messages.append(f"{updated} run files ({sent / 1e6:.1f} MB)")
+            if report:
+                version, created, sent = report.once()
+                if version is not None and (created or final):
+                    messages.append(f"report v{version}{'' if created else ' (unchanged)'} ({sent / 1e6:.1f} MB)")
             failures = 0
-            if updated or final:
-                print(f"pushed {updated} files ({sent / 1e6:.1f} MB) to {hub.url}/p/{name}/", flush=True)
+            if messages:
+                print(f"pushed {', '.join(messages)} to {hub.url}/p/{name}/", flush=True)
             return True
         except (HubError, OSError) as error:
             failures += 1
@@ -347,9 +407,7 @@ def push(config: Config, watch: bool = False, interval: float | None = None, com
             return False
 
     if not watching:
-        if not sync(final=True):
-            return 1
-        return 0
+        return 0 if sync(final=True) else 1
     print(f"pushing {config.project} to {hub.url} as {name!r} every {interval:.0f} s", flush=True)
     while True:
         sync()
@@ -376,38 +434,82 @@ def push(config: Config, watch: bool = False, interval: float | None = None, com
     return process.returncode if process else 0
 
 
-# -------------------------------------------------------------------- fetch
+# -------------------------------------------------------------------- pull
 
 
-def fetch(hub: Hub, name: str, destination: Path, site_dir: str = "generated/reports") -> int:
-    """Download a project's latest files into destination (outputs/, reports/, generated/reports/)."""
-    from .hub import link_target, valid_path
+def _download(hub: Hub, url_path: str, local: Path, sha: str) -> bool:
+    """Fetch one file into place (verified); False if it was already there."""
+    if local.is_file() and hashlib.sha256(local.read_bytes()).hexdigest() == sha:
+        return False
+    local.parent.mkdir(parents=True, exist_ok=True)
+    temporary = local.with_name(f".{local.name}.pull.tmp")
+    hub.request("GET", url_path, stream_to=temporary)
+    digest = hashlib.sha256()
+    with temporary.open("rb") as handle:
+        while chunk := handle.read(1 << 20):
+            digest.update(chunk)
+    if digest.hexdigest() != sha:
+        temporary.unlink()
+        raise HubError(f"{url_path}: downloaded content does not match its SHA-256")
+    os.replace(temporary, local)
+    return True
 
-    _, entries = hub.json("GET", f"/api/v1/projects/{name}/tree")
-    destination = destination.resolve()
-    count = 0
-    for entry in sorted(entries, key=lambda item: "link" in item):  # files first, then links
-        path = entry["path"]
-        if not valid_path(path):
+
+def _place(entries: list[dict], target_of, force: bool) -> list[tuple[dict, Path]]:
+    """Map entries to local paths; refuse to replace differing local files unless forced."""
+    from .hub import valid_path
+
+    placed, conflicts = [], []
+    for entry in entries:
+        if not valid_path(entry["path"]):
             continue
-        local = destination / (site_dir + path[len("site"):] if path.startswith("site/") else path)
-        local.parent.mkdir(parents=True, exist_ok=True)
+        local = target_of(entry["path"])
+        if local is None:
+            continue
+        if not force and "sha256" in entry and local.is_file() and hashlib.sha256(local.read_bytes()).hexdigest() != entry["sha256"]:
+            conflicts.append(str(local))
+        placed.append((entry, local))
+    if conflicts:
+        shown = "\n  ".join(conflicts[:20]) + (f"\n  (+{len(conflicts) - 20} more)" if len(conflicts) > 20 else "")
+        raise SystemExit(f"these local files differ from the hub and would be replaced (pass --force):\n  {shown}")
+    return placed
+
+
+def _write(hub: Hub, placed: list[tuple[dict, Path]], url_of) -> int:
+    count = 0
+    for entry, local in sorted(placed, key=lambda item: "link" in item[0]):  # files first, then links
         if "link" in entry:
-            if link_target(path, entry["link"]) and not local.exists() and not local.is_symlink():
+            if not local.exists() and not local.is_symlink():
+                local.parent.mkdir(parents=True, exist_ok=True)
                 local.symlink_to(entry["link"])
             continue
-        if local.is_file() and hashlib.sha256(local.read_bytes()).hexdigest() == entry["sha256"]:
-            continue
-        temporary = local.with_name(f".{local.name}.fetch.tmp")
-        hub.request("GET", f"/files/{name}/{quote(path)}", stream_to=temporary)
-        digest = hashlib.sha256()
-        with temporary.open("rb") as handle:
-            while chunk := handle.read(1 << 20):
-                digest.update(chunk)
-        if digest.hexdigest() != entry["sha256"]:
-            temporary.unlink()
-            raise HubError(f"{path}: downloaded content does not match its SHA-256")
-        os.replace(temporary, local)
-        count += 1
-    print(f"fetched {count} files of {name!r} into {destination}")
+        count += _download(hub, url_of(entry["path"]), local, entry["sha256"])
     return count
+
+
+def pull(hub: Hub, name: str, config: Config, version: int | None = None, runs: list[str] | None = None,
+         with_report: bool = True, force: bool = False) -> None:
+    """Bring a project's report (sources into reports_dir, pages into output_dir) and optionally runs."""
+    if with_report:
+        query = f"?version={version}" if version else ""
+        status, record = hub.json("GET", f"/api/v1/projects/{name}/report{query}", expect=(200, 404))
+        if status == 404:
+            print(f"{name}: no report on the hub")
+        else:
+            roots = {"source": config.reports_dir, "site": config.output_dir}
+
+            def report_target(path: str) -> Path | None:
+                tree, _, inside = path.partition("/")
+                return roots[tree] / inside if tree in roots else None
+
+            placed = _place(record["entries"], report_target, force)
+            count = _write(hub, placed, lambda path: f"/files/{name}/report/{quote(path)}?version={record['version']}")
+            print(f"pulled report v{record['version']} of {name!r}: {count} files changed")
+    if runs is not None:
+        status, entries = hub.json("GET", f"/api/v1/projects/{name}/runs", expect=(200, 404))
+        entries = entries if status == 200 else []
+        wanted = [entry for entry in entries
+                  if not runs or any(entry["path"] == run or entry["path"].startswith(run.rstrip("/") + "/") for run in runs)]
+        placed = _place(wanted, lambda path: config.outputs_dir / path, force)
+        count = _write(hub, placed, lambda path: f"/files/{name}/runs/{quote(path)}")
+        print(f"pulled {count} run files of {name!r} into {config.outputs_dir}")

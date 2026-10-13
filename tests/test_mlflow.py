@@ -60,7 +60,7 @@ def run_experiment(project, status="completed"):
 
 
 def figure_traces(project):
-    narrative = (project / "generated" / "reports" / "overview" / "narrative.html").read_text()
+    narrative = (project / "generated" / "reports" / "narrative.html").read_text()
     return [json.loads(html.unescape(trace)) for trace in re.findall(r'data-trace="([^"]*)"', narrative)], narrative
 
 
@@ -89,7 +89,7 @@ def test_mlflow_only_backend(tmp_path, store):
     assert trace["mlflow"]["run_id"] == logged.info.run_id
     assert f"Source · {RUN}/figures/hist.png" in narrative
     assert ">0.125</span>" in narrative
-    manifest = json.loads((project / "generated" / "reports" / "overview" / "manifest.json").read_text())
+    manifest = json.loads((project / "generated" / "reports" / "manifest.json").read_text())
     assert manifest["mlflow_runs"][0]["run_id"] == logged.info.run_id
     assert any(source.startswith("generated/mlflow/") for source in manifest["sources"])
 
@@ -125,13 +125,14 @@ def test_plain_mlflow_run_by_id(tmp_path, store):
     assert ">0.9</span>" in narrative
 
 
-def test_failed_run_is_not_evidence(tmp_path, store):
+def test_failed_run_status_follows_run_json(tmp_path, store):
     project = make_project(tmp_path, ["mlflow"], "![Error histogram](run:demo/figures/hist.png)")
     run_experiment(project, status="failed")
     (logged,) = mlflow_runs(store)
     assert logged.info.status == "FAILED"
-    with pytest.raises(ValueError):
-        build_all(load_config(project))
+    build_all(load_config(project))  # reports record the status; they do not refuse the run
+    manifest = json.loads((project / "generated" / "reports" / "manifest.json").read_text())
+    assert list(manifest["source_runs"].values()) == ["failed"]
 
 
 def test_http_tracking_server_gets_ui_link():

@@ -1,51 +1,27 @@
 import http.client
 import json
+import os
 import re
 import shutil
 import sys
-import threading
-from pathlib import Path
+import time
+from dataclasses import replace
 
 import pytest
 
+from conftest import RUN, TOKEN
 from cairn_report.build import build_all
-from cairn_report.cli import main
 from cairn_report.config import load_config
-from cairn_report.hub import make_hub
 from cairn_report.logger import RunLogger
-from cairn_report.push import Hub, Pusher, fetch, push
-
-TOKEN = "t" * 40
-needs_graphviz = pytest.mark.skipif(shutil.which("dot") is None, reason="Graphviz `dot` not installed")
+from cairn_report.push import Hub, RunPusher, pull, push
 
 
 @pytest.fixture
-def hub(tmp_path):
-    root = tmp_path / "hub"
-    root.mkdir()
-    server = make_hub(root, port=0, token=TOKEN, secure_cookie=False)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield {"url": f"http://127.0.0.1:{server.server_address[1]}", "root": root, "port": server.server_address[1]}
-    server.shutdown()
-
-
-@pytest.fixture
-def project(tmp_path, hub, monkeypatch):
-    folder = tmp_path / "study"
-    folder.mkdir()
-    (folder / "pyproject.toml").write_text("")
-    (folder / "cairn-report.toml").write_text(f'[hub]\nurl = "{hub["url"]}"\nproject = "study"\n')
+def client(project, hub, monkeypatch, tmp_path):
+    (project / "cairn-report.toml").write_text(f'[hub]\nurl = "{hub["url"]}"\nproject = "study"\ninterval = 1\n')
     monkeypatch.setenv("CAIRN_HUB_TOKEN", TOKEN)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    main(["--project", str(folder), "init"])
-    run = folder / "outputs" / "demo" / "2026-01-01_00-00-00"
-    RunLogger(run).scalar("rmse", 0.5)
-    (run / "run.json").write_text(json.dumps({"status": "completed"}))
-    (run / ".hydra").mkdir()
-    (run / ".hydra" / "config.yaml").write_text("seed: 0\n")
-    (run.parent / "latest").symlink_to(run.name)
-    return folder
+    return project
 
 
 def call(hub, method, path, body=None, headers=None, token=TOKEN):
@@ -60,79 +36,108 @@ def call(hub, method, path, body=None, headers=None, token=TOKEN):
     return response.status, dict(response.getheaders()), data
 
 
-def tree(hub):
-    status, _, data = call(hub, "GET", "/api/v1/projects/study/tree")
+def runs(hub, allow_missing=False):
+    status, _, data = call(hub, "GET", "/api/v1/projects/study/runs")
+    if allow_missing and status == 404:
+        return {}
     assert status == 200
     return {entry["path"]: entry for entry in json.loads(data)}
 
 
-def test_auth_required(hub, project):
+def test_auth_required(hub, client):
+    push(load_config(client))
     assert call(hub, "GET", "/api/v1/projects", token=None)[0] == 401
     assert call(hub, "GET", "/api/v1/projects", token="x" * 40)[0] == 401
-    status, headers, _ = call(hub, "GET", "/", token=None)
+    status, headers, _ = call(hub, "GET", "/p/study/", token=None)
     assert status == 303 and headers["Location"].startswith("/login")
     assert call(hub, "PUT", "/api/v1/blobs/" + "0" * 64, body=b"x", token=None)[0] == 401
 
 
-def test_login_cookie(hub, project):
-    status, headers, _ = call(hub, "POST", "/login", body=f"token={'w' * 40}&next=/", token=None,
-                              headers={"Content-Type": "application/x-www-form-urlencoded"})
+def test_login_cookie(hub, client):
+    form = {"Content-Type": "application/x-www-form-urlencoded"}
+    status, headers, _ = call(hub, "POST", "/login", body=f"token={'w' * 40}&next=/", token=None, headers=form)
     assert status == 401 and "Set-Cookie" not in headers
-    status, headers, _ = call(hub, "POST", "/login", body=f"token={TOKEN}&next=//evil.example", token=None,
-                              headers={"Content-Type": "application/x-www-form-urlencoded"})
+    status, headers, _ = call(hub, "POST", "/login", body=f"token={TOKEN}&next=//evil.example", token=None, headers=form)
     assert status == 303 and headers["Location"] == "/"
     cookie = headers["Set-Cookie"].split(";")[0]
-    assert "HttpOnly" in headers["Set-Cookie"] and "SameSite=Strict" in headers["Set-Cookie"]
-    assert TOKEN not in cookie
+    assert "HttpOnly" in headers["Set-Cookie"] and "SameSite=Strict" in headers["Set-Cookie"] and TOKEN not in cookie
     assert call(hub, "GET", "/", token=None, headers={"Cookie": cookie})[0] == 200
 
 
-def test_push_is_incremental_and_keeps_history(hub, project):
-    config = load_config(project)
-    assert push(config) == 0
-    files = tree(hub)
-    assert files["outputs/demo/latest"]["link"] == "2026-01-01_00-00-00"
-    assert "outputs/demo/2026-01-01_00-00-00/.hydra/config.yaml" in files
-    assert "reports/report.md" in files
-    pusher = Pusher(Hub(hub["url"], TOKEN), config, "study")
+def test_report_versions(hub, client):
+    config = load_config(client)
+    build_all(config)
+    assert push(config, what="report") == 0
+    assert push(config, what="report") == 0  # unchanged: still version 1
+    versions = json.loads(call(hub, "GET", "/api/v1/projects/study/report/versions")[2])
+    assert [v["version"] for v in versions] == [1]
+    root = client / "reports" / "report.md"
+    root.write_text(root.read_text().replace("See [the result]", "Start here. See [the result]"))
+    build_all(config)
+    push(config, what="report")
+    versions = json.loads(call(hub, "GET", "/api/v1/projects/study/report/versions")[2])
+    assert [v["version"] for v in versions] == [1, 2]
+    assert b"Start here" in call(hub, "GET", "/p/study/narrative.html")[2]
+    assert b"Start here" not in call(hub, "GET", "/p/study@1/narrative.html")[2]  # old versions stay viewable
+
+
+def test_report_served_with_caching(hub, client):
+    config = load_config(client)
+    build_all(config)
+    push(config, what="report")
+    page = call(hub, "GET", "/p/study/alpha/beta/")[2].decode()
+    script = re.search(r'src="\.\./\.\./(_static/report\.[0-9a-f]+\.js)"', page).group(1)
+    status, headers, _ = call(hub, "GET", f"/p/study/{script}", headers={"Accept-Encoding": "gzip"})
+    assert status == 200 and headers["Content-Encoding"] == "gzip" and "immutable" in headers["Cache-Control"]
+    versioned = re.search(r'data-narrative="([^"]+)"', page).group(1)
+    assert "immutable" in call(hub, "GET", f"/p/study/alpha/beta/{versioned}")[1]["Cache-Control"]
+    assert call(hub, "GET", "/p/study/alpha")[0] == 301
+    assert json.loads(call(hub, "GET", "/p/study/site.json")[2])["title"] == "Root"
+
+
+def test_runs_are_incremental_with_history(hub, client):
+    config = load_config(client)
+    push(config, what="runs")
+    files = runs(hub)
+    assert files["demo/latest"]["link"] == "2026-01-01_00-00-00"
+    assert f"{RUN}/.hydra/config.yaml" in files and f"{RUN}/figures/hist.png" in files
+    pusher = RunPusher(Hub(hub["url"], TOKEN), config, "study")
     assert pusher.once() == (0, 0)
-    RunLogger(project / "outputs" / "demo" / "2026-01-01_00-00-00").scalar("rmse", 0.25)
+    RunLogger(client / "outputs" / RUN, backends=["local"]).scalar("rmse", 0.25)
     assert pusher.once()[0] == 1
-    index = (hub["root"] / "projects" / "study" / "files.jsonl").read_text().splitlines()
-    versions = [json.loads(line) for line in index if '"outputs/demo/2026-01-01_00-00-00/metrics.jsonl"' in line]
-    assert len(versions) == 2  # the old version is still recorded
-    status, _, data = call(hub, "GET", "/files/study/outputs/demo/latest/metrics.jsonl")
+    lines = (hub["root"] / "projects" / "study" / "runs.jsonl").read_text().splitlines()
+    assert sum(f'"{RUN}/metrics.jsonl"' in line for line in lines) == 2  # the old version is still recorded
+    status, _, data = call(hub, "GET", "/files/study/runs/demo/latest/metrics.jsonl")
     assert status == 200 and data.count(b"\n") == 2
+    assert b"completed" in call(hub, "GET", "/runs/study/")[2]
 
 
-def test_rejects_bad_uploads_and_paths(hub, project):
+def test_rejects_bad_uploads_and_paths(hub, client):
     status, _, _ = call(hub, "PUT", "/api/v1/blobs/" + "a" * 64, body=b"not matching", headers={"Content-Length": "12"})
-    assert status == 400
-    assert not list((hub["root"] / "blobs").rglob("*"))
-    for entry in ({"path": "outputs/../../etc/passwd", "sha256": "a" * 64, "size": 1},
-                  {"path": "secrets/key", "sha256": "a" * 64, "size": 1},
-                  {"path": "outputs/x/latest", "link": "../../../etc"},
-                  {"path": "/abs/path", "sha256": "a" * 64, "size": 1}):
-        status, _, _ = call(hub, "POST", "/api/v1/projects/study/tree", body=json.dumps({"entries": [entry]}),
-                            headers={"Content-Type": "application/json"})
+    assert status == 400 and not list((hub["root"] / "blobs").rglob("*"))
+    json_headers = {"Content-Type": "application/json"}
+    for kind, entry in (("runs", {"path": "a/../../etc/passwd", "sha256": "a" * 64, "size": 1}),
+                        ("runs", {"path": "/abs", "sha256": "a" * 64, "size": 1}),
+                        ("runs", {"path": "a/latest", "link": "../../etc"}),
+                        ("report", {"path": "elsewhere/x", "sha256": "a" * 64, "size": 1}),
+                        ("report", {"path": "site/x", "link": "../source/y"})):
+        status, _, _ = call(hub, "POST", f"/api/v1/projects/study/{kind}", body=json.dumps({"entries": [entry]}), headers=json_headers)
         assert status == 400, entry
-    status, _, data = call(hub, "POST", "/api/v1/projects/study/tree",
-                           body=json.dumps({"entries": [{"path": "outputs/x", "sha256": "b" * 64, "size": 1}]}),
-                           headers={"Content-Type": "application/json"})
+    status, _, data = call(hub, "POST", "/api/v1/projects/study/runs",
+                           body=json.dumps({"entries": [{"path": "a/x", "sha256": "b" * 64, "size": 1}]}), headers=json_headers)
     assert status == 409 and json.loads(data)["missing"] == ["b" * 64]
 
 
-def test_push_exclude_patterns(hub, project):
-    submitit = project / "outputs" / "demo" / "2026-01-01_00-00-00" / ".submitit" / "1_0"
+def test_exclude_patterns(hub, client):
+    submitit = client / "outputs" / RUN / ".submitit" / "1_0"
     submitit.mkdir(parents=True)
     (submitit / "1_0_submitted.pkl").write_bytes(b"pickle")
     (submitit / "1_0_log.out").write_text("log")
-    config_file = project / "cairn-report.toml"
+    config_file = client / "cairn-report.toml"
     config_file.write_text(config_file.read_text() + 'exclude = [".submitit/**/*.pkl"]\n')
-    push(load_config(project))
-    files = tree(hub)
-    assert "outputs/demo/2026-01-01_00-00-00/.submitit/1_0/1_0_log.out" in files
-    assert not any(path.endswith(".pkl") for path in files)
+    push(load_config(client), what="runs")
+    files = runs(hub)
+    assert f"{RUN}/.submitit/1_0/1_0_log.out" in files and not any(path.endswith(".pkl") for path in files)
 
 
 def test_token_never_in_config(tmp_path):
@@ -141,69 +146,60 @@ def test_token_never_in_config(tmp_path):
         load_config(tmp_path)
 
 
-@needs_graphviz
-def test_reports_served_and_comments_round_trip(hub, project):
-    config = load_config(project)
+def test_pull_restores_and_protects_local_changes(hub, client, tmp_path):
+    config = load_config(client)
     build_all(config)
     push(config)
-    status, headers, page = call(hub, "GET", "/p/study/")
-    assert status == 200 and b"<html" in page.lower()
-    status, _, data = call(hub, "GET", "/p/study/api/reports")
-    reports = json.loads(data)
-    assert [report["slug"] for report in reports] == ["overview", "local-fitting"]
-    assert reports[1]["href"] == "reports/local-fitting/"
-    assert call(hub, "GET", "/p/study/reports/local-fitting/report-data.json")[0] == 200
-    narrative = call(hub, "GET", "/p/study/reports/local-fitting/narrative.html")[2].decode()
-    assert 'href="/reports/' not in narrative and 'href="../../' in narrative  # links work under /p/study/
-    page = call(hub, "GET", "/p/study/reports/local-fitting/")[2].decode()
-    script = re.search(r'src="\.\./\.\./(_static/report\.[0-9a-f]+\.js)"', page).group(1)
-    status, headers, _ = call(hub, "GET", f"/p/study/{script}", headers={"Accept-Encoding": "gzip"})
-    assert status == 200 and headers["Content-Encoding"] == "gzip" and "immutable" in headers["Cache-Control"]
-    versioned = re.search(r'data-narrative="([^"]+)"', page).group(1)
-    assert "immutable" in call(hub, "GET", f"/p/study/reports/local-fitting/{versioned}")[1]["Cache-Control"]
-    status, _, runs = call(hub, "GET", "/runs/study/")
-    assert b"completed" in runs and b"latest" in runs
-
-    login = call(hub, "POST", "/login", body=f"token={TOKEN}&next=/", token=None,
-                 headers={"Content-Type": "application/x-www-form-urlencoded"})
-    cookie = login[1]["Set-Cookie"].split(";")[0]
-    comment = json.dumps({"target": "section:abstract", "text": "Check the baseline.", "quote": "baseline"})
-    api = "/p/study/api/reports/local-fitting/comments"
-    assert call(hub, "POST", api, body=comment, token=None, headers={"Cookie": cookie, "Content-Type": "text/plain"})[0] == 401
-    assert call(hub, "POST", api, body=comment, token=None,
-                headers={"Cookie": cookie, "Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 401
-    status, _, data = call(hub, "POST", api, body=comment, token=None,
-                           headers={"Cookie": cookie, "Content-Type": "application/json"})
-    assert status == 201
-    folded = json.loads(call(hub, "GET", api)[2])
-    assert any(row["text"] == "Check the baseline." for row in folded)
-    assert not (project / "reports" / "local-fitting" / "knowledge" / "comments.jsonl").read_text().count("Check the baseline.")
+    root = tmp_path / "restored"
+    restored = replace(config, project=root, reports_dir=root / "reports", output_dir=root / "generated" / "reports",
+                       outputs_dir=root / "outputs")
+    pull(Hub(hub["url"], TOKEN), "study", restored, runs=[])
+    assert (root / "reports" / "alpha" / "report.md").read_text() == (client / "reports" / "alpha" / "report.md").read_text()
+    assert (root / "generated" / "reports" / "alpha" / "beta" / "index.html").is_file()
+    assert (root / "outputs" / RUN / "metrics.jsonl").read_bytes() == (client / "outputs" / RUN / "metrics.jsonl").read_bytes()
+    assert (root / "outputs" / "demo" / "latest").is_symlink()
+    (root / "reports" / "report.md").write_text("local edit\n")
+    with pytest.raises(SystemExit, match="would be replaced"):
+        pull(Hub(hub["url"], TOKEN), "study", restored)
+    pull(Hub(hub["url"], TOKEN), "study", restored, force=True)
+    assert (root / "reports" / "report.md").read_text() != "local edit\n"
 
 
-
-@needs_graphviz
-def test_fetch_restores_project(hub, project, tmp_path):
-    config = load_config(project)
-    build_all(config)
-    push(config)
-    restored = tmp_path / "restored"
-    fetch(Hub(hub["url"], TOKEN), "study", restored)
-    run = "outputs/demo/2026-01-01_00-00-00"
-    assert (restored / run / "metrics.jsonl").read_bytes() == (project / run / "metrics.jsonl").read_bytes()
-    assert (restored / "outputs/demo/latest").is_symlink()
-    assert (restored / "generated/reports/overview/index.html").is_file()
-    assert fetch(Hub(hub["url"], TOKEN), "study", restored) == 0  # nothing changed
-
-
-def test_push_wraps_a_command(hub, project):
+def test_push_wraps_a_command(hub, client):
     script = "import pathlib; pathlib.Path('outputs/late.txt').write_text('done'); raise SystemExit(3)"
-    import os
-
     previous = os.getcwd()
-    os.chdir(project)
+    os.chdir(client)
     try:
-        code = push(load_config(project), interval=1, command=[sys.executable, "-c", script])
+        code = push(load_config(client), what="runs", interval=1, command=[sys.executable, "-c", script])
     finally:
         os.chdir(previous)
-    assert code == 3
-    assert "outputs/late.txt" in tree(hub)
+    assert code == 3 and "late.txt" in runs(hub)
+
+
+def test_logger_hub_backend_sends_runs_live(hub, client):
+    run = client / "outputs" / "live" / "2026-02-02_00-00-00"
+    log = RunLogger(run, backends=["hub"])
+    log.scalar("loss", 1.0, step=0)
+    log.table("cases", [{"case": "a", "error": 1}])
+    deadline = time.time() + 15
+    while time.time() < deadline and "live/2026-02-02_00-00-00/tables/cases.csv" not in runs(hub, allow_missing=True):
+        time.sleep(0.3)
+    assert "live/2026-02-02_00-00-00/tables/cases.csv" in runs(hub)  # arrived while the run is still open
+    (run / "run.json").write_text('{"status": "completed"}')
+    log.close()
+    assert "live/2026-02-02_00-00-00/run.json" in runs(hub)  # the final sync includes run.json
+    assert (run / "metrics.jsonl").is_file()  # the run directory stays the first copy
+
+
+def test_report_reads_runs_from_the_hub(hub, client):
+    config_file = client / "cairn-report.toml"
+    config_file.write_text(config_file.read_text() + '[logger]\nbackends = ["hub"]\n')
+    push(load_config(client), what="runs")
+    shutil.rmtree(client / "outputs")  # the runs now exist only on the hub
+    build_all(load_config(client))
+    narrative = (client / "generated" / "reports" / "alpha" / "narrative.html").read_text()
+    assert ">0.5</span>" in narrative
+    trace = next(json.loads(t.replace("&quot;", '"')) for t in re.findall(r'data-trace="([^"]*)"', narrative) if "hub" in t)
+    assert trace["hub"]["run"] == RUN and trace["hub"]["url"].endswith(f"/runs/study/{RUN}/")
+    manifest = json.loads((client / "generated" / "reports" / "alpha" / "manifest.json").read_text())
+    assert manifest["hub_runs"][0]["run"] == RUN

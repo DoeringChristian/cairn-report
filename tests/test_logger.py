@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import pytest
 
 from cairn_report.build import build_all
-from cairn_report.cli import main
 from cairn_report.config import load_config
 from cairn_report.logger import RunLogger, read_artifacts, read_jsonl, read_scalars
 
@@ -50,17 +49,15 @@ def test_rejects_bad_names_and_values(tmp_path):
 
 def test_report_reads_logged_run(tmp_path):
     (tmp_path / "pyproject.toml").write_text("")
-    main(["--project", str(tmp_path), "init"])
     run = tmp_path / "outputs" / "demo" / "2026-01-01_00-00-00"
     RunLogger(run).scalar("rmse", 0.125)
     (run / "run.json").write_text(json.dumps({"status": "completed"}))
     (run.parent / "latest").symlink_to(run.name)
-    report = tmp_path / "reports" / "local-fitting" / "report.md"
-    report.write_text(report.read_text() + '\n```python exec hide\nscores = read_scalars(run_dir("demo"))\n```\n\nLogged error {{ scores["rmse"] }}.\n')
-    if shutil.which("dot") is None:  # the sample direction has a Graphviz fence
-        pytest.skip("Graphviz `dot` not installed")
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "report.md").write_text(
+        '---\ntitle: T\n---\n\n```python exec hide\nscores = read_scalars(run_dir("demo"))\n```\n\nLogged error {{ scores["rmse"] }}.\n')
     build_all(load_config(tmp_path))
-    out = tmp_path / "generated" / "reports" / "local-fitting"
+    out = tmp_path / "generated" / "reports"
     assert ">0.125</span>" in (out / "narrative.html").read_text()
     manifest = json.loads((out / "manifest.json").read_text())
     assert "outputs/demo/2026-01-01_00-00-00/metrics.jsonl" in manifest["sources"]

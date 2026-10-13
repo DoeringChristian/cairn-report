@@ -1,7 +1,7 @@
 [project]
 name = "cairn-report"
-version = "0.5.0"
-description = "Commentable research reports from Markdown and Hydra run outputs: overview and direction reports, live run values, figure provenance, and an append-only comment log."
+version = "0.6.0"
+description = "Static reports from Markdown and run outputs, a run logger, and an artifact hub for reports and runs."
 readme = "README.md"
 authors = [
     { name = "Christian Döring", email = "christian.doering@tum.de" }

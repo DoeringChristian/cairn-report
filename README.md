@@ -1,14 +1,18 @@
 # cairn-report
 
-Commentable research reports built from Markdown and Hydra run outputs, with no
-tracking service. A project has one **overview** (`reports/report.md`, served
-at `/`) and one report per **research direction** (`reports/<slug>/report.md`).
-Reports read their numbers and figures straight from run directories, show where
-every figure came from, link to each other, and collect reader comments in an
-append-only log.
+Three small pieces for research projects that keep their evidence in plain run
+folders:
 
-This is the report tooling of the `standalone-research-project` agent skill,
-packaged so projects depend on it instead of copying it.
+- a **builder** that turns a tree of Markdown reports into a static site, reading
+  numbers and figures straight from run outputs;
+- a **run logger** that writes evidence to fixed places in a run folder (and,
+  optionally, to MLflow or a hub while the run executes);
+- a **hub**: a token-protected artifact store for reports and runs, with push
+  and pull.
+
+cairn-report provides mechanisms only. How reports are organised, which sections
+they have, and what counts as evidence is up to the project (for agents, the
+`standalone-research-project` skill decides that).
 
 ## Install
 
@@ -19,73 +23,95 @@ In a pixi project:
 graphviz = "*"   # only needed for Graphviz diagram fences
 
 [pypi-dependencies]
-cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git" }
+cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.6.0" }
 
 [tasks]
 report-build = "cairn-report build"
 report-serve = "cairn-report serve --host 127.0.0.1 --port 8000"
-report-host = "cairn-report serve --host 0.0.0.0 --port 8000"
 ```
 
-Pin a tag or commit (`rev = "..."`) for reproducible builds. With uv or pip:
-`uv add git+https://github.com/DoeringChristian/cairn-report.git`.
+With uv or pip: `uv add git+https://github.com/DoeringChristian/cairn-report.git`.
+Optional extras: `cairn-report[mlflow]` (MLflow backend), `cairn-report[mlflow-server]`
+(a project-managed MLflow server).
 
-## Use
+## Reports
 
-```bash
-cairn-report init          # reports/report.md (overview) + a sample direction
-cairn-report new <slug>    # add reports/<slug>/report.md
-cairn-report build         # build every report into generated/reports/<slug>/
-cairn-report serve         # build, then serve at http://127.0.0.1:8000/
-```
-
-`serve` moves to the next free port when the requested one is taken and prints
-the URL it uses; `--strict-port` fails instead. `--project <path>` selects a
-project other than the current one.
-
-## Layout
+A report is a folder with a `report.md` and, optionally, an `assets/` folder and
+child reports (sub-folders with their own `report.md`). The configured report
+folder (default `reports/`) is the root of the tree:
 
 ```text
-project/
-├── reports/                    # content only
-│   ├── report.md               # overview: Introduction, Status, Research directions
-│   ├── knowledge/comments.jsonl
-│   └── <slug>/                 # one direction: report.md, fragments/, media/, knowledge/
-├── outputs/<run>/<timestamp>/  # Hydra runs (run.json, metrics.jsonl, artifacts.jsonl, ...)
-└── generated/reports/<slug>/   # build output (overview: overview/), git-ignored
+reports/                       ->  generated/reports/
+├── report.md                  ->  index.html            (the root page, served at /)
+├── assets/                    ->  images, Plotly JSON, HTML fragments, data
+└── alpha/                     ->  alpha/index.html
+    ├── report.md
+    ├── assets/
+    └── beta/report.md         ->  alpha/beta/index.html
 ```
 
-## Configuration and style
-
-Nothing needs configuring; the default style is the one in
-`src/cairn_report/template/`. To change paths or the look, add
-`cairn-report.toml` at the project root:
-
-```toml
-reports_dir = "reports"
-output_dir = "generated/reports"
-outputs_dir = "outputs"
-
-[style]
-css = ["reports/style.css"]        # extra stylesheets, loaded after the default style
-template_dir = "reports/template"  # replaces index.html, report.css, report-extra.css, report.js by name
+```bash
+cairn-report build             # build the whole tree into generated/reports/
+cairn-report build --report alpha/beta
+cairn-report serve             # build, then serve at http://127.0.0.1:8000/
 ```
 
-Extra stylesheets override the default through its CSS variables (`--paper`,
-`--ink`, `--accent`, `--card`, ...) or ordinary rules; `template_dir` replaces
-whole page files. Every build records the package version, its install commit,
-and any style overrides in `generated/reports/<slug>/manifest.json`.
+`serve` moves to the next free port when the requested one is taken
+(`--strict-port` fails instead). The output is a static site: any web server,
+the project server, or a hub can serve it, at any address prefix.
+
+### Writing a report
+
+Front matter is optional: `title` (default: the folder name), `subtitle`,
+`status`, `summary`, `eyebrow`. The body is Markdown with:
+
+- `python exec` fences (`hide` to run without showing the code) that read runs:
+  `run_dir(name)`, `run_trials(study)`, `read_scalars`, `read_json`, `read_csv`,
+  `read_jsonl`, `mlflow_run(...)`, `track(path)`, plus `metric(...)` cards;
+- `{{ expression }}` values in prose and in the `summary`;
+- figures as Markdown images: a path in the report folder, `run:<name>/<file>`
+  (the run's latest folder, `run:<name>@<timestamp>/<file>` for a fixed one), or
+  `mlflow:<run-id>/<file>`; Plotly JSON files become interactive figures,
+  Matplotlib figures drawn in `python exec` blocks are embedded, and Graphviz
+  fences (`dot`, `neato`, ...) are laid out at build time;
+- `!!! <type> "Title"` callouts; `!!! finding <status> "Title"` blocks are
+  collected with their status and counted on the parent's child cards;
+- `[text](report:<path>#anchor)` links to other reports (`report:/` is the root),
+  checked at build time;
+- a ```` ```reports ```` fence: a card per child report (title, status, summary,
+  finding counts), or only the children it names;
+- `$...$` / `$$...$$` mathematics (MathML), `html raw` and `html include`
+  fences, and `<!-- ... -->` comments, which never reach the page.
+
+Each page links to its parent, lists the whole tree in its sidebar, and opens
+figures in a lightbox that shows where they came from (run, the code that drew
+and logged them, the commit, the MLflow or hub run). Each build writes a
+`manifest.json` per report: every file read with its hash, the runs used and
+their status, links, typed numbers in prose, and the tooling versions.
+
+### Comments
+
+Readers select text or click a figure's comment icon; comments are kept in that
+browser only, per report. **Copy** puts them on the clipboard as JSON (with the
+report's source path and URL, after an optional `[page] copy_preamble`), and
+**Clear** removes them from the browser.
+
+### Loading and caching
+
+The page files and Plotly are shared in `generated/reports/_static/`, named by
+content hash and stored gzipped too, so browsers download them once. Each
+`index.html` points at versioned URLs of its report data, so switching between
+reports costs only `index.html`. Figures and plots load as they approach the
+screen, image sizes are recorded at build time (no layout jumps), and each
+report remembers the reader's position in the browser.
 
 ## Logging runs
 
-Experiments write their evidence with `RunLogger`, one per Hydra run directory.
-The same module defines the run file format the reports read:
-
 ```python
-from cairn_report.logger import RunLogger, read_artifacts, read_scalars
+from cairn_report.logger import RunLogger
 
-log = RunLogger(output_dir)
-log.scalar("rmse", rmse)                     # single value; step=... for a series
+log = RunLogger(output_dir)                  # one logger per run folder
+log.scalar("rmse", rmse)                     # metrics.jsonl; step=... for a series
 log.table("cases", rows)                     # tables/cases.csv
 log.figure("errors", error_histogram, errs)  # figures/errors.png, records the plot function
 log.plotly("trace", spec)                    # figures/trace.plotly.json
@@ -95,181 +121,104 @@ log.artifact("model", checkpoint_path)       # artifacts/model.<suffix>
 log.text("solver", solver_log)               # logs/solver.txt
 ```
 
-`metrics.jsonl` and `artifacts.jsonl` are append-only; each event records the
-code location that logged it. `read_scalars(run)` and `read_artifacts(run)`
-return the latest value per name and the latest entry per file.
+`metrics.jsonl` and `artifacts.jsonl` are append-only; every event records the
+code location that logged it. `read_scalars(run)` and `read_artifacts(run)` fold
+them to the latest value per name and the latest entry per file.
 
-## Loading and caching
-
-Reports stay fast as they grow:
-
-- The page files and Plotly are shared by every report in `generated/reports/_static/`,
-  named by content hash and stored gzipped as well, so the browser downloads them
-  once and keeps them; each report's `index.html` points at them and at versioned
-  URLs of its own data (`narrative.html?v=...`).
-- Figures and Plotly load only as they approach the screen; Plotly itself loads
-  with the first interactive figure. Cards keep their final size while loading,
-  because the build records each image's dimensions.
-- The header appears first, then the text, then figures; switching back to a
-  report already seen costs only its small `index.html`.
-- Each report remembers the reader's position in this browser and returns to it
-  on reload (a `#anchor` in the URL takes precedence).
-
-Both servers send `immutable` caching for hashed and versioned files, ETags with
-`no-cache` for everything else, and the gzip copies when the browser accepts them.
-
-## Writing reports
-
-Front matter names a report (`title`, `subtitle`, `status`, and for directions a
-`summary` of at most 400 characters). The body is Markdown with:
-
-- `python exec` fences that read runs (`run_dir`, `run_trials`, `read_scalars`,
-  `read_json`, `read_csv`, `read_jsonl`, `track`) and add `metric(...)` cards;
-- `{{ expression }}` values in prose and summaries instead of typed results;
-- `!!! finding <tentative|supported|contradicted|superseded> "Qualitative title"`
-  blocks and callouts (`question`, `decision`, `prior-art`, `warning`, `important`);
-- figures as Markdown images, Plotly JSON, executed Matplotlib, or Graphviz fences;
-- `[text](report:<slug>#anchor)` links between reports, checked at build time;
-- `$...$` / `$$...$$` mathematics rendered to MathML;
-- `<!-- ... -->` comments, which never reach the page.
-
-## MLflow as the tracking backend
-
-`RunLogger` can write to MLflow instead of (or as well as) the run directory:
+Where evidence goes is set in `cairn-report.toml`:
 
 ```toml
-# cairn-report.toml
 [logger]
-backends = ["mlflow"]          # or ["local", "mlflow"] to mirror
+backends = ["local"]   # "local" (default), "mlflow", "hub" (implies local); combine freely
+```
+
+### MLflow
+
+```toml
+[logger]
+backends = ["local", "mlflow"]   # or ["mlflow"] alone
 
 [logger.mlflow]
 tracking_uri = "https://mlflow.example.org"  # or MLFLOW_TRACKING_URI; credentials via MLflow's env vars
 experiment = "my-study"                      # default: the project folder name
 ```
 
-Install `cairn-report[mlflow]`. One MLflow run is created per Hydra run
-directory (tagged `cairn.run_dir`); scalars become MLflow metrics, logged files
-become artifacts at the same paths, the Hydra config becomes parameters, and the
-run's indexes, `.hydra/`, `provenance/`, and `run.json` are uploaded when it
-ends, so an MLflow run has the layout of a local run. The MLflow status follows
-`run.json`. With MLflow alone, an MLflow error fails the logging call; when
-mirroring, the run directory stays the record.
+One MLflow run per run folder: scalars become metrics, files become artifacts at
+the same paths, the Hydra config becomes parameters, and the run's indexes,
+`.hydra/`, `provenance/`, and `run.json` are uploaded at the end, so an MLflow run
+has the layout of a run folder; its status follows `run.json`. With MLflow
+alone, an MLflow error fails the logging call. Reports resolve `run:` references
+and `run_dir()` through MLflow when the evidence is not local.
 
-Reports read MLflow runs directly; nothing in them is specific to the backend:
+With `serve = true` (plus `port`, `store`), the project runs its own MLflow
+server: `cairn-report serve` starts or reuses it next to the reports, and
+`cairn-report mlflow` runs it alone.
 
-```markdown
-![Error histogram](run:demo/figures/errors.png)       <!-- local run or its MLflow run -->
-![Pinned](run:demo@2026-10-13_10-00-00/figures/errors.png)
-![By id](mlflow:<run-id>/plots/curve.png)             <!-- any MLflow run -->
-```
+## Hub
 
-`run_dir("demo")` and `read_scalars(...)` resolve the same way, and
-`mlflow_run(run_id=..., name=..., run_dir=...)` selects a run explicitly; runs
-not written by cairn-report work too. The build downloads each run once into
-`generated/mlflow/<run-id>/` (refreshed when the run changes), hashes what it
-reads, and lists the MLflow runs in the manifest. In the figure lightbox, the
-source panel links to the run in the MLflow UI.
-
-**One command for both servers.** With `serve = true`, the project runs its own
-tracking server (needs `cairn-report[mlflow-server]`):
-
-```toml
-[logger.mlflow]
-serve = true
-port = 5000          # experiments log to http://127.0.0.1:5000
-store = "mlflow"     # its data, in the project (git-ignore it like outputs/)
-```
+A hub stores each project's **report** (every push that changes it is a new,
+complete version of its sources and built pages) and its **runs** (files under
+`outputs/`, version by version). Nothing stored is deleted or overwritten, and
+the hub never runs pushed code.
 
 ```bash
-cairn-report serve    # starts (or reuses) the MLflow server, builds, serves the reports
-cairn-report mlflow   # only the MLflow server, e.g. while experiments run
+cairn-report hub init /srv/hub     # data folder + random token (owner-only)
+cairn-report hub serve /srv/hub    # 127.0.0.1:8800; put an HTTPS reverse proxy in front
 ```
 
-Both stop the MLflow server they started on Ctrl-C or SIGTERM. With
-`--host 0.0.0.0`, MLflow binds the same interface and report links point at the
-host the page was loaded from.
-
-## Hub: one place for every project
-
-A hub stores the runs and reports of many projects, pushed from wherever they
-run (a cluster, a workstation), and serves them behind one token.
-
-**Server**
-
-```bash
-cairn-report hub init /srv/cairn-hub     # data folder + a random token in /srv/cairn-hub/token
-cairn-report hub serve /srv/cairn-hub    # listens on 127.0.0.1:8800
-```
-
-Put an HTTPS reverse proxy in front, for example Caddy (forwards the Host header):
-
-```text
-hub.example.org {
-    reverse_proxy 127.0.0.1:8800
-}
-```
-
-Open `https://hub.example.org/` and enter the token once; the browser keeps an
-HttpOnly, SameSite=Strict session cookie. With only an SSH tunnel
-(`ssh -L 8800:127.0.0.1:8800 server`), start the hub with `--insecure-cookies`.
-
-**Client** (in each project):
+In a project:
 
 ```toml
-# cairn-report.toml
 [hub]
 url = "https://hub.example.org"
 project = "my-study"                              # default: the folder name
 token_file = "~/.config/cairn-report/hub-token"   # chmod 600; or CAIRN_HUB_TOKEN
-exclude = [".submitit/**/*.pkl"]                  # never pushed (see below)
+exclude = [".submitit/**/*.pkl"]                  # never pushed
+interval = 30                                     # seconds between pushes with --watch / the hub backend
 ```
-
-`exclude` takes gitignore-style globs on project paths (`outputs/...`,
-`reports/...`, `generated/reports/...`): `*` and `?` stay within one folder, `**`
-spans folders, a pattern without a leading `/` matches at any depth, and a
-folder pattern excludes everything inside it.
 
 ```bash
-cairn-report push                                  # one sync
-cairn-report push --watch                          # keep syncing every 30 s
-cairn-report push --watch -- python experiments/run.py experiment=main
-cairn-report fetch my-study ./restore              # download everything back
+cairn-report push                  # a new report version (if changed) and new run files
+cairn-report push report|runs      # only one of them
+cairn-report push --watch -- python experiments/run.py   # push while a command runs, and after
+cairn-report pull                  # the latest report back (refuses to overwrite local changes; --force)
+cairn-report pull --runs [NAME]    # also runs; --version N for an older report
+cairn-report pull --name P --into DIR   # restore another project into a folder
 ```
 
-In a cluster job, wrap the experiment so its data leaves the node while it runs
-and once more when it ends (also when the job is cancelled with SIGTERM):
+With `[logger] backends = ["hub"]`, the logger itself sends a run's files while
+the run executes (every `interval` seconds, shortly after each logged file, and
+once more at exit); a hub that cannot be reached only produces warnings. Reports
+resolve `run:` references from the hub when the runs are not local.
 
-```bash
-pixi run cairn-report push --watch -- python experiments/run.py experiment=main
+The hub serves `/` (every project), `/p/<project>/` (the latest report),
+`/p/<project>@<n>/` (version n), and `/runs/<project>/` (runs and their files).
+Clients authenticate with the token as a bearer header; browsers log in once and
+keep an HttpOnly, SameSite=Strict cookie (`--insecure-cookies` for plain-HTTP
+tunnels). The client refuses plain HTTP to a non-local hub unless `--allow-http`.
+`exclude` takes gitignore-style globs on project paths: `*` and `?` stay within
+a folder, `**` spans folders, a leading `/` anchors to the project root.
+
+## Configuration
+
+Everything has a default; `cairn-report.toml` at the project root changes it:
+
+```toml
+reports_dir = "reports"            # the root report folder
+output_dir = "generated/reports"   # the built site
+outputs_dir = "outputs"            # run folders
+
+[style]
+css = ["style.css"]                # extra stylesheets, loaded after the default style
+template_dir = "template"          # replaces index.html, report.css, report-extra.css, report.js by name
+
+[page]
+copy_preamble = "..."              # text put before copied comments
 ```
-
-`push` sends `outputs/` (Hydra runs, including `.hydra/` and the `latest`
-links), `reports/` (sources and comment logs), and the built reports. Build
-reports before pushing (`cairn-report build`); the hub only serves them.
-
-**How data is kept safe**
-
-- Contents are addressed by SHA-256: the client uploads only what the hub lacks,
-  and the hub verifies every upload before storing it (written with fsync and
-  an atomic rename).
-- Nothing is overwritten or deleted on the hub: a changed file becomes a new
-  version in the project's append-only `files.jsonl`; files deleted on the
-  client stay on the hub. Back up the hub folder like any other data.
-- Interrupted uploads are retried on the next sync; the watch loop backs off
-  while the hub is unreachable and always attempts a final push.
-- The hub never builds reports or runs pushed code. Everyone who can push can
-  also publish pages on the hub, so give the token only to people you trust.
-- The client refuses plain HTTP to a non-local hub unless `--allow-http`, and
-  the token is never accepted in `cairn-report.toml` or in URLs.
-
-Comments made on the hub are stored on the hub and shown together with the
-project's own pushed comments. To act on them, use the page's Copy button and
-paste them to whoever (or whichever agent) updates the project; the hub does not
-write comments back into the project.
 
 ## Development
 
 ```bash
-uv sync
+uv sync --extra mlflow
 uv run pytest
 ```

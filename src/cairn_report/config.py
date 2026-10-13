@@ -3,13 +3,16 @@
 Everything has a default, so most projects need no configuration. To change
 something, add a `cairn-report.toml` at the project root:
 
-    reports_dir = "reports"            # report content: Markdown, fragments, media, comments
+    reports_dir = "reports"            # the root report: report.md, assets/, child report folders
     output_dir = "generated/reports"   # build output, one folder per report slug
     outputs_dir = "outputs"            # Hydra run directories read by the reports
 
     [style]
     css = ["reports/style.css"]        # extra stylesheets, applied after the default style
     template_dir = "reports/template"  # files here replace the packaged page files by name
+
+    [page]
+    copy_preamble = "..."              # text put before the comments the Copy button copies
 
     [hub]                              # where `cairn-report push` sends runs and reports
     url = "https://hub.example.org"    # or CAIRN_HUB_URL
@@ -19,7 +22,7 @@ something, add a `cairn-report.toml` at the project root:
     exclude = [".submitit/**/*.pkl"]   # files never pushed: gitignore-style globs (*, ?, **) on project paths
 
     [logger]
-    backends = ["local"]               # "local", "mlflow", or both
+    backends = ["local"]               # "local", "mlflow", "hub" (sends runs live; implies local)
     [logger.mlflow]
     tracking_uri = "https://mlflow.example.org"  # default: MLFLOW_TRACKING_URI; credentials via MLflow's env vars
     experiment = "my-study"            # default: the project folder name
@@ -52,6 +55,7 @@ class Config:
     template_dir: Path | None = None
     hub: dict = field(default_factory=dict)
     logger: dict = field(default_factory=lambda: {"backends": ["local"], "mlflow": {}})
+    page: dict = field(default_factory=dict)
 
     @property
     def source(self) -> Path | None:
@@ -73,7 +77,7 @@ def load_config(project: Path | str | None = None) -> Config:
     data: dict = {}
     if (root / CONFIG_FILE).is_file():
         data = tomllib.loads((root / CONFIG_FILE).read_text())
-    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub", "logger"}
+    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub", "logger", "page"}
     if unknown:
         raise ValueError(f"{root / CONFIG_FILE}: unknown keys {sorted(unknown)}")
     style = data.get("style", {})
@@ -96,9 +100,12 @@ def load_config(project: Path | str | None = None) -> Config:
     if unknown_logger:
         raise ValueError(f"{root / CONFIG_FILE}: unknown [logger] keys {sorted(unknown_logger)} "
                          "(MLflow credentials belong in MLFLOW_TRACKING_TOKEN or MLFLOW_TRACKING_USERNAME/PASSWORD)")
+    page = data.get("page", {})
+    if set(page) - {"copy_preamble"} or not isinstance(page.get("copy_preamble", ""), str):
+        raise ValueError(f"{root / CONFIG_FILE}: [page] takes copy_preamble (text)")
     backends = logger.get("backends", ["local"])
-    if not isinstance(backends, list) or not backends or set(backends) - {"local", "mlflow"}:
-        raise ValueError(f"{root / CONFIG_FILE}: [logger] backends must list 'local' and/or 'mlflow'")
+    if not isinstance(backends, list) or not backends or set(backends) - {"local", "mlflow", "hub"}:
+        raise ValueError(f"{root / CONFIG_FILE}: [logger] backends must list 'local', 'mlflow', and/or 'hub'")
 
     def path(value: str | None, default: str | None) -> Path | None:
         if value is None and default is None:
@@ -124,4 +131,5 @@ def load_config(project: Path | str | None = None) -> Config:
         template_dir=template_dir,
         hub=dict(hub),
         logger={"backends": backends, "mlflow": dict(mlflow)},
+        page=dict(page),
     )

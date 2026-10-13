@@ -5,14 +5,19 @@ const $ = selector => document.querySelector(selector);
 const PAGE = document.currentScript?.dataset || {};
 const PLOTLY_SRC = PAGE.plotly || "plotly.min.js";  // loaded on first use
 const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
-/* Directions live at <root>reports/<slug>/ and the overview at <root>; <root> is "/" on the
-   project server and "/p/<project>/" on a hub, so every server address starts from it. */
-const reportRoute = location.pathname.match(/^(.*\/)reports\/([a-z0-9][a-z0-9-]*)\/[^/]*$/);
-const reportSlug = reportRoute?.[2] || "overview";
-const siteRoot = reportRoute ? reportRoute[1] : location.pathname.replace(/[^/]*$/, "");
-const siteHref = href => href.startsWith("/") ? href : siteRoot + href;  // relative to the site root (absolute from older servers)
-const commentsApi = siteHref(`api/reports/${reportSlug}/comments`);
-const commentsStorageKey = `standalone-report-comments:${siteRoot === "/" ? "" : siteRoot}${reportSlug}`;  // unchanged key on the project server
+/* The builder tells each page where the site root is (relative) and which report it shows ("" is the root),
+   so the same build works at any address: a project server, a hub prefix, or plain static hosting. */
+const siteRoot = new URL(PAGE.root || "./", location.href).pathname;
+const reportKey = PAGE.report || "";
+const siteHref = href => siteRoot + href;  // report hrefs are relative to the site root
+/* Comments live in this browser only, per report; Copy hands them on, Clear removes them. */
+const commentsStorageKey = `cairn-report-comments:${siteRoot}${reportKey}`;
+try {  // carry over comments saved under the key of earlier versions
+  const legacy = `standalone-report-comments:${reportKey || "overview"}`;
+  if (!localStorage.getItem(commentsStorageKey) && localStorage.getItem(legacy)) { localStorage.setItem(commentsStorageKey, localStorage.getItem(legacy)); localStorage.removeItem(legacy); }
+} catch (_) {}
+let site = {reports: [], copy_preamble: ""};
+const siteData = fetch(siteHref("site.json"), {cache: "no-cache"}).then(r => r.ok ? r.json() : site).catch(() => site).then(value => (site = value));
 const COMMENT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-5 3v-3H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/></svg>';
 const isFigureTarget = target => target.startsWith("figure:");
 function commentFor(target) { return [...comments].reverse().find(row => row.target === target); }
@@ -64,7 +69,7 @@ const narrativeText = fetch(PAGE.narrative || "narrative.html").then(r => r.text
 $("#report-prose").setAttribute("aria-busy", "true");
 reportData.then(data => {
   document.title = data.title; $("#title").textContent = data.title; $("#subtitle").textContent = data.subtitle;
-  $("#status").textContent = data.status; $("#status").hidden = !data.status; $("#report-summary").textContent = data.summary || ""; $("#report-summary").hidden = !data.summary; if (data.overview) { const back = $("#overview-link"); back.textContent = `← ${data.overview.title}`; back.href = siteHref(data.overview.href); back.title = "Back to this direction in the project overview"; back.hidden = false; } $("#updated").textContent = `Updated · ${data.updated}`;
+  $("#status").textContent = data.status; $("#status").hidden = !data.status; $("#report-summary").textContent = data.summary || ""; $("#report-summary").hidden = !data.summary; if (data.parent) { const back = $("#overview-link"); back.textContent = `← ${data.parent.title}`; back.href = siteHref(data.parent.href); back.title = "Back to the parent report"; back.hidden = false; } $("#eyebrow").textContent = data.eyebrow || ""; $("#eyebrow").hidden = !data.eyebrow; $("#updated").textContent = `Updated · ${data.updated}`;
 });
 Promise.all([reportData, narrativeText]).then(([data, narrative]) => {
   const prose = $("#report-prose"); prose.innerHTML = narrative; prose.removeAttribute("aria-busy");
@@ -85,7 +90,7 @@ window.addEventListener("hashchange", revealHashTarget);
 
 /* Remember where the reader was, per report, as "this block, this many pixels from the top": that survives
    rebuilds and late layout better than a raw scroll offset. A #anchor in the URL always wins. */
-const positionKey = `cairn-report-position:${siteRoot}${reportSlug}`;
+const positionKey = `cairn-report-position:${siteRoot}${reportKey}`;
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 function readingAnchor() {
   for (const block of document.querySelectorAll("#report-prose [data-source-line]")) {
@@ -126,22 +131,20 @@ async function prefetchReport(href) {
   } catch (_) {}
 }
 
-// The sidebar lists every report in the project so related branches are one click apart.
+// The sidebar lists every report of the site, as a tree, so related reports are one click apart.
 async function loadReportList(data) {
-  let reports = [];
-  try { const response = await fetch(siteHref("api/reports")); if (response.ok) reports = await response.json(); } catch (_) {}
-  // Without the server's list (a static copy), a direction still links back to the overview.
-  if (!reports.length && data.overview) reports = [{slug: "overview", title: data.overview.title, href: ""}, {slug: reportSlug, title: data.title, href: data.href}];
+  const {reports = [], title} = await siteData;
+  if (title) $("#site-title").textContent = title;
   if (reports.length < 2) return;
   const list = $("#report-list");
   reports.forEach(report => {
-    const overview = report.slug === "overview";
-    const link = el("a", overview ? "report-list-overview" : "report-list-direction");
-    if (overview) link.append(el("span", "report-list-kind", "Overview"));
+    const root = report.key === "";
+    const link = el("a", root ? "report-list-overview" : "report-list-direction");
     link.append(el("span", null, report.title));
-    link.href = siteHref(overview && data.overview ? data.overview.href : report.href);
-    link.title = overview ? "Project overview" : (report.subtitle || report.title);
-    if (report.slug === reportSlug) link.setAttribute("aria-current", "page");
+    link.href = siteHref(report.href);
+    link.title = report.subtitle || report.title;
+    if (report.depth > 1) link.style.marginLeft = `${(report.depth - 1) * 12}px`;
+    if (report.key === reportKey) link.setAttribute("aria-current", "page");
     else { link.addEventListener("pointerenter", () => prefetchReport(link.href), {once: true}); link.addEventListener("focus", () => prefetchReport(link.href), {once: true}); }
     list.append(link);
   });
@@ -180,6 +183,7 @@ function renderTrace(trace) {
     ["Read in block", (trace.inputs || []).join(", ")],
     ["Commit", trace.revision ? trace.revision.slice(0, 12) + (trace.uncommitted ? ` + ${trace.uncommitted}` : "") : ""],
     ["MLflow", trace.mlflow ? {text: `run ${trace.mlflow.run_id}`, href: reachable(trace.mlflow.url)} : ""],
+    ["Hub", trace.hub ? {text: trace.hub.run, href: trace.hub.url} : ""],
     ["Report", trace.report],
   ].filter(([, value]) => value);
   const list = $("#lightbox-trace"); list.replaceChildren();
@@ -301,22 +305,8 @@ function renderUnanchored(rows) {
   });
 }
 async function loadComments() {
-  let hosted = [], reachable = false;
-  const browser = localComments();
-  try { const response = await fetch(commentsApi); if (response.ok) { hosted = await response.json(); reachable = true; } } catch (_) {}
-  if (reachable && browser.length) {
-    const migrated = [];
-    for (const row of browser) {
-      try {
-        const response = await fetch(commentsApi, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(row)});
-        if (!response.ok) continue;
-        const saved = await response.json(); upsert(hosted, saved); migrated.push(row.id);
-      } catch (_) {}
-    }
-    removeLocal(migrated);
-  }
-  comments = [...localComments()]; hosted.forEach(row => upsert(comments, row));
-  comments = comments.filter(row => row.event !== "resolve" && row.event !== "delete" && row.target); renderCommentBubbles();
+  comments = localComments().filter(row => row.target && row.text);
+  renderCommentBubbles();
 }
 // Saves and deletes run one at a time, in order. Each open comment is a session whose id
 // the first save fills in, so a quick second keystroke updates it instead of creating a
@@ -329,20 +319,17 @@ async function saveComment(session, payload) {
   payload.id = session.id; payload.text = payload.text.trim();
   if (!payload.text) { if (session.id) await deleteComment(session, {close: false}); showStatus(session, "Autosaves while you type"); return; }
   showStatus(session, "Saving…");
-  let saved;
-  try { const response = await fetch(commentsApi, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)}); if (!response.ok) throw new Error("server rejected comment"); saved = await response.json(); removeLocal([payload.id, saved.id]); }
-  catch (_) { const id = payload.id || globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`; saved = {...payload, id, timestamp: new Date().toISOString(), storage: "browser"}; storeLocal(saved); }
+  const id = payload.id || globalThis.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const saved = {...payload, id, timestamp: new Date().toISOString()};
+  try { storeLocal(saved); } catch (_) { showStatus(session, "Not saved: browser storage unavailable"); return; }
   session.id = saved.id; if (session === currentSession) commentForm.elements.id.value = saved.id;
   upsert(comments, saved); showStatus(session, "Saved"); renderCommentBubbles();
 }
 commentForm.addEventListener("submit", event => event.preventDefault());
-// Deleting appends a delete event; earlier revisions stay in the history.
 async function deleteComment(session, {close = true} = {}) {
   const id = session.id;
   if (id) {
-    const existing = comments.find(row => row.id === id);
-    if (existing?.storage === "browser") localStorage.setItem(commentsStorageKey, JSON.stringify(localComments().filter(row => row.id !== id)));
-    else { try { const response = await fetch(`${commentsApi}/delete`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id})}); if (!response.ok) throw new Error("delete rejected"); } catch (_) { showStatus(session, "Delete failed"); return; } }
+    try { removeLocal([id]); } catch (_) { showStatus(session, "Delete failed"); return; }
     comments = comments.filter(row => row.id !== id);
   }
   session.id = "";
@@ -354,10 +341,6 @@ commentForm.elements.text.addEventListener("input", () => { clearTimeout(saveTim
 document.addEventListener("pointerdown", event => { if (!commentPopover.hidden && !commentPopover.contains(event.target) && !event.target.closest(".comment-bubble, .image-comment, #selection-comment")) closeComment(); });
 document.addEventListener("keydown", event => { if (event.key === "Escape" && !commentPopover.hidden) closeComment(); });
 
-const AGENT_INSTRUCTIONS = `Please address these report comments.
-For each comment: locate its quote first, falling back to its line or target. Make the requested change, or ask me if its consequence is ambiguous. Then rebuild with \`pixi run report-build\`.
-Append comments marked "storage": "browser" to ${reportSlug === "overview" ? "reports" : `reports/${reportSlug}`}/knowledge/comments.jsonl first. Record each resolution by appending {"id": "<comment id>", "event": "resolve", "timestamp": "<ISO time>", "resolution": "<what changed>"} to that file. Never edit or delete existing lines.
-Afterwards, summarize what changed in the code, the runs, the findings, and the report.`;
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
   const area = el("textarea"); area.value = text; area.setAttribute("readonly", ""); area.style.position = "fixed"; area.style.opacity = "0"; document.body.append(area); area.select();
@@ -371,21 +354,23 @@ const plural = count => `${count} comment${count === 1 ? "" : "s"}`;
 $("#copy-comments").onclick = async event => {
   const button = event.currentTarget;
   await loadComments();
-  const open = comments.map(({id, target, line, quote, text, storage}) => ({id, target, line: line || null, quote: quote || null, text, ...(storage ? {storage} : {})}));
-  if (!open.length) { flashTip(button, "No open comments"); return; }
-  const copied = await copyText(`${AGENT_INSTRUCTIONS}\n\nOpen comments (${open.length}):\n${JSON.stringify(open, null, 2)}\n`);
+  const open = comments.map(({id, target, line, quote, text, timestamp}) => ({id, target, line: line || null, quote: quote || null, text, timestamp}));
+  if (!open.length) { flashTip(button, "No comments"); return; }
+  const data = await reportData, {copy_preamble: preamble = ""} = await siteData;
+  const header = `Comments on "${data.title}" (${data.source || reportKey || "/"}, ${location.href.split("#")[0]}), ${plural(open.length)}:`;
+  const copied = await copyText(`${preamble ? `${preamble.trim()}\n\n` : ""}${header}\n${JSON.stringify(open, null, 2)}\n`);
   flashTip(button, copied ? `Copied ${plural(open.length)}` : "Copy failed");
 };
 
-// Clearing appends resolve events; the comment history itself is never erased.
+// Clearing removes this report's comments from this browser (after they were copied).
 const clearConfirm = $("#clear-confirm");
 function closeClearConfirm() { clearConfirm.hidden = true; $("#clear-comments").setAttribute("aria-expanded", "false"); }
 $("#clear-comments").onclick = async event => {
   const button = event.currentTarget;
   if (!clearConfirm.hidden) { closeClearConfirm(); return; }
   await loadComments();
-  if (!comments.length) { flashTip(button, "No open comments"); return; }
-  $("#clear-confirm-text").textContent = `Clear ${plural(comments.length)}? They stay in the comment history.`;
+  if (!comments.length) { flashTip(button, "No comments"); return; }
+  $("#clear-confirm-text").textContent = `Remove ${plural(comments.length)} from this browser? Copy them first if they are still needed.`;
   const rect = button.getBoundingClientRect();
   clearConfirm.style.left = `${Math.max(12, Math.min(window.innerWidth - 252, rect.left))}px`; clearConfirm.style.top = `${rect.bottom + 8}px`;
   clearConfirm.hidden = false; button.setAttribute("aria-expanded", "true"); clearConfirm.querySelector('[data-confirm="cancel"]').focus();
@@ -393,9 +378,9 @@ $("#clear-comments").onclick = async event => {
 clearConfirm.onclick = async event => {
   const action = event.target.closest("[data-confirm]")?.dataset.confirm; if (!action) return;
   closeClearConfirm(); if (action !== "clear") return;
-  const button = $("#clear-comments"), count = comments.length, hosted = comments.some(row => row.storage !== "browser");
-  if (hosted) { try { const response = await fetch(`${commentsApi}/clear`, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}); if (!response.ok) throw new Error("clear rejected"); } catch (_) { flashTip(button, "Clear failed"); return; } }
-  localStorage.removeItem(commentsStorageKey); closeComment(); await loadComments();
+  const button = $("#clear-comments"), count = comments.length;
+  try { localStorage.removeItem(commentsStorageKey); } catch (_) { flashTip(button, "Clear failed"); return; }
+  closeComment(); await loadComments();
   flashTip(button, `Cleared ${plural(count)}`);
 };
 document.addEventListener("pointerdown", event => { if (!clearConfirm.hidden && !clearConfirm.contains(event.target) && !event.target.closest("#clear-comments")) closeClearConfirm(); });

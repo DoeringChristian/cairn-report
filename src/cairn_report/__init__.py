@@ -1,3 +1,3 @@
-"""cairn-report: commentable research reports built from Markdown and Hydra run outputs."""
+"""cairn-report: static reports from Markdown and run outputs, a run logger, and an artifact hub."""
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

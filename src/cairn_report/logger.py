@@ -19,7 +19,9 @@ append-only JSON Lines, so nothing already written is ever rewritten:
 Where the evidence goes is set by `[logger] backends` in cairn-report.toml:
 "local" (the default) writes the files above into the run directory, "mlflow"
 sends the same scalars and files to an MLflow tracking server (see
-`cairn_report.mlflow_backend`), and both may be combined. With "local" among
+`cairn_report.mlflow_backend`), "hub" sends the run directory to a cairn-report
+hub while the run executes (see `cairn_report.hub_backend`; it implies "local"),
+and they may be combined. With "local" among
 them, the run directory stays the record and an MLflow error only warns; with
 "mlflow" alone, an MLflow error fails the call, so no evidence is lost silently.
 
@@ -156,12 +158,21 @@ def _backends(root: Path, project: Path, names: list[str] | None) -> list:
 
     settings = load_config(project).logger
     names = names if names is not None else settings["backends"]
-    unknown = set(names) - {"local", "mlflow"}
+    unknown = set(names) - {"local", "mlflow", "hub"}
     if unknown or not names:
-        raise ValueError(f"logger backends must be a non-empty subset of ['local', 'mlflow'], got {names}")
+        raise ValueError(f"logger backends must be a non-empty subset of ['local', 'mlflow', 'hub'], got {names}")
     backends = []
-    if "local" in names:
+    if "local" in names or "hub" in names:  # the hub backend sends what the run directory holds
         backends.append(LocalBackend(root))
+    if "hub" in names:
+        from .hub_backend import HubBackend
+
+        try:
+            backends.append(HubBackend.attach(root, project))
+        except (Exception, SystemExit) as error:  # the run directory is the record; the hub is a copy
+            import warnings
+
+            warnings.warn(f"hub logging disabled for this run ({error}); the run directory has the evidence")
     if "mlflow" in names:
         from .mlflow_backend import MLflowBackend
 
