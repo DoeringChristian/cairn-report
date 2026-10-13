@@ -23,7 +23,7 @@ In a pixi project:
 graphviz = "*"   # only needed for Graphviz diagram fences
 
 [pypi-dependencies]
-cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.6.3" }
+cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.7.0" }
 
 [tasks]
 report-build = "cairn-report build"
@@ -104,6 +104,26 @@ content hash and stored gzipped too, so browsers download them once. Each
 reports costs only `index.html`. Figures and plots load as they approach the
 screen, image sizes are recorded at build time (no layout jumps), and each
 report remembers the reader's position in the browser.
+
+### Sharing as one page
+
+```bash
+cairn-report share                 # build, then write generated/share/index.html
+cairn-report share --report alpha  # only alpha and its children
+```
+
+`share` writes the whole tree as one self-contained page for hosts that take a
+single file, such as claude.ai artifacts: every report's text, its figures as
+data URIs, and its Plotly data, with the styles and script inline. The sidebar
+and `report:` links switch reports inside the page, and a plain `#anchor` in
+the page's address opens the report that has it. Only Plotly's runtime is
+fetched, from jsdelivr at the version the build bundles. The page keeps the
+comments (Copy and Clear) and leaves out the build manifest. A page above
+16 MB fails with its largest figures listed.
+
+Publish the file exactly as written; it says so in its first lines. On
+claude.ai, that is the Artifact tool with this `file_path` and nothing else. To
+change the page, edit the report and run `share` again.
 
 ## Logging runs
 

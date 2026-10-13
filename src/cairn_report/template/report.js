@@ -8,21 +8,39 @@ const el = (tag, className, text) => { const node = document.createElement(tag);
 /* The builder tells each page where the site root is (relative) and which report it shows ("" is the root),
    so the same build works at any address: a project server, a hub prefix, or plain static hosting. */
 const siteRoot = new URL(PAGE.root || "./", location.href).pathname;
-const reportKey = PAGE.report || "";
-const siteHref = href => siteRoot + href;  // report hrefs are relative to the site root
+/* `cairn-report share` writes one page that carries every report of a tree (#cairn-bundle); links between
+   reports then switch the report inside the page, so it works on hosts that serve a single file. */
+const BUNDLE = (() => { const node = document.getElementById("cairn-bundle"); return node ? JSON.parse(node.textContent) : null; })();
+const VIRTUAL_SITE = "https://site.invalid/";  // bundle mode: report links resolve against this stand-in address
+let reportKey = BUNDLE ? bundleStart() : PAGE.report || "";
+const siteHref = href => (BUNDLE ? VIRTUAL_SITE : siteRoot) + href;  // report hrefs are relative to the site root
+const storageScope = () => `${BUNDLE ? "bundle:" : siteRoot}${reportKey}`;
 /* Comments live in this browser only, per report; Copy hands them on, Clear removes them. */
-const commentsStorageKey = `cairn-report-comments:${siteRoot}${reportKey}`;
+const commentsStorageKey = () => `cairn-report-comments:${storageScope()}`;
 try {  // carry over comments saved under the key of earlier versions
   const legacy = `standalone-report-comments:${reportKey || "overview"}`;
-  if (!localStorage.getItem(commentsStorageKey) && localStorage.getItem(legacy)) { localStorage.setItem(commentsStorageKey, localStorage.getItem(legacy)); localStorage.removeItem(legacy); }
+  if (!BUNDLE && !localStorage.getItem(commentsStorageKey()) && localStorage.getItem(legacy)) { localStorage.setItem(commentsStorageKey(), localStorage.getItem(legacy)); localStorage.removeItem(legacy); }
 } catch (_) {}
 let site = {reports: [], copy_preamble: ""};
-const siteData = fetch(siteHref("site.json"), {cache: "no-cache"}).then(r => r.ok ? r.json() : site).catch(() => site).then(value => (site = value));
+const siteData = BUNDLE ? Promise.resolve(site = BUNDLE.site)
+  : fetch(siteHref("site.json"), {cache: "no-cache"}).then(r => r.ok ? r.json() : site).catch(() => site).then(value => (site = value));
+// A plain #anchor opens the report that has it, so links to any section of the shared page work.
+function bundleStart() {
+  const id = decodeURIComponent(location.hash.slice(1)), start = BUNDLE.start;
+  if (!id || BUNDLE.reports[start].narrative.includes(`id="${id}"`)) return start;
+  return Object.keys(BUNDLE.reports).find(key => BUNDLE.reports[key].narrative.includes(`id="${id}"`)) ?? start;
+}
+function bundleTarget(href) {
+  let url; try { url = new URL(href, VIRTUAL_SITE + (reportKey ? `${reportKey}/` : "")); } catch (_) { return null; }
+  if (url.origin !== new URL(VIRTUAL_SITE).origin) return null;
+  const key = decodeURIComponent(url.pathname).replace(/^\//, "").replace(/(^|\/)index\.html$/, "").replace(/\/$/, "");
+  return key in BUNDLE.reports ? {key, hash: decodeURIComponent(url.hash.slice(1))} : null;
+}
 const COMMENT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-5 3v-3H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/></svg>';
 const isFigureTarget = target => target.startsWith("figure:");
 function commentFor(target) { return [...comments].reverse().find(row => row.target === target); }
 function commentIcon(target, line = "") { const button = el("button", "image-comment"); button.type = "button"; button.title = "Comment on image"; button.setAttribute("aria-label", "Comment on image"); button.innerHTML = COMMENT_ICON; button.onclick = event => { event.preventDefault(); event.stopPropagation(); openComment(target, line, "", button.getBoundingClientRect(), commentFor(target)); }; return button; }
-async function plotSpec(figure) { if (!figure._spec) { const response = await fetch(figure.src); if (!response.ok) throw new Error(`Could not load ${figure.src}`); figure._spec = await response.json(); } return figure._spec; }
+async function plotSpec(figure) { if (!figure._spec && BUNDLE) figure._spec = BUNDLE.reports[reportKey].files?.[figure.src]; if (!figure._spec) { const response = await fetch(figure.src); if (!response.ok) throw new Error(`Could not load ${figure.src}`); figure._spec = await response.json(); } return figure._spec; }
 /* Plotly is large: fetch it only when the first interactive figure comes near the screen. */
 let plotlyLoading = null;
 function loadPlotly() {
@@ -64,21 +82,64 @@ function hydrateFigure(card) {
   }
 }
 /* The header appears as soon as the small report-data.json arrives; the text follows, then figures as they near the screen. */
-const reportData = fetch(PAGE.reportData || "report-data.json").then(r => r.json());
-const narrativeText = fetch(PAGE.narrative || "narrative.html").then(r => r.text());
-$("#report-prose").setAttribute("aria-busy", "true");
-reportData.then(data => {
+let reportData, narrativeText;
+function fetchReport() {
+  if (BUNDLE) { const entry = BUNDLE.reports[reportKey]; reportData = Promise.resolve(entry.data); narrativeText = Promise.resolve(entry.narrative); return; }
+  reportData = fetch(PAGE.reportData || "report-data.json").then(r => r.json());
+  narrativeText = fetch(PAGE.narrative || "narrative.html").then(r => r.text());
+}
+function showHeader(data) {
+  $("#overview-link").hidden = true;
+  if (BUNDLE && data.parent && !(data.parent.key in BUNDLE.reports)) data = {...data, parent: null};  // outside the shared tree
   document.title = data.title; $("#title").textContent = data.title; $("#subtitle").textContent = data.subtitle;
   $("#status").textContent = data.status; $("#status").hidden = !data.status; $("#report-summary").textContent = data.summary || ""; $("#report-summary").hidden = !data.summary; if (data.parent) { const back = $("#overview-link"); back.textContent = `← ${data.parent.title}`; back.href = siteHref(data.parent.href); back.title = "Back to the parent report"; back.hidden = false; } $("#eyebrow").textContent = data.eyebrow || ""; $("#eyebrow").hidden = !data.eyebrow; $("#updated").textContent = `Updated · ${data.updated}`;
-});
-Promise.all([reportData, narrativeText]).then(([data, narrative]) => {
-  const prose = $("#report-prose"); prose.innerHTML = narrative; prose.removeAttribute("aria-busy");
-  document.querySelectorAll("#report-prose h2[id]").forEach(heading => { const link = el("a", null, heading.textContent); link.href = `#${heading.id}`; $("#report-nav").append(link); });
-  loadReportList(data);
-  bindFiguresInDocumentOrder(); bindSelectionComments(); loadComments();
-  if (location.hash) revealHashTarget(); else restorePosition();
-  trackPosition();
-});
+  bundleLinks($(".hero"));
+}
+let pageBound = false;
+function renderReport(place) {
+  $("#report-prose").setAttribute("aria-busy", "true");
+  reportData.then(showHeader);
+  return Promise.all([reportData, narrativeText]).then(([data, narrative]) => {
+    const prose = $("#report-prose"); prose.innerHTML = narrative; prose.removeAttribute("aria-busy");
+    $("#report-nav").replaceChildren();
+    document.querySelectorAll("#report-prose h2[id]").forEach(heading => { const link = el("a", null, heading.textContent); link.href = `#${heading.id}`; $("#report-nav").append(link); });
+    bundleLinks(prose); loadReportList(data).then(() => bundleLinks($("#report-list")));
+    bindFiguresInDocumentOrder(); loadComments();
+    if (!pageBound) { pageBound = true; bindSelectionComments(); trackPosition(); }
+    place();
+  });
+}
+fetchReport();
+renderReport(() => { if (location.hash) revealHashTarget(); else restorePosition(); });
+if (BUNDLE) {
+  $('footer a[href="manifest.json"]')?.remove();  // the build manifest stays with the project
+  // Capture on window, ahead of any link handling the host page adds (which may open links in a new tab).
+  window.addEventListener("click", event => {
+    const link = event.target.closest?.("a[data-bundle-report]");
+    if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault(); event.stopImmediatePropagation(); showReport(link.dataset.bundleReport, link.dataset.bundleHash || "");
+  }, true);
+}
+/* Bundle mode: a link to another report becomes a plain #anchor link (hosts leave those to the page) that
+   names its report; the click handler above switches to it. */
+function bundleLinks(root) {
+  if (!BUNDLE) return;
+  root.querySelectorAll("a[href]").forEach(link => {
+    const href = link.getAttribute("href"); if (href.startsWith("#")) return;
+    const target = bundleTarget(href); if (!target) return;
+    link.dataset.bundleReport = target.key; link.dataset.bundleHash = target.hash; link.setAttribute("href", `#${target.hash}`);
+  });
+}
+function showReport(key, hash = "") {
+  if (key === reportKey && hash) { location.hash = hash; revealHashTarget(); return; }
+  savePosition(); commentPopover.hidden = true; if (lightbox.open) lightbox.close();
+  reportKey = key; figures = []; active = 0; nearObserver?.disconnect();
+  fetchReport();
+  renderReport(() => {
+    history.replaceState(null, "", location.pathname + location.search + (hash ? `#${hash}` : ""));
+    if (hash) revealHashTarget(); else if (!restorePosition()) scrollTo({top: 0, behavior: "instant"});
+  });
+}
 // Content arrives after load, so the browser cannot scroll to #anchor links (backlinks, report: links) by itself.
 function revealHashTarget() {
   const id = decodeURIComponent(location.hash.slice(1)); const target = id && document.getElementById(id);
@@ -90,7 +151,7 @@ window.addEventListener("hashchange", revealHashTarget);
 
 /* Remember where the reader was, per report, as "this block, this many pixels from the top": that survives
    rebuilds and late layout better than a raw scroll offset. A #anchor in the URL always wins. */
-const positionKey = `cairn-report-position:${siteRoot}${reportKey}`;
+const positionKey = () => `cairn-report-position:${storageScope()}`;
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 function readingAnchor() {
   for (const block of document.querySelectorAll("#report-prose [data-source-line]")) {
@@ -99,10 +160,10 @@ function readingAnchor() {
   }
   return {y: Math.round(scrollY)};
 }
-function savePosition() { try { localStorage.setItem(positionKey, JSON.stringify(readingAnchor())); } catch (_) {} }
+function savePosition() { try { localStorage.setItem(positionKey(), JSON.stringify(readingAnchor())); } catch (_) {} }
 function restorePosition() {
-  let saved = null; try { saved = JSON.parse(localStorage.getItem(positionKey) || "null"); } catch (_) {}
-  if (!saved) return;
+  let saved = null; try { saved = JSON.parse(localStorage.getItem(positionKey()) || "null"); } catch (_) {}
+  if (!saved) return false;
   let moved = false; const stop = () => { moved = true; };
   ["wheel", "touchstart", "keydown", "pointerdown"].forEach(type => addEventListener(type, stop, {once: true, passive: true}));
   const apply = () => {
@@ -111,6 +172,7 @@ function restorePosition() {
     scrollTo({top: block ? block.getBoundingClientRect().top + scrollY - saved.offset : saved.y, behavior: "instant"});
   };
   apply(); document.fonts?.ready.then(apply); setTimeout(apply, 400);  // again once fonts and late layout settle
+  return true;
 }
 function trackPosition() {
   let pending = false;
@@ -135,8 +197,8 @@ async function prefetchReport(href) {
 async function loadReportList(data) {
   const {reports = [], title} = await siteData;
   if (title) $("#site-title").textContent = title;
+  const list = $("#report-list"); list.replaceChildren();
   if (reports.length < 2) return;
-  const list = $("#report-list");
   reports.forEach(report => {
     const root = report.key === "";
     const link = el("a", root ? "report-list-overview" : "report-list-direction");
@@ -145,7 +207,7 @@ async function loadReportList(data) {
     link.title = report.subtitle || report.title;
     if (report.depth > 1) link.style.marginLeft = `${(report.depth - 1) * 12}px`;
     if (report.key === reportKey) link.setAttribute("aria-current", "page");
-    else { link.addEventListener("pointerenter", () => prefetchReport(link.href), {once: true}); link.addEventListener("focus", () => prefetchReport(link.href), {once: true}); }
+    else if (!BUNDLE) { link.addEventListener("pointerenter", () => prefetchReport(link.href), {once: true}); link.addEventListener("focus", () => prefetchReport(link.href), {once: true}); }
     list.append(link);
   });
   $("#report-list-section").hidden = false;
@@ -238,10 +300,10 @@ function bindSelectionComments() {
   button.onclick = () => { button.hidden = true; openComment(pendingSelection.target, pendingSelection.line, pendingSelection.quote, pendingSelection.rect); };
 }
 
-function localComments() { try { return JSON.parse(localStorage.getItem(commentsStorageKey) || "[]"); } catch (_) { return []; } }
+function localComments() { try { return JSON.parse(localStorage.getItem(commentsStorageKey()) || "[]"); } catch (_) { return []; } }
 function upsert(rows, comment) { const index = rows.findIndex(row => row.id === comment.id); if (index < 0) rows.push(comment); else rows[index] = comment; return rows; }
-function storeLocal(comment) { localStorage.setItem(commentsStorageKey, JSON.stringify(upsert(localComments(), comment))); }
-function removeLocal(ids) { const remove = new Set(ids.filter(Boolean)); if (!remove.size) return; localStorage.setItem(commentsStorageKey, JSON.stringify(localComments().filter(row => !remove.has(row.id)))); }
+function storeLocal(comment) { localStorage.setItem(commentsStorageKey(), JSON.stringify(upsert(localComments(), comment))); }
+function removeLocal(ids) { const remove = new Set(ids.filter(Boolean)); if (!remove.size) return; localStorage.setItem(commentsStorageKey(), JSON.stringify(localComments().filter(row => !remove.has(row.id)))); }
 function anchorFor(target) { if (target.startsWith("section:") && document.getElementById(target.slice(8))) return document.getElementById(target.slice(8)); if (target.startsWith("finding:")) return document.getElementById(target.slice(8)); if (target.startsWith("markdown:line:")) return document.querySelector(`[data-source-line="${target.slice(14)}"]`); return [...document.querySelectorAll("[data-comment-target]")].find(node => node.dataset.commentTarget === target); }
 function clearCommentMarks() {
   document.querySelectorAll(".comment-bubble").forEach(node => node.remove());
@@ -357,7 +419,7 @@ $("#copy-comments").onclick = async event => {
   const open = comments.map(({id, target, line, quote, text, timestamp}) => ({id, target, line: line || null, quote: quote || null, text, timestamp}));
   if (!open.length) { flashTip(button, "No comments"); return; }
   const data = await reportData, {copy_preamble: preamble = ""} = await siteData;
-  const header = `Comments on "${data.title}" (${data.source || reportKey || "/"}, ${location.href.split("#")[0]}), ${plural(open.length)}:`;
+  const header = `Comments on "${data.title}" (${data.source || reportKey || "/"}${BUNDLE ? "" : `, ${location.href.split("#")[0]}`}), ${plural(open.length)}:`;
   const copied = await copyText(`${preamble ? `${preamble.trim()}\n\n` : ""}${header}\n${JSON.stringify(open, null, 2)}\n`);
   flashTip(button, copied ? `Copied ${plural(open.length)}` : "Copy failed");
 };
@@ -379,7 +441,7 @@ clearConfirm.onclick = async event => {
   const action = event.target.closest("[data-confirm]")?.dataset.confirm; if (!action) return;
   closeClearConfirm(); if (action !== "clear") return;
   const button = $("#clear-comments"), count = comments.length;
-  try { localStorage.removeItem(commentsStorageKey); } catch (_) { flashTip(button, "Clear failed"); return; }
+  try { localStorage.removeItem(commentsStorageKey()); } catch (_) { flashTip(button, "Clear failed"); return; }
   closeComment(); await loadComments();
   flashTip(button, `Cleared ${plural(count)}`);
 };

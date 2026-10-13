@@ -1,4 +1,4 @@
-"""Command line: `cairn-report build | serve | mlflow | push | pull | hub`."""
+"""Command line: `cairn-report build | serve | share | mlflow | push | pull | hub`."""
 
 from __future__ import annotations
 
@@ -19,6 +19,12 @@ def cmd_serve(args) -> None:
     from .serve import serve
 
     serve(load_config(args.project), host=args.host, port=args.port, strict_port=args.strict_port, build=not args.no_build)
+
+
+def cmd_share(args) -> None:
+    from .share import share
+
+    share(load_config(args.project), report=args.report, build=not args.no_build, out=args.out)
 
 
 def cmd_push(args) -> None:
@@ -95,6 +101,12 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--strict-port", action="store_true", help="fail instead of moving to the next free port")
     serve.add_argument("--no-build", action="store_true", help="serve the existing build output")
     serve.set_defaults(run=cmd_serve)
+
+    share = commands.add_parser("share", help="write the reports as one self-contained page to publish unchanged (claude.ai artifacts)")
+    share.add_argument("--report", help="share only this report and its children (its path below the root, e.g. a/b)")
+    share.add_argument("--out", type=Path, help="where to write the page (default: <output_dir>/../share/index.html)")
+    share.add_argument("--no-build", action="store_true", help="share the existing build output")
+    share.set_defaults(run=cmd_share)
 
     tracker = commands.add_parser("mlflow", help="run the project's own MLflow tracking server ([logger.mlflow] serve = true)")
     tracker.add_argument("--host", default="127.0.0.1")
