@@ -141,3 +141,18 @@ def test_http_tracking_server_gets_ui_link():
     link = mlflow_link({"run_id": "r1", "experiment_id": "7", "tracking_uri": "https://mlflow.example.org/"}, "figures/a.png")
     assert link["url"] == "https://mlflow.example.org/#/experiments/7/runs/r1/artifacts"
     assert "url" not in mlflow_link({"run_id": "r1", "experiment_id": "7", "tracking_uri": "file:///x"}, "a.png")
+
+
+def test_mirror_continues_when_mlflow_is_unreachable(tmp_path, monkeypatch):
+    monkeypatch.setenv("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "0")
+    monkeypatch.setenv("MLFLOW_HTTP_REQUEST_TIMEOUT", "2")
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:9")  # nothing listens there
+    project = make_project(tmp_path, ["local", "mlflow"], "Text.")
+    run = project / "outputs" / "demo" / "1"
+    with pytest.warns(UserWarning, match="mlflow logging disabled"):
+        log = RunLogger(run)
+    log.scalar("rmse", 0.5)
+    assert (run / "metrics.jsonl").is_file()
+    project_only = make_project(tmp_path / "only", ["mlflow"], "Text.")
+    with pytest.raises(Exception):
+        RunLogger(project_only / "outputs" / "demo" / "1")  # MLflow alone: no run without it

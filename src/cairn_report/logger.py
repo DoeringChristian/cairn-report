@@ -176,7 +176,14 @@ def _backends(root: Path, project: Path, names: list[str] | None) -> list:
     if "mlflow" in names:
         from .mlflow_backend import MLflowBackend
 
-        backends.append(MLflowBackend.attach(root, project, settings["mlflow"], required="local" not in names))
+        try:
+            backends.append(MLflowBackend.attach(root, project, settings["mlflow"]))
+        except (Exception, SystemExit) as error:
+            if "local" not in names and "hub" not in names:
+                raise  # MLflow is the only record: the run must not start without it
+            import warnings  # mirroring: the run directory has the evidence, so the run goes on
+
+            warnings.warn(f"mlflow logging disabled for this run ({error}); the run directory has the evidence")
     return backends
 
 
