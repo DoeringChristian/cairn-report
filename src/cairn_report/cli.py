@@ -1,4 +1,4 @@
-"""Command line: `cairn-report init | new | build | serve | push | pull-comments | fetch | hub`."""
+"""Command line: `cairn-report init | new | build | serve | mlflow | push | fetch | hub`."""
 
 from __future__ import annotations
 
@@ -76,12 +76,6 @@ def cmd_push(args) -> None:
                           command=command or None, url=args.url, allow_http=args.allow_http))
 
 
-def cmd_pull_comments(args) -> None:
-    from .push import pull_comments
-
-    pull_comments(load_config(args.project), url=args.url, allow_http=args.allow_http)
-
-
 def cmd_fetch(args) -> None:
     from .push import connect, fetch
 
@@ -91,6 +85,26 @@ def cmd_fetch(args) -> None:
     except ValueError:
         pass
     fetch(connect(config, args.url, args.allow_http), args.name, args.destination)
+
+
+def cmd_mlflow(args) -> None:
+    from .mlflow_backend import start_server, stop_on_sigterm, stop_server, tracking_uri
+
+    stop_on_sigterm()
+    config = load_config(args.project)
+    settings = config.logger["mlflow"]
+    if not settings.get("serve"):
+        raise SystemExit("set [logger.mlflow] serve = true in cairn-report.toml to run the project's own MLflow server")
+    process = start_server(settings, config.project, host=args.host)
+    if process is None:
+        raise SystemExit(f"an MLflow server already answers on {tracking_uri(settings)}")
+    print(f"MLflow: {tracking_uri(settings)} (data in {config.project / settings.get('store', 'mlflow')}); Ctrl-C stops it", flush=True)
+    try:
+        process.wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_server(process)
 
 
 def cmd_hub_init(args) -> None:
@@ -129,6 +143,10 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--no-build", action="store_true", help="serve the existing build output")
     serve.set_defaults(run=cmd_serve)
 
+    tracker = commands.add_parser("mlflow", help="run the project's own MLflow tracking server ([logger.mlflow] serve = true)")
+    tracker.add_argument("--host", default="127.0.0.1")
+    tracker.set_defaults(run=cmd_mlflow)
+
     def hub_client(command):
         command.add_argument("--url", help="hub URL (default: [hub] url or CAIRN_HUB_URL)")
         command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local hub (sends the token unencrypted)")
@@ -139,8 +157,6 @@ def main(argv: list[str] | None = None) -> None:
     push.add_argument("--interval", type=float, help="seconds between pushes (default: [hub] interval or 30)")
     push.add_argument("command", nargs=argparse.REMAINDER, help="-- <command...>: run it, push while it runs and after it exits")
     push.set_defaults(run=cmd_push)
-    pull = hub_client(commands.add_parser("pull-comments", help="append comments written on the hub to reports/"))
-    pull.set_defaults(run=cmd_pull_comments)
     fetch = hub_client(commands.add_parser("fetch", help="download a project's latest files from the hub"))
     fetch.add_argument("name", help="project name on the hub")
     fetch.add_argument("destination", type=Path)

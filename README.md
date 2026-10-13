@@ -114,6 +114,62 @@ Front matter names a report (`title`, `subtitle`, `status`, and for directions a
 - `$...$` / `$$...$$` mathematics rendered to MathML;
 - `<!-- ... -->` comments, which never reach the page.
 
+## MLflow as the tracking backend
+
+`RunLogger` can write to MLflow instead of (or as well as) the run directory:
+
+```toml
+# cairn-report.toml
+[logger]
+backends = ["mlflow"]          # or ["local", "mlflow"] to mirror
+
+[logger.mlflow]
+tracking_uri = "https://mlflow.example.org"  # or MLFLOW_TRACKING_URI; credentials via MLflow's env vars
+experiment = "my-study"                      # default: the project folder name
+```
+
+Install `cairn-report[mlflow]`. One MLflow run is created per Hydra run
+directory (tagged `cairn.run_dir`); scalars become MLflow metrics, logged files
+become artifacts at the same paths, the Hydra config becomes parameters, and the
+run's indexes, `.hydra/`, `provenance/`, and `run.json` are uploaded when it
+ends, so an MLflow run has the layout of a local run. The MLflow status follows
+`run.json`. With MLflow alone, an MLflow error fails the logging call; when
+mirroring, the run directory stays the record.
+
+Reports read MLflow runs directly; nothing in them is specific to the backend:
+
+```markdown
+![Error histogram](run:demo/figures/errors.png)       <!-- local run or its MLflow run -->
+![Pinned](run:demo@2026-10-13_10-00-00/figures/errors.png)
+![By id](mlflow:<run-id>/plots/curve.png)             <!-- any MLflow run -->
+```
+
+`run_dir("demo")` and `read_scalars(...)` resolve the same way, and
+`mlflow_run(run_id=..., name=..., run_dir=...)` selects a run explicitly; runs
+not written by cairn-report work too. The build downloads each run once into
+`generated/mlflow/<run-id>/` (refreshed when the run changes), hashes what it
+reads, and lists the MLflow runs in the manifest. In the figure lightbox, the
+source panel links to the run in the MLflow UI.
+
+**One command for both servers.** With `serve = true`, the project runs its own
+tracking server (needs `cairn-report[mlflow-server]`):
+
+```toml
+[logger.mlflow]
+serve = true
+port = 5000          # experiments log to http://127.0.0.1:5000
+store = "mlflow"     # its data, in the project (git-ignore it like outputs/)
+```
+
+```bash
+cairn-report serve    # starts (or reuses) the MLflow server, builds, serves the reports
+cairn-report mlflow   # only the MLflow server, e.g. while experiments run
+```
+
+Both stop the MLflow server they started on Ctrl-C or SIGTERM. With
+`--host 0.0.0.0`, MLflow binds the same interface and report links point at the
+host the page was loaded from.
+
 ## Hub: one place for every project
 
 A hub stores the runs and reports of many projects, pushed from wherever they
@@ -152,7 +208,6 @@ token_file = "~/.config/cairn-report/hub-token"   # chmod 600; or CAIRN_HUB_TOKE
 cairn-report push                                  # one sync
 cairn-report push --watch                          # keep syncing every 30 s
 cairn-report push --watch -- python experiments/run.py experiment=main
-cairn-report pull-comments                         # bring hub comments into reports/
 cairn-report fetch my-study ./restore              # download everything back
 ```
 
@@ -183,8 +238,9 @@ reports before pushing (`cairn-report build`); the hub only serves them.
   the token is never accepted in `cairn-report.toml` or in URLs.
 
 Comments made on the hub are stored on the hub and shown together with the
-project's own comments. `cairn-report pull-comments` appends them to each
-report's `knowledge/comments.jsonl` without duplicates.
+project's own pushed comments. To act on them, use the page's Copy button and
+paste them to whoever (or whichever agent) updates the project; the hub does not
+write comments back into the project.
 
 ## Development
 

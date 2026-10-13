@@ -17,6 +17,16 @@ something, add a `cairn-report.toml` at the project root:
     token_file = "~/.config/cairn-report/hub-token"  # or CAIRN_HUB_TOKEN; never the token itself
     interval = 30                      # seconds between pushes with --watch
 
+    [logger]
+    backends = ["local"]               # "local", "mlflow", or both
+    [logger.mlflow]
+    tracking_uri = "https://mlflow.example.org"  # default: MLFLOW_TRACKING_URI; credentials via MLflow's env vars
+    experiment = "my-study"            # default: the project folder name
+    cache_dir = "generated/mlflow"     # where reports keep downloaded MLflow runs
+    serve = true                       # run the project's own tracking server (instead of tracking_uri)
+    port = 5000                        # its port; `cairn-report serve` starts it next to the reports
+    store = "mlflow"                   # its data folder in the project
+
 The project root is the nearest folder, starting at the working directory, that
 contains `cairn-report.toml`, `pixi.toml`, or `pyproject.toml`.
 """
@@ -40,6 +50,7 @@ class Config:
     extra_css: tuple[Path, ...] = field(default_factory=tuple)
     template_dir: Path | None = None
     hub: dict = field(default_factory=dict)
+    logger: dict = field(default_factory=lambda: {"backends": ["local"], "mlflow": {}})
 
     @property
     def source(self) -> Path | None:
@@ -61,7 +72,7 @@ def load_config(project: Path | str | None = None) -> Config:
     data: dict = {}
     if (root / CONFIG_FILE).is_file():
         data = tomllib.loads((root / CONFIG_FILE).read_text())
-    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub"}
+    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub", "logger"}
     if unknown:
         raise ValueError(f"{root / CONFIG_FILE}: unknown keys {sorted(unknown)}")
     style = data.get("style", {})
@@ -75,6 +86,16 @@ def load_config(project: Path | str | None = None) -> Config:
     unknown_hub = set(hub) - {"url", "project", "token_file", "interval"}
     if unknown_hub:
         raise ValueError(f"{root / CONFIG_FILE}: unknown [hub] keys {sorted(unknown_hub)}")
+
+    logger = data.get("logger", {})
+    mlflow = logger.get("mlflow", {})
+    unknown_logger = (set(logger) - {"backends", "mlflow"}) | (set(mlflow) - {"tracking_uri", "experiment", "cache_dir", "serve", "port", "store"})
+    if unknown_logger:
+        raise ValueError(f"{root / CONFIG_FILE}: unknown [logger] keys {sorted(unknown_logger)} "
+                         "(MLflow credentials belong in MLFLOW_TRACKING_TOKEN or MLFLOW_TRACKING_USERNAME/PASSWORD)")
+    backends = logger.get("backends", ["local"])
+    if not isinstance(backends, list) or not backends or set(backends) - {"local", "mlflow"}:
+        raise ValueError(f"{root / CONFIG_FILE}: [logger] backends must list 'local' and/or 'mlflow'")
 
     def path(value: str | None, default: str | None) -> Path | None:
         if value is None and default is None:
@@ -99,4 +120,5 @@ def load_config(project: Path | str | None = None) -> Config:
         extra_css=css,
         template_dir=template_dir,
         hub=dict(hub),
+        logger={"backends": backends, "mlflow": dict(mlflow)},
     )

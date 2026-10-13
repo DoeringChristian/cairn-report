@@ -135,6 +135,7 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 .lightbox-trace[hidden] { display: none; }
 .lightbox-trace > div { display: contents; }
 .lightbox-trace dt { color: #aab5af; font-size: 10px; font-weight: 700; letter-spacing: .08em; line-height: 1.8; text-transform: uppercase; white-space: nowrap; }
+.lightbox-trace dd a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .lightbox-trace dd { min-width: 0; margin: 0; color: #e8eee9; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; user-select: all; }
 .lightbox-heading { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 16px 0 5px; }
 .stage .lightbox-heading h3 { margin: 0; }

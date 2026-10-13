@@ -16,6 +16,13 @@ append-only JSON Lines, so nothing already written is ever rewritten:
       artifacts/<name>.*   any other evidence: models, animations, archives
       logs/<name>.txt      human-readable logs
 
+Where the evidence goes is set by `[logger] backends` in cairn-report.toml:
+"local" (the default) writes the files above into the run directory, "mlflow"
+sends the same scalars and files to an MLflow tracking server (see
+`cairn_report.mlflow_backend`), and both may be combined. With "local" among
+them, the run directory stays the record and an MLflow error only warns; with
+"mlflow" alone, an MLflow error fails the call, so no evidence is lost silently.
+
 Read them back with `read_scalars(run_dir)` (latest value per name) and
 `read_artifacts(run_dir)` (latest entry per path); a truncated last line from a
 crash is ignored.
@@ -123,11 +130,69 @@ def _plain(value: Any) -> Any:
     return value
 
 
+class LocalBackend:
+    """Evidence files and both indexes in the run directory."""
+
+    name = "local"
+
+    def __init__(self, root: Path):
+        self.root = root
+
+    def scalar(self, event: dict) -> None:
+        _append(self.root / METRICS, event)
+
+    def file(self, relative: str, data: bytes, entry: dict) -> None:
+        _atomic_write(self.root / relative, data)
+        _append(self.root / ARTIFACTS, entry)
+
+    def finish(self) -> None:
+        pass
+
+
+def _backends(root: Path, project: Path, names: list[str] | None) -> list:
+    from .config import load_config
+
+    settings = load_config(project).logger
+    names = names if names is not None else settings["backends"]
+    unknown = set(names) - {"local", "mlflow"}
+    if unknown or not names:
+        raise ValueError(f"logger backends must be a non-empty subset of ['local', 'mlflow'], got {names}")
+    backends = []
+    if "local" in names:
+        backends.append(LocalBackend(root))
+    if "mlflow" in names:
+        from .mlflow_backend import MLflowBackend
+
+        backends.append(MLflowBackend.attach(root, project, settings["mlflow"], required="local" not in names))
+    return backends
+
+
 class RunLogger:
-    def __init__(self, output_dir: Path | str):
+    def __init__(self, output_dir: Path | str, backends: list[str] | None = None):
+        """One logger per run directory; `backends` overrides `[logger] backends` from the config."""
         self.root = Path(output_dir).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.project = _project_root(self.root)
+        self.backends = _backends(self.root, self.project, backends)
+        self._warned: set[str] = set()
+
+    def _emit(self, method: str, *args) -> None:
+        local = any(backend.name == "local" for backend in self.backends)
+        for backend in self.backends:
+            try:
+                getattr(backend, method)(*args)
+            except Exception as error:
+                if not local or backend.name == "local":
+                    raise  # no complete local record: the error must surface
+                if backend.name not in self._warned:  # the run directory has everything; keep the run going
+                    self._warned.add(backend.name)
+                    import warnings
+
+                    warnings.warn(f"{backend.name} logging failed ({error}); the run directory still has the evidence")
+
+    def close(self) -> None:
+        """Flush and finish every backend (also done automatically at exit)."""
+        self._emit("finish")
 
     # ---------------------------------------------------------------- scalars
 
@@ -149,7 +214,7 @@ class RunLogger:
         }
         if not finite:
             event["nonfinite"] = repr(float(number))
-        _append(self.root / METRICS, event)
+        self._emit("scalar", event)
 
     def scalars(self, values: Mapping[str, Number], step: int | None = None) -> None:
         for name, value in values.items():
@@ -281,18 +346,11 @@ class RunLogger:
         producer: dict | None = None,
     ) -> Path:
         self._check(name)
-        path = self.root / relative
-        _atomic_write(path, data)
-        self._record(name, kind, relative, None, self._origin(), producer)
-        return path
-
-    def _record(self, name, kind, relative, step, origin, producer=None) -> None:
-        entry = {"name": name, "kind": kind, "path": relative, "time": _now(), "origin": origin}
-        if step is not None:
-            entry["step"] = step
+        entry = {"name": name, "kind": kind, "path": relative, "time": _now(), "origin": self._origin()}
         if producer:
             entry["producer"] = producer
-        _append(self.root / ARTIFACTS, entry)
+        self._emit("file", relative, data, entry)
+        return self.root / relative
 
     def _relative(self, file: str) -> str:
         path = Path(file).resolve()

@@ -1,10 +1,9 @@
-"""Push a project's runs and reports to a hub, pull hub comments back, or restore from a hub.
+"""Push a project's runs and reports to a hub, or restore a project from a hub.
 
     cairn-report push                          one sync of outputs/, reports/, and the built reports
     cairn-report push --watch                  sync every [hub] interval seconds until stopped
     cairn-report push --watch -- <command...>  run a command (e.g. an experiment), sync while it
                                                runs and once more after it exits; returns its exit code
-    cairn-report pull-comments                 append comments written on the hub to reports/
     cairn-report fetch <project> <dest>        download a project's latest files from the hub
 
 Only changed files are sent: contents are addressed by SHA-256, the hub reports
@@ -29,7 +28,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
-from . import comments
 from .config import Config
 
 TOKEN_ENV, URL_ENV = "CAIRN_HUB_TOKEN", "CAIRN_HUB_URL"
@@ -343,36 +341,7 @@ def push(config: Config, watch: bool = False, interval: float | None = None, com
     return process.returncode if process else 0
 
 
-# ------------------------------------------------------------ pull and fetch
-
-
-def local_reports(config: Config) -> dict[str, Path]:
-    reports = {"overview": config.reports_dir} if (config.reports_dir / "report.md").is_file() else {}
-    if config.reports_dir.is_dir():
-        for folder in sorted(config.reports_dir.iterdir()):
-            if folder.is_dir() and (folder / "report.md").is_file() and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", folder.name):
-                reports.setdefault(folder.name, folder)
-    return reports
-
-
-def pull_comments(config: Config, url: str | None = None, allow_http: bool = False) -> int:
-    """Append comments written on the hub to each report's comments.jsonl (no duplicates)."""
-    hub = connect(config, url, allow_http)
-    name = project_name(config)
-    total = 0
-    for slug, folder in local_reports(config).items():
-        status, remote = hub.json("GET", f"/api/v1/projects/{name}/comments/{slug}", expect=(200, 404))
-        if status != 200 or not remote:
-            continue
-        log = folder / "knowledge" / "comments.jsonl"
-        existing = {comments.canonical(row) for row in comments.read_log(log)}
-        new = [row for row in remote if comments.canonical(row) not in existing]
-        comments.append(log, new)
-        if new:
-            print(f"{slug}: {len(new)} new comment records -> {log.relative_to(config.project)}")
-        total += len(new)
-    print(f"pulled {total} comment records from {hub.url}")
-    return total
+# -------------------------------------------------------------------- fetch
 
 
 def fetch(hub: Hub, name: str, destination: Path, site_dir: str = "generated/reports") -> int:

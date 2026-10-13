@@ -89,6 +89,14 @@ function applyTraceState() {
 }
 function toggleTrace() { traceOpen = !traceOpen; try { localStorage.setItem("report-trace-open", traceOpen ? "1" : "0"); } catch (_) {} applyTraceState(); }
 $("#lightbox-info").onclick = toggleTrace;
+/* A tracking server started next to the reports is recorded as 127.0.0.1; from another machine
+   (report-host), point the link at the host this page was loaded from. */
+function reachable(url) {
+  if (!url) return url;
+  try { const target = new URL(url); const loopback = ["127.0.0.1", "localhost", "[::1]"];
+    if (loopback.includes(target.hostname) && !loopback.includes(location.hostname)) target.hostname = location.hostname;
+    return target.href; } catch (_) { return url; }
+}
 function renderTrace(trace) {
   const rows = [
     ["File", trace.path],
@@ -98,10 +106,16 @@ function renderTrace(trace) {
     ["Generated", trace.generated],
     ["Read in block", (trace.inputs || []).join(", ")],
     ["Commit", trace.revision ? trace.revision.slice(0, 12) + (trace.uncommitted ? ` + ${trace.uncommitted}` : "") : ""],
+    ["MLflow", trace.mlflow ? {text: `run ${trace.mlflow.run_id}`, href: reachable(trace.mlflow.url)} : ""],
     ["Report", trace.report],
   ].filter(([, value]) => value);
   const list = $("#lightbox-trace"); list.replaceChildren();
-  rows.forEach(([label, value]) => { const row = el("div"); row.append(el("dt", null, label), el("dd", null, value)); list.append(row); });
+  rows.forEach(([label, value]) => {
+    const row = el("div"), cell = el("dd");
+    if (value.href && /^https?:\/\//.test(value.href)) { const link = el("a", null, value.text); link.href = value.href; link.target = "_blank"; link.rel = "noopener noreferrer"; cell.append(link); }
+    else cell.textContent = value.text ?? value;
+    row.append(el("dt", null, label), cell); list.append(row);
+  });
   applyTraceState();
 }
 function syncLightboxComment() { const button = $("#lightbox-comment"), figure = figures[active]; const has = Boolean(figure && commentFor(`figure:${figure.id}`)); button.classList.toggle("has-comment", has); button.title = has ? "Edit figure comment" : "Comment on figure"; }

@@ -310,6 +310,8 @@ class Build:
         self.typed: list[dict] = []
         self.sources: dict[str, str] = {}
         self.runs: set[str] = set()
+        self.mlflow_runs: dict[str, dict] = {}
+        self.mirrors: dict[str, dict | None] = {}
         self.ids: set[str] = set()
         self.findings: list[dict] = []
         self.figures = 0
@@ -362,68 +364,151 @@ class Build:
         return {}
 
     def run_trace(self, relative: Path, line: int) -> dict:
-        """Where a run file came from: its run, the code that wrote it, and the commit.
+        """Where a run file came from: its run, the code that wrote it, the commit, and its MLflow run.
 
         Refuses files from runs that did not complete. Reads the run logger's
         artifacts.jsonl (origin and producer) and the run's provenance commit.
         """
         trace = {"path": relative.as_posix()}
-        parts = relative.parts
-        if parts[0] != "outputs" or len(parts) < 4:
-            return trace
         project = PROJECT.resolve()
-        study = project / Path(*parts[:3])
-        run_root = next(
-            (
-                folder
-                for folder in (project / relative).parents
-                if (folder / "run.json").exists()
-                and (folder == study or study in folder.parents)
-            ),
-            study,
-        )
-        trace["run"] = run_root.relative_to(project).as_posix()
+        file = project / relative
+        run_root = self.run_root(file)
+        if run_root is None:
+            return trace
         status = self.require_run(run_root, f"{self.markdown}:{line}")
-        inside = (project / relative).relative_to(run_root).as_posix()
+        inside = file.relative_to(run_root).as_posix()
+        mlflow = json.loads((run_root / "mlflow-run.json").read_text()) if (run_root / "mlflow-run.json").is_file() else None
+        trace["run"] = (mlflow or {}).get("run_dir") or run_root.relative_to(project).as_posix()
+        trace["path"] = inside if mlflow else trace["path"]
+        trace["label"] = f"{trace['run']}/{inside}" if mlflow else relative.as_posix()
         entry = self.artifact_index(run_root).get(inside)
         if entry:
             trace["origin"] = entry.get("origin")
             if entry.get("producer"):
                 trace["producer"] = entry["producer"]
         manifest = run_root / "provenance" / "manifest.json"
-        commit = (
-            json.loads(manifest.read_text()).get("commit")
-            if manifest.exists()
-            else None
-        )
+        commit = json.loads(manifest.read_text()).get("commit") if manifest.exists() else None
         commit = commit or status.get("code_revision")
         if commit:
             trace["revision"] = commit
             patch = run_root / "provenance" / "working-tree.patch"
             if patch.exists() and patch.stat().st_size:
-                trace["uncommitted"] = (patch.relative_to(project)).as_posix()
+                trace["uncommitted"] = patch.relative_to(project).as_posix()
+        if mlflow is None and self.uses_mlflow():
+            mlflow = self.mirrored_run(run_root)
+        if mlflow:
+            trace["mlflow"] = mlflow_link(mlflow, inside)
         return trace
 
+    def run_root(self, file: Path) -> Path | None:
+        """The completed run (or study trial) a file belongs to: under outputs/ or an MLflow snapshot."""
+        project = PROJECT.resolve()
+        relative = file.relative_to(project)
+        cache = (project / self.mlflow_settings().get("cache_dir", "generated/mlflow")).resolve()
+        if cache in file.parents:
+            return cache / file.relative_to(cache).parts[0]
+        parts = relative.parts
+        if parts[0] != OUTPUTS.resolve().relative_to(project).parts[0] or len(parts) < 4:
+            return None
+        study = project / Path(*parts[:3])
+        return next(
+            (folder for folder in file.parents if (folder / "run.json").exists() and (folder == study or study in folder.parents)),
+            study,
+        )
+
+    def label(self, source: str) -> str:
+        """A read file as readers know it: MLflow snapshot files by their run, not by cache path."""
+        cache = (PROJECT.resolve() / self.mlflow_settings().get("cache_dir", "generated/mlflow")).resolve()
+        file = PROJECT.resolve() / source
+        if cache not in file.parents:
+            return source
+        run_id, *inside = file.relative_to(cache).parts
+        record = self.mlflow_runs.get(run_id, {})
+        return f"{record.get('run_dir') or 'mlflow:' + run_id} (MLflow)/{'/'.join(inside)}"
+
+    def mirrored_run(self, run_root: Path) -> dict | None:
+        """The MLflow copy of a local run (both backends), found by its run directory tag; best effort."""
+        key = run_root.relative_to(PROJECT.resolve()).as_posix()
+        if key not in self.mirrors:
+            try:
+                from .mlflow_backend import find_run
+
+                _, uri, run = find_run(self.mlflow_settings(), PROJECT, run_dir=key)
+                self.mirrors[key] = {"run_id": run.info.run_id, "tracking_uri": uri, "experiment_id": run.info.experiment_id}
+            except (Exception, SystemExit):
+                self.mirrors[key] = None  # the local run is the record; a missing MLflow copy only loses the link
+        return self.mirrors[key]
+
+    # ------------------------------------------------------------ run selection
+
+    def uses_mlflow(self) -> bool:
+        return CONFIG is not None and "mlflow" in CONFIG.logger["backends"]
+
+    def mlflow_settings(self) -> dict:
+        return CONFIG.logger["mlflow"] if CONFIG else {}
+
+    def resolve_run(self, name: str, timestamp: str, where: str) -> Path:
+        """outputs/<name>/<timestamp>, or its MLflow run when the evidence is not local."""
+        local = OUTPUTS / name / timestamp
+        if self.uses_mlflow() and not (local.exists() and self.has_evidence(local.resolve())):
+            if local.exists():
+                return self.mlflow_run(where, run_dir=local.resolve().relative_to(PROJECT.resolve()).as_posix())
+            return self.mlflow_run(where, name=name)
+        resolved = local.resolve(strict=True)
+        self.require_run(resolved, where)
+        return resolved
+
+    @staticmethod
+    def has_evidence(folder: Path) -> bool:
+        return (folder / METRICS).is_file() or (folder / ARTIFACTS).is_file()
+
+    def mlflow_run(self, where: str, **query) -> Path:
+        from .mlflow_backend import snapshot
+
+        cache = (PROJECT / self.mlflow_settings().get("cache_dir", "generated/mlflow")).resolve()
+        folder, record = snapshot(self.mlflow_settings(), PROJECT, cache, **query)
+        self.require_run(folder, where)
+        self.mlflow_runs[record["run_id"]] = {**record, "snapshot": folder.relative_to(PROJECT.resolve()).as_posix()}
+        return folder
+
+    # ------------------------------------------------------------------ figures
+
+    RUN_REFERENCE = re.compile(r"run:([a-z0-9][a-z0-9_.-]*)(?:@([^/]+))?/(.+)")
+    MLFLOW_REFERENCE = re.compile(r"mlflow:([0-9a-zA-Z]+)/(.+)")
+
     def asset(self, src: str, line: int) -> tuple[str, str, dict]:
-        """Copy a local file referenced from report.md into generated/assets/."""
-        if re.match(r"^[a-z]+:", src) or src.startswith("//"):
-            raise ValueError(
-                f"{self.markdown}:{line}: figures must be local files, got {src!r}"
-            )
-        if not (self.content_root / src).exists():
-            raise ValueError(
-                f"{self.markdown}:{line}: missing figure {src!r} (paths are relative to the report)"
-            )
-        resolved = self.track(self.content_root / src)
+        """Copy a figure into generated/assets/: a path relative to the report, `run:<name>[@<timestamp>]/<file>`
+        (local or MLflow, per the logger backends), or `mlflow:<run-id>/<file>`."""
+        where = f"{self.markdown}:{line}"
+        run_match, mlflow_match = self.RUN_REFERENCE.fullmatch(src), self.MLFLOW_REFERENCE.fullmatch(src)
+        if run_match:
+            name, timestamp, inside = run_match.groups()
+            file = self.resolve_run(name, timestamp or "latest", where) / inside
+        elif mlflow_match:
+            run_id, inside = mlflow_match.groups()
+            file = self.mlflow_run(where, run_id=run_id) / inside
+        elif re.match(r"^[a-z]+:", src) or src.startswith("//"):
+            raise ValueError(f"{where}: figures must be local files, run:<name>/<file>, or mlflow:<run-id>/<file>; got {src!r}")
+        else:
+            file = self.content_root / src
+        if not file.exists():
+            raise ValueError(f"{where}: missing figure {src!r} (paths are relative to the report)")
+        resolved = self.track(file)
         relative = resolved.relative_to(PROJECT.resolve())
         target = self.generated / ASSETS / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(resolved, target)
-        return (
-            f"{ASSETS}/{relative.as_posix()}",
-            relative.as_posix(),
-            self.run_trace(relative, line),
-        )
+        trace = self.run_trace(relative, line)
+        return f"{ASSETS}/{relative.as_posix()}", trace.get("label", relative.as_posix()), trace
+
+
+def mlflow_link(record: dict, inside: str) -> dict:
+    """An MLflow run for the lightbox: its id and, for an HTTP(S) tracking server, the run's page in the UI."""
+    link = {"run_id": record["run_id"], "file": inside}
+    uri = str(record.get("tracking_uri", ""))
+    if uri.startswith(("http://", "https://")):
+        link["url"] = f"{uri.rstrip('/')}/#/experiments/{record['experiment_id']}/runs/{record['run_id']}/artifacts"
+    return link
 
 
 def figure_card(
@@ -468,10 +553,12 @@ def render(build: Build) -> str:
     metrics: list[str] = []
 
     def run_dir(name: str, timestamp: str = "latest") -> Path:
-        """Resolve outputs/<name>/<timestamp> once; refuse runs that did not complete."""
-        resolved = (OUTPUTS / name / timestamp).resolve(strict=True)
-        build.require_run(resolved, f"{path}: run_dir({name!r})")
-        return resolved
+        """Resolve outputs/<name>/<timestamp> once (locally or from MLflow); refuse runs that did not complete."""
+        return build.resolve_run(name, timestamp, f"{path}: run_dir({name!r})")
+
+    def mlflow_run(run_id: str | None = None, name: str | None = None, run_dir: str | None = None) -> Path:
+        """A finished MLflow run by id, run directory, or run name, read like a run directory."""
+        return build.mlflow_run(f"{path}: mlflow_run({run_id or run_dir or name!r})", run_id=run_id, name=name, run_dir=run_dir)
 
     def run_trials(study: Path) -> list[dict]:
         """Every trial of a completed Hydra multirun study, in trial order.
@@ -519,6 +606,7 @@ def render(build: Build) -> str:
         "PROJECT_ROOT": PROJECT,
         "META": build.meta,
         "run_dir": run_dir,
+        "mlflow_run": mlflow_run,
         "run_trials": run_trials,
         "read_json": read_json,
         "read_csv": read_csv,
@@ -713,7 +801,7 @@ def render(build: Build) -> str:
             fid = build.unique(
                 f"fig-{slug(label)}" if label else f"fig-line-{line}-{position}", line
             )
-            inputs = sorted(set(build.sources) - read_before)
+            inputs = sorted(build.label(source) for source in set(build.sources) - read_before)
             cards.append(
                 figure_card(
                     build,
@@ -970,8 +1058,10 @@ def build_report(slug: str, folder: Path) -> Build:
         "code_revision": code_revision(),
         "markdown_source": str(build.markdown.relative_to(PROJECT)),
         "markdown_sha256": digest(build.markdown),
-        "selection": "outputs/<run-name>/latest resolved once at build time; runs need run.json status completed",
+        "selection": "outputs/<run-name>/latest resolved once at build time (or the matching MLflow run when the "
+                     "evidence is in MLflow); runs need run.json status completed",
         "source_runs": sorted(build.runs),
+        "mlflow_runs": sorted(build.mlflow_runs.values(), key=lambda run: run["run_id"]),
         "report_links": build.links,
         "typed_numbers": build.typed,
         "sources": dict(sorted(build.sources.items())),

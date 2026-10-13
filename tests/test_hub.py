@@ -12,7 +12,7 @@ from cairn_report.cli import main
 from cairn_report.config import load_config
 from cairn_report.hub import make_hub
 from cairn_report.logger import RunLogger
-from cairn_report.push import Hub, Pusher, fetch, pull_comments, push
+from cairn_report.push import Hub, Pusher, fetch, push
 
 TOKEN = "t" * 40
 needs_graphviz = pytest.mark.skipif(shutil.which("dot") is None, reason="Graphviz `dot` not installed")
@@ -157,13 +157,8 @@ def test_reports_served_and_comments_round_trip(hub, project):
     assert status == 201
     folded = json.loads(call(hub, "GET", api)[2])
     assert any(row["text"] == "Check the baseline." for row in folded)
+    assert not (project / "reports" / "local-fitting" / "knowledge" / "comments.jsonl").read_text().count("Check the baseline.")
 
-    assert pull_comments(config) == 1
-    assert pull_comments(config) == 0
-    log = project / "reports" / "local-fitting" / "knowledge" / "comments.jsonl"
-    assert "Check the baseline." in log.read_text()
-    push(config)  # the local log now holds the hub's record too; the merged view has no duplicate
-    assert len(json.loads(call(hub, "GET", api)[2])) == len(folded)
 
 
 @needs_graphviz

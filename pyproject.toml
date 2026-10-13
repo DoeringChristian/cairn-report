@@ -1,6 +1,6 @@
 [project]
 name = "cairn-report"
-version = "0.3.0"
+version = "0.4.0"
 description = "Commentable research reports from Markdown and Hydra run outputs: overview and direction reports, live run values, figure provenance, and an append-only comment log."
 readme = "README.md"
 authors = [
@@ -21,6 +21,14 @@ cairn-report = "cairn_report.cli:main"
 
 [project.urls]
 Repository = "https://github.com/DoeringChristian/cairn-report"
+
+[project.optional-dependencies]
+mlflow = [
+    "mlflow-skinny>=2.12",
+]
+mlflow-server = [
+    "mlflow>=3",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.22,<0.13.0"]

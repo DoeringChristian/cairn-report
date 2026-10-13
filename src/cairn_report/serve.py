@@ -153,6 +153,26 @@ def serve(config: Config | None = None, host: str = "127.0.0.1", port: int = 800
     global REPORTS_ROOT, OUTPUT_ROOT
     config = config or load_config()
     REPORTS_ROOT, OUTPUT_ROOT = config.reports_dir, config.output_dir
+    mlflow = config.logger["mlflow"]
+    tracker = None
+    if "mlflow" in config.logger["backends"] and mlflow.get("serve"):
+        from .mlflow_backend import start_server, stop_on_sigterm, stop_server, tracking_uri
+
+        stop_on_sigterm()
+        tracker = start_server(mlflow, config.project, host=host)  # same interface as the reports
+        uri = tracking_uri(mlflow)
+        print(f"MLflow: {uri.replace('127.0.0.1', host) if host != '0.0.0.0' else uri} "
+              f"({'started' if tracker else 'already running'}; data in {config.project / mlflow.get('store', 'mlflow')})", flush=True)
+    try:
+        _serve(config, host, port, strict_port, build)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if tracker:
+            stop_server(tracker)
+
+
+def _serve(config: Config, host: str, port: int, strict_port: bool, build: bool) -> None:
     if build:
         builder.build_all(config)
     Handler.reports = discover_reports()

@@ -320,14 +320,11 @@ class HubHandler(BaseHTTPRequestHandler):
             return self._index()
         if path == "/api/v1/projects":
             return self._json(200, [self._project_summary(name) for name in self.store.project_names()])
-        match = re.fullmatch(r"/api/v1/projects/([^/]+)/(tree|comments/([a-z0-9][a-z0-9-]*))", path)
+        match = re.fullmatch(r"/api/v1/projects/([^/]+)/tree", path)
         if match and PROJECT_NAME.fullmatch(match.group(1)):
-            name = match.group(1)
-            if name not in self.store.project_names():
-                return self._json(404, {"error": f"no project {name!r}"})
-            if match.group(2) == "tree":
-                return self._json(200, list(self.store.tree(name).values()))
-            return self._json(200, comments.read_log(self.store.comment_log(name, match.group(3))))
+            if match.group(1) not in self.store.project_names():
+                return self._json(404, {"error": f"no project {match.group(1)!r}"})
+            return self._json(200, list(self.store.tree(match.group(1)).values()))
         match = re.fullmatch(r"/files/([^/]+)/(.+)", path)
         if match and self._known(match.group(1)):
             entry = self.store.resolve(match.group(1), match.group(2))
