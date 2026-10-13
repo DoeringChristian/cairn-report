@@ -44,6 +44,7 @@ from plotly.offline import get_plotlyjs, get_plotlyjs_version
 
 from . import __version__
 from .config import Config, load_config
+from .logger import ARTIFACTS, METRICS, fold_artifacts, fold_scalars, read_jsonl
 
 PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
@@ -253,17 +254,6 @@ def typed_numbers(markdown: str) -> list[dict]:
     return hits
 
 
-def read_jsonl(path: Path) -> list[dict]:
-    """Complete records of a JSON Lines file; a torn final line from a crash is skipped."""
-    records = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
-
-
 def discover_reports() -> dict[str, Path]:
     """Research directions (reports/<slug>/report.md) first, then the overview (reports/report.md)."""
     if not REPORTS_ROOT.is_dir():
@@ -353,9 +343,9 @@ class Build:
 
     def artifact_index(self, run_root: Path) -> dict[str, dict]:
         """Latest artifacts.jsonl entry per path (append-only index written by RunLogger)."""
-        index = run_root / "artifacts.jsonl"
+        index = run_root / ARTIFACTS
         if index.is_file():
-            return {entry["path"]: entry for entry in read_jsonl(self.track(index))}
+            return fold_artifacts(read_jsonl(self.track(index)))
         legacy = run_root / "artifacts.json"  # older runs: one rewritten JSON document
         if legacy.is_file():
             return {entry["path"]: entry for entry in json.loads(self.track(legacy).read_text()).get("artifacts", [])}
@@ -504,7 +494,7 @@ def render(build: Build) -> str:
 
     def read_scalars(run):
         """Latest value per scalar name from a run's append-only metrics.jsonl."""
-        return {event["name"]: event["value"] for event in read_events(Path(run) / "metrics.jsonl")}
+        return fold_scalars(read_events(Path(run) / METRICS))
 
     def metric(label: str, value, detail: str = "", fmt: str | None = None):
         shown = format(value, fmt) if fmt else str(value)

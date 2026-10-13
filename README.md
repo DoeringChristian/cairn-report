@@ -76,6 +76,29 @@ Extra stylesheets override the default through its CSS variables (`--paper`,
 whole page files. Every build records the package version, its install commit,
 and any style overrides in `generated/reports/<slug>/manifest.json`.
 
+## Logging runs
+
+Experiments write their evidence with `RunLogger`, one per Hydra run directory.
+The same module defines the run file format the reports read:
+
+```python
+from cairn_report.logger import RunLogger, read_artifacts, read_scalars
+
+log = RunLogger(output_dir)
+log.scalar("rmse", rmse)                     # single value; step=... for a series
+log.table("cases", rows)                     # tables/cases.csv
+log.figure("errors", error_histogram, errs)  # figures/errors.png, records the plot function
+log.plotly("trace", spec)                    # figures/trace.plotly.json
+log.json("summary", result)                  # data/summary.json
+log.image("sample", array)                   # images/sample.png
+log.artifact("model", checkpoint_path)       # artifacts/model.<suffix>
+log.text("solver", solver_log)               # logs/solver.txt
+```
+
+`metrics.jsonl` and `artifacts.jsonl` are append-only; each event records the
+code location that logged it. `read_scalars(run)` and `read_artifacts(run)`
+return the latest value per name and the latest entry per file.
+
 ## Writing reports
 
 Front matter names a report (`title`, `subtitle`, `status`, and for directions a
