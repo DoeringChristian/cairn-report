@@ -83,7 +83,7 @@ Promise.all([reportData, narrativeText]).then(([data, narrative]) => {
 function revealHashTarget() {
   const id = decodeURIComponent(location.hash.slice(1)); const target = id && document.getElementById(id);
   if (!target) return;
-  target.scrollIntoView({block: "center"}); target.classList.add("is-link-target");
+  target.scrollIntoView({block: "center", behavior: "instant"}); target.classList.add("is-link-target");  // instant: an anchor must not depend on an animation finishing
   setTimeout(() => target.classList.remove("is-link-target"), 2200);
 }
 window.addEventListener("hashchange", revealHashTarget);

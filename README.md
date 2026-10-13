@@ -23,7 +23,7 @@ In a pixi project:
 graphviz = "*"   # only needed for Graphviz diagram fences
 
 [pypi-dependencies]
-cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.6.2" }
+cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.6.3" }
 
 [tasks]
 report-build = "cairn-report build"

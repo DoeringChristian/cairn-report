@@ -269,7 +269,7 @@ wheels = [
 
 [[package]]
 name = "cairn-report"
-version = "0.6.2"
+version = "0.6.3"
 source = { editable = "." }
 dependencies = [
     { name = "latex2mathml" },
