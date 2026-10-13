@@ -32,7 +32,7 @@ def test_build_samples(project):
     out = project / "generated" / "reports"
     data = json.loads((out / "local-fitting" / "report-data.json").read_text())
     assert data["summary"] and "{{" not in data["summary"]
-    assert data["overview"]["href"] == "/#direction-local-fitting"
+    assert data["overview"]["href"] == "#direction-local-fitting"  # relative to the site root
     manifest = json.loads((out / "overview" / "manifest.json").read_text())
     assert manifest["tooling"]["package"] == "cairn-report"
     assert "direction-local-fitting" in (out / "overview" / "narrative.html").read_text()

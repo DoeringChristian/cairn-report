@@ -1,4 +1,4 @@
-"""Command line: `cairn-report init | new | build | serve`."""
+"""Command line: `cairn-report init | new | build | serve | push | pull-comments | fetch | hub`."""
 
 from __future__ import annotations
 
@@ -68,6 +68,47 @@ def cmd_serve(args) -> None:
     serve(load_config(args.project), host=args.host, port=args.port, strict_port=args.strict_port, build=not args.no_build)
 
 
+def cmd_push(args) -> None:
+    from .push import push
+
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    raise SystemExit(push(load_config(args.project), watch=args.watch, interval=args.interval,
+                          command=command or None, url=args.url, allow_http=args.allow_http))
+
+
+def cmd_pull_comments(args) -> None:
+    from .push import pull_comments
+
+    pull_comments(load_config(args.project), url=args.url, allow_http=args.allow_http)
+
+
+def cmd_fetch(args) -> None:
+    from .push import connect, fetch
+
+    config = None
+    try:
+        config = load_config(args.project)
+    except ValueError:
+        pass
+    fetch(connect(config, args.url, args.allow_http), args.name, args.destination)
+
+
+def cmd_hub_init(args) -> None:
+    from .hub import init_root
+
+    token_file = init_root(args.root)
+    print(f"Hub root: {args.root.resolve()}")
+    print(f"Token: {token_file} (owner-only). Give clients CAIRN_HUB_TOKEN or a copy of this file.")
+    print(f"Serve it with: cairn-report hub serve {args.root}")
+
+
+def cmd_hub_serve(args) -> None:
+    from .hub import serve_hub
+
+    serve_hub(args.root, host=args.host, port=args.port, token_file=args.token_file,
+              max_blob=int(args.max_blob_gb * 1024**3), secure_cookie=not args.insecure_cookies)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="cairn-report", description="Commentable research reports from Markdown and run outputs.")
     parser.add_argument("--version", action="version", version=f"cairn-report {__version__}")
@@ -87,6 +128,37 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--strict-port", action="store_true", help="fail instead of moving to the next free port")
     serve.add_argument("--no-build", action="store_true", help="serve the existing build output")
     serve.set_defaults(run=cmd_serve)
+
+    def hub_client(command):
+        command.add_argument("--url", help="hub URL (default: [hub] url or CAIRN_HUB_URL)")
+        command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local hub (sends the token unencrypted)")
+        return command
+
+    push = hub_client(commands.add_parser("push", help="push runs and reports to the hub"))
+    push.add_argument("--watch", action="store_true", help="keep pushing every --interval seconds until stopped")
+    push.add_argument("--interval", type=float, help="seconds between pushes (default: [hub] interval or 30)")
+    push.add_argument("command", nargs=argparse.REMAINDER, help="-- <command...>: run it, push while it runs and after it exits")
+    push.set_defaults(run=cmd_push)
+    pull = hub_client(commands.add_parser("pull-comments", help="append comments written on the hub to reports/"))
+    pull.set_defaults(run=cmd_pull_comments)
+    fetch = hub_client(commands.add_parser("fetch", help="download a project's latest files from the hub"))
+    fetch.add_argument("name", help="project name on the hub")
+    fetch.add_argument("destination", type=Path)
+    fetch.set_defaults(run=cmd_fetch)
+
+    hub = commands.add_parser("hub", help="run a hub that stores many projects' runs and reports")
+    hub_commands = hub.add_subparsers(dest="hub_command", required=True)
+    hub_init = hub_commands.add_parser("init", help="create a hub data folder with a fresh token")
+    hub_init.add_argument("root", type=Path)
+    hub_init.set_defaults(run=cmd_hub_init)
+    hub_serve = hub_commands.add_parser("serve", help="serve a hub (put an HTTPS reverse proxy in front)")
+    hub_serve.add_argument("root", type=Path)
+    hub_serve.add_argument("--host", default="127.0.0.1")
+    hub_serve.add_argument("--port", type=int, default=8800)
+    hub_serve.add_argument("--token-file", type=Path, help="default: <root>/token (or CAIRN_HUB_TOKEN)")
+    hub_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
+    hub_serve.add_argument("--insecure-cookies", action="store_true", help="browser login over plain HTTP (SSH tunnel)")
+    hub_serve.set_defaults(run=cmd_hub_serve)
 
     args = parser.parse_args(argv)
     args.run(args)

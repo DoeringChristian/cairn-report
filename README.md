@@ -114,6 +114,78 @@ Front matter names a report (`title`, `subtitle`, `status`, and for directions a
 - `$...$` / `$$...$$` mathematics rendered to MathML;
 - `<!-- ... -->` comments, which never reach the page.
 
+## Hub: one place for every project
+
+A hub stores the runs and reports of many projects, pushed from wherever they
+run (a cluster, a workstation), and serves them behind one token.
+
+**Server**
+
+```bash
+cairn-report hub init /srv/cairn-hub     # data folder + a random token in /srv/cairn-hub/token
+cairn-report hub serve /srv/cairn-hub    # listens on 127.0.0.1:8800
+```
+
+Put an HTTPS reverse proxy in front, for example Caddy (forwards the Host header):
+
+```text
+hub.example.org {
+    reverse_proxy 127.0.0.1:8800
+}
+```
+
+Open `https://hub.example.org/` and enter the token once; the browser keeps an
+HttpOnly, SameSite=Strict session cookie. With only an SSH tunnel
+(`ssh -L 8800:127.0.0.1:8800 server`), start the hub with `--insecure-cookies`.
+
+**Client** (in each project):
+
+```toml
+# cairn-report.toml
+[hub]
+url = "https://hub.example.org"
+project = "my-study"                              # default: the folder name
+token_file = "~/.config/cairn-report/hub-token"   # chmod 600; or CAIRN_HUB_TOKEN
+```
+
+```bash
+cairn-report push                                  # one sync
+cairn-report push --watch                          # keep syncing every 30 s
+cairn-report push --watch -- python experiments/run.py experiment=main
+cairn-report pull-comments                         # bring hub comments into reports/
+cairn-report fetch my-study ./restore              # download everything back
+```
+
+In a cluster job, wrap the experiment so its data leaves the node while it runs
+and once more when it ends (also when the job is cancelled with SIGTERM):
+
+```bash
+pixi run cairn-report push --watch -- python experiments/run.py experiment=main
+```
+
+`push` sends `outputs/` (Hydra runs, including `.hydra/` and the `latest`
+links), `reports/` (sources and comment logs), and the built reports. Build
+reports before pushing (`cairn-report build`); the hub only serves them.
+
+**How data is kept safe**
+
+- Contents are addressed by SHA-256: the client uploads only what the hub lacks,
+  and the hub verifies every upload before storing it (written with fsync and
+  an atomic rename).
+- Nothing is overwritten or deleted on the hub: a changed file becomes a new
+  version in the project's append-only `files.jsonl`; files deleted on the
+  client stay on the hub. Back up the hub folder like any other data.
+- Interrupted uploads are retried on the next sync; the watch loop backs off
+  while the hub is unreachable and always attempts a final push.
+- The hub never builds reports or runs pushed code. Everyone who can push can
+  also publish pages on the hub, so give the token only to people you trust.
+- The client refuses plain HTTP to a non-local hub unless `--allow-http`, and
+  the token is never accepted in `cairn-report.toml` or in URLs.
+
+Comments made on the hub are stored on the hub and shown together with the
+project's own comments. `cairn-report pull-comments` appends them to each
+report's `knowledge/comments.jsonl` without duplicates.
+
 ## Development
 
 ```bash

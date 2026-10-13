@@ -1,10 +1,14 @@
 let figures = [], active = 0, zoom = 1, panX = 0, panY = 0, pendingSelection = null, comments = [], saveTimer = null;
 const $ = selector => document.querySelector(selector);
 const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
-const reportRoute = location.pathname.match(/^\/reports\/([a-z0-9][a-z0-9-]*)\//);
-const reportSlug = reportRoute?.[1] || "overview";  // the overview super-report is served at /
-const commentsApi = `/api/reports/${reportSlug}/comments`;
-const commentsStorageKey = `standalone-report-comments:${reportSlug}`;
+/* Directions live at <root>reports/<slug>/ and the overview at <root>; <root> is "/" on the
+   project server and "/p/<project>/" on a hub, so every server address starts from it. */
+const reportRoute = location.pathname.match(/^(.*\/)reports\/([a-z0-9][a-z0-9-]*)\/[^/]*$/);
+const reportSlug = reportRoute?.[2] || "overview";
+const siteRoot = reportRoute ? reportRoute[1] : location.pathname.replace(/[^/]*$/, "");
+const siteHref = href => href.startsWith("/") ? href : siteRoot + href;  // relative to the site root (absolute from older servers)
+const commentsApi = siteHref(`api/reports/${reportSlug}/comments`);
+const commentsStorageKey = `standalone-report-comments:${siteRoot === "/" ? "" : siteRoot}${reportSlug}`;  // unchanged key on the project server
 const COMMENT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-5 3v-3H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/></svg>';
 const isFigureTarget = target => target.startsWith("figure:");
 function commentFor(target) { return [...comments].reverse().find(row => row.target === target); }
@@ -35,7 +39,7 @@ function hydrateFigure(card) {
 }
 Promise.all([fetch("report-data.json").then(r => r.json()), fetch("narrative.html").then(r => r.text())]).then(([data, narrative]) => {
   document.title = data.title; $("#title").textContent = data.title; $("#subtitle").textContent = data.subtitle;
-  $("#status").textContent = data.status; $("#status").hidden = !data.status; $("#report-summary").textContent = data.summary || ""; $("#report-summary").hidden = !data.summary; if (data.overview) { const back = $("#overview-link"); back.textContent = `← ${data.overview.title}`; back.href = data.overview.href; back.title = "Back to this direction in the project overview"; back.hidden = false; } $("#updated").textContent = `Updated · ${data.updated}`;
+  $("#status").textContent = data.status; $("#status").hidden = !data.status; $("#report-summary").textContent = data.summary || ""; $("#report-summary").hidden = !data.summary; if (data.overview) { const back = $("#overview-link"); back.textContent = `← ${data.overview.title}`; back.href = siteHref(data.overview.href); back.title = "Back to this direction in the project overview"; back.hidden = false; } $("#updated").textContent = `Updated · ${data.updated}`;
   $("#report-prose").innerHTML = narrative;
   document.querySelectorAll("#report-prose h2[id]").forEach(heading => { const link = el("a", null, heading.textContent); link.href = `#${heading.id}`; $("#report-nav").append(link); });
   loadReportList(data);
@@ -53,9 +57,9 @@ window.addEventListener("hashchange", revealHashTarget);
 // The sidebar lists every report in the project so related branches are one click apart.
 async function loadReportList(data) {
   let reports = [];
-  try { const response = await fetch("/api/reports"); if (response.ok) reports = await response.json(); } catch (_) {}
+  try { const response = await fetch(siteHref("api/reports")); if (response.ok) reports = await response.json(); } catch (_) {}
   // Without the server's list (a static copy), a direction still links back to the overview.
-  if (!reports.length && data.overview) reports = [{slug: "overview", title: data.overview.title, href: "/"}, {slug: reportSlug, title: data.title, href: location.pathname}];
+  if (!reports.length && data.overview) reports = [{slug: "overview", title: data.overview.title, href: ""}, {slug: reportSlug, title: data.title, href: data.href}];
   if (reports.length < 2) return;
   const list = $("#report-list");
   reports.forEach(report => {
@@ -63,7 +67,7 @@ async function loadReportList(data) {
     const link = el("a", overview ? "report-list-overview" : "report-list-direction");
     if (overview) link.append(el("span", "report-list-kind", "Overview"));
     link.append(el("span", null, report.title));
-    link.href = overview && data.overview ? data.overview.href : report.href;
+    link.href = siteHref(overview && data.overview ? data.overview.href : report.href);
     link.title = overview ? "Project overview" : (report.subtitle || report.title);
     if (report.slug === reportSlug) link.setAttribute("aria-current", "page");
     list.append(link);

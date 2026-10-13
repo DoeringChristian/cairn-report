@@ -18,20 +18,18 @@ import errno
 import json
 import mimetypes
 import re
-import uuid
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from . import build as builder
+from . import comments
 from .config import Config, load_config
 
 # Set by serve() from the project's Config.
 REPORTS_ROOT = OUTPUT_ROOT = Path()
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 COMMENT_ROUTE = re.compile(r"/api/reports/([a-z0-9][a-z0-9-]*)/comments(?:/(export|clear|delete))?")
-CLOSED = ("resolve", "delete")
 OVERVIEW = "overview"
 RESERVED = {OVERVIEW, "knowledge", "fragments", "media"}
 
@@ -54,22 +52,8 @@ def report_href(slug: str) -> str:
     return "/" if slug == OVERVIEW else f"/reports/{slug}/"
 
 
-def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def current_comments(folder: Path) -> list[dict]:
-    """Fold the append-only log to the latest record per comment id, in first-seen order."""
-    latest, order = {}, []
-    path = folder / "knowledge" / "comments.jsonl"
-    if path.exists():
-        for line in path.read_text().splitlines():
-            if line:
-                row = json.loads(line)
-                if row["id"] not in latest:
-                    order.append(row["id"])
-                latest[row["id"]] = row
-    return [latest[key] for key in order]
+def comment_log(folder: Path) -> Path:
+    return folder / "knowledge" / "comments.jsonl"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -82,7 +66,7 @@ class Handler(BaseHTTPRequestHandler):
         route = self._comment_route(path)
         if route:
             folder, action = route
-            return self._json(200, current_comments(folder), download=action == "export")
+            return self._json(200, comments.fold(comments.read_log(comment_log(folder))), download=action == "export")
         match = re.fullmatch(r"/reports/([a-z0-9][a-z0-9-]*)(/.*)?", path)
         if match and match.group(1) in self.reports and match.group(1) != OVERVIEW:
             if match.group(2) is None:
@@ -106,39 +90,9 @@ class Handler(BaseHTTPRequestHandler):
         folder, action = route
         try:
             payload = self._payload(allow_empty=action == "clear")
-            if action == "clear":
-                rows = [
-                    {"id": row["id"], "timestamp": now(), "event": "resolve", "resolution": "Cleared from the report"}
-                    for row in current_comments(folder)
-                    if row.get("event") not in CLOSED
-                ]
-                for row in rows:
-                    self._append(folder, row)
-                return self._json(200, {"cleared": len(rows)})
-            if action == "delete":
-                key = str(payload.get("id", "")).strip()
-                if not any(row["id"] == key and row.get("event") not in CLOSED for row in current_comments(folder)):
-                    raise ValueError("unknown comment ID")
-                self._append(folder, {"id": key, "timestamp": now(), "event": "delete"})
-                return self._json(200, {"deleted": key})
-            text = str(payload.get("text", "")).strip()
-            target = str(payload.get("target", "")).strip()
-            if not text or len(text) > 4_000 or not target or len(target) > 256:
-                raise ValueError("invalid comment")
-            key = str(payload.get("id", "")).strip() or str(uuid.uuid4())
-            if len(key) > 128:
-                raise ValueError("invalid comment ID")
-            row = {
-                "id": key,
-                "timestamp": now(),
-                "event": "upsert",
-                "target": target,
-                "line": payload.get("line"),
-                "quote": str(payload.get("quote", ""))[:1_000],
-                "text": text,
-            }
-            self._append(folder, row)
-            self._json(201, row)
+            rows, status, body = comments.apply(comments.read_log(comment_log(folder)), action, payload)
+            comments.append(comment_log(folder), rows)
+            self._json(status, body)
         except (ValueError, json.JSONDecodeError) as error:
             self._json(400, {"error": str(error)})
 
@@ -164,17 +118,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _payload(self, allow_empty: bool = False) -> dict:
         size = int(self.headers.get("Content-Length", "0"))
-        if size > 16_384 or (size < 2 and not allow_empty):
+        if size > comments.MAX_PAYLOAD or (size < 2 and not allow_empty):
             raise ValueError("invalid payload size")
         body = self.rfile.read(size) if size else b"{}"
         return json.loads(body or b"{}")
-
-    @staticmethod
-    def _append(folder: Path, row: dict) -> None:
-        path = folder / "knowledge" / "comments.jsonl"
-        path.parent.mkdir(exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row) + "\n")
 
     def _file(self, path: Path) -> None:
         body = path.read_bytes()

@@ -274,7 +274,17 @@ def output_dir(slug: str) -> Path:
 
 
 def report_href(slug: str) -> str:
-    return "/" if slug == OVERVIEW else f"/reports/{slug}/"
+    """A report's address relative to the site root, so a site works under any prefix (e.g. a hub)."""
+    return "" if slug == OVERVIEW else f"reports/{slug}/"
+
+
+def page_href(target: str, current: str, anchor: str | None = None) -> str:
+    """A link from one report page to another (or to itself), relative to the current page."""
+    fragment = f"#{anchor}" if anchor else ""
+    if target == current:
+        return fragment or "./"
+    up = "" if current == OVERVIEW else "../../"
+    return (up + report_href(target) or "./") + fragment
 
 
 def overview_backlink(slug: str) -> dict | None:
@@ -284,7 +294,7 @@ def overview_backlink(slug: str) -> dict | None:
         return None
     match = re.match(r"---\n(.*?)\n---", overview.read_text(), re.S)
     title = (yaml.safe_load(match.group(1)) or {}).get("title") if match else None
-    return {"title": title or "Project overview", "href": f"/#direction-{slug}"}
+    return {"title": title or "Project overview", "href": f"#direction-{slug}"}  # relative to the site root
 
 
 class Build:
@@ -777,7 +787,7 @@ def render(build: Build) -> str:
             status = f'<span class="direction-status">{esc(data["status"])}</span>' if data.get("status") else ""
             cards.append(
                 f'<article class="direction-card" id="direction-{esc(slug_)}" data-comment-target="direction:{esc(slug_)}">'
-                f'{status}<h3><a href="{esc(report_href(slug_))}">{esc(data["title"])}</a></h3>'
+                f'{status}<h3><a href="{esc(page_href(slug_, build.slug))}">{esc(data["title"])}</a></h3>'
                 f'<p>{esc(data.get("summary", ""))}</p>'
                 f'<small>{esc(tally)} · updated {esc(data.get("updated", ""))}</small></article>'
             )
@@ -882,7 +892,7 @@ def render(build: Build) -> str:
                 raise ValueError(f"{path}:{line}: malformed report link {href!r}; use report:<slug>#anchor")
             target, anchor = match.groups()
             build.links.append({"slug": target, "anchor": anchor, "line": line})
-            token.attrSet("href", report_href(target) + (f"#{anchor}" if anchor else ""))
+            token.attrSet("href", page_href(target, build.slug, anchor))
             token.attrSet("class", "report-link")
         return default_link(tokens, idx, options, env)
 

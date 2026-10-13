@@ -11,6 +11,12 @@ something, add a `cairn-report.toml` at the project root:
     css = ["reports/style.css"]        # extra stylesheets, applied after the default style
     template_dir = "reports/template"  # files here replace the packaged page files by name
 
+    [hub]                              # where `cairn-report push` sends runs and reports
+    url = "https://hub.example.org"    # or CAIRN_HUB_URL
+    project = "my-study"               # default: the project folder name
+    token_file = "~/.config/cairn-report/hub-token"  # or CAIRN_HUB_TOKEN; never the token itself
+    interval = 30                      # seconds between pushes with --watch
+
 The project root is the nearest folder, starting at the working directory, that
 contains `cairn-report.toml`, `pixi.toml`, or `pyproject.toml`.
 """
@@ -33,6 +39,7 @@ class Config:
     outputs_dir: Path
     extra_css: tuple[Path, ...] = field(default_factory=tuple)
     template_dir: Path | None = None
+    hub: dict = field(default_factory=dict)
 
     @property
     def source(self) -> Path | None:
@@ -54,13 +61,20 @@ def load_config(project: Path | str | None = None) -> Config:
     data: dict = {}
     if (root / CONFIG_FILE).is_file():
         data = tomllib.loads((root / CONFIG_FILE).read_text())
-    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style"}
+    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub"}
     if unknown:
         raise ValueError(f"{root / CONFIG_FILE}: unknown keys {sorted(unknown)}")
     style = data.get("style", {})
     unknown_style = set(style) - {"css", "template_dir"}
     if unknown_style:
         raise ValueError(f"{root / CONFIG_FILE}: unknown [style] keys {sorted(unknown_style)}")
+
+    hub = data.get("hub", {})
+    if "token" in hub:
+        raise ValueError(f"{root / CONFIG_FILE}: never put the hub token in the config; use token_file or CAIRN_HUB_TOKEN")
+    unknown_hub = set(hub) - {"url", "project", "token_file", "interval"}
+    if unknown_hub:
+        raise ValueError(f"{root / CONFIG_FILE}: unknown [hub] keys {sorted(unknown_hub)}")
 
     def path(value: str | None, default: str | None) -> Path | None:
         if value is None and default is None:
@@ -84,4 +98,5 @@ def load_config(project: Path | str | None = None) -> Config:
         outputs_dir=path(data.get("outputs_dir"), "outputs"),
         extra_css=css,
         template_dir=template_dir,
+        hub=dict(hub),
     )
