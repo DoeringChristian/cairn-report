@@ -258,17 +258,26 @@ def HUB_RUNS_DIR(project: Path) -> Path:
 
 
 def discover_reports() -> dict[str, Path]:
-    """Every report in the tree, keyed by its path below the root ("" is the root), children first."""
+    """Every report in the tree, keyed by its path below the root ("" is the root), children first.
+
+    The whole folder tree is searched: a folder without a report.md still holds the reports below it.
+    """
     if not (REPORTS_ROOT / "report.md").is_file():
         return {}
     found: dict[str, Path] = {}
 
     def walk(folder: Path, key: str) -> None:
         for child in sorted(folder.iterdir()):
-            if (child.is_dir() and not child.name.startswith(("_", ".")) and child.name not in SKIPPED
-                    and SEGMENT.fullmatch(child.name) and (child / "report.md").is_file()):
-                walk(child, f"{key}/{child.name}" if key else child.name)
-        found[key] = folder
+            if not child.is_dir() or child.name.startswith(("_", ".")) or child.name in SKIPPED:
+                continue
+            if not SEGMENT.fullmatch(child.name):
+                if any(child.rglob("report.md")):
+                    print(f"warning: {child.relative_to(REPORTS_ROOT.parent)}: skipped; report folder names "
+                          f"are lower-case letters, digits, '-' and '_'", file=sys.stderr)
+                continue
+            walk(child, f"{key}/{child.name}" if key else child.name)
+        if (folder / "report.md").is_file():
+            found[key] = folder
 
     walk(REPORTS_ROOT, "")
     return found
@@ -278,8 +287,14 @@ def depth(key: str) -> int:
     return len(key.split("/")) if key else 0
 
 
-def parent_of(key: str) -> str | None:
-    return None if not key else key.rsplit("/", 1)[0] if "/" in key else ""
+def parent_of(key: str, reports: dict[str, Path] | None = None) -> str | None:
+    """The nearest enclosing report ("" is the root); folders without a report.md are passed over."""
+    reports = discover_reports() if reports is None else reports
+    while key:
+        key = key.rsplit("/", 1)[0] if "/" in key else ""
+        if key in reports:
+            return key
+    return None
 
 
 def output_dir(key: str) -> Path:
@@ -306,6 +321,12 @@ def front_matter_title(folder: Path | None) -> str:
     match = re.match(r"---\n(.*?)\n---", (folder / "report.md").read_text(), re.S)
     title = (yaml.safe_load(match.group(1)) or {}).get("title") if match else None
     return str(title or folder.name)
+
+
+def root_title() -> str:
+    """The root report's title from its front matter, without building it ("Report" if it has none)."""
+    title = front_matter_title(REPORTS_ROOT)
+    return "Report" if title == REPORTS_ROOT.name else title
 
 
 def card_id(key: str) -> str:
@@ -962,7 +983,7 @@ def render(build: Build) -> str:
     def child_cards(token, line):
         """A card per child report (or the named children): status, title, summary, findings, update time."""
         reports = discover_reports()
-        children = {key.rsplit("/", 1)[-1]: key for key in reports if parent_of(key) == build.key}
+        children = {key[len(build.key):].strip("/"): key for key in reports if parent_of(key, reports) == build.key}
         wanted = token.content.split() or list(children)
         cards = []
         for name in wanted:
@@ -1239,14 +1260,18 @@ def build_report(key: str, folder: Path) -> Build:
 
 
 def write_site(reports: dict[str, Path]) -> None:
-    """site.json: every built report (title, status, summary, place in the tree), for each page's navigation."""
+    """site.json: every report of the tree (title, status, summary, path), for each page's navigation.
+
+    A report not built yet (a single-report build) is listed from its front matter, so the navigation
+    always shows the whole tree.
+    """
     entries = []
     for key in sorted(reports, key=lambda key: (key != "", key)):
         data_file = output_dir(key) / "report-data.json"
-        if data_file.is_file():
-            data = json.loads(data_file.read_text())
-            entries.append({field: data.get(field) for field in ("key", "title", "subtitle", "status", "summary", "href")}
-                           | {"depth": depth(key), "parent": parent_of(key)})
+        data = json.loads(data_file.read_text()) if data_file.is_file() else {
+            "key": key, "title": front_matter_title(reports[key]) if key else root_title(), "href": report_href(key)}
+        entries.append({field: data.get(field) for field in ("key", "title", "subtitle", "status", "summary", "href")}
+                       | {"parent": parent_of(key, reports)})
     page = CONFIG.page if CONFIG else {}
     site = {"title": entries[0]["title"] if entries else "Reports", "reports": entries,
             "copy_preamble": page.get("copy_preamble", "")}

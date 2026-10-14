@@ -37,8 +37,9 @@ Optional extras: `cairn-report[mlflow]` (MLflow backend), `cairn-report[mlflow-s
 ## Reports
 
 A report is a folder with a `report.md` and, optionally, an `assets/` folder and
-child reports (sub-folders with their own `report.md`). The configured report
-folder (default `reports/`) is the root of the tree:
+child reports (sub-folders with their own `report.md`, at any depth: a folder
+without one only groups the reports below it). The configured report folder
+(default `reports/`) is the root of the tree:
 
 ```text
 reports/                       ->  generated/reports/
@@ -87,7 +88,11 @@ Front matter is optional: `title` (default: the folder name), `subtitle`,
 - `$...$` / `$$...$$` mathematics (MathML), `html raw` and `html include`
   fences, and `<!-- ... -->` comments, which never reach the page.
 
-Each page links to its parent, lists the whole tree in its sidebar, and opens
+Each page links to its nearest parent report. The sidebar lists every report as
+a tree that follows the folders: branches fold, the current page's branch is
+open, and a folder without a `report.md` shows as a label. A folder whose name
+is not lower-case letters, digits, `-` and `_` is skipped with a warning. Pages
+open
 figures in a lightbox that shows where they came from (run, the code that drew
 and logged them, the commit, the MLflow or hub run). Each build writes a
 `manifest.json` per report: every file read with its hash, the runs used and

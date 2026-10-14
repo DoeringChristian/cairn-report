@@ -107,7 +107,7 @@ def share(config: Config, report: str | None = None, build: bool = True, out: Pa
         narrative, files = inline_assets(key, (folder / "narrative.html").read_text(), sizes)
         data = json.loads((folder / "report-data.json").read_text())
         bundle_reports[key] = {"data": data, "narrative": narrative, "files": files}
-        entries.append(entry | {"depth": entry["depth"] - builder.depth(start)})
+        entries.append(entry)
     title = bundle_reports[start]["data"]["title"]
     bundle = {"start": start, "site": site | {"title": title, "reports": entries}, "reports": bundle_reports}
     source = builder.discover_reports()[start].relative_to(config.project).as_posix() + "/"

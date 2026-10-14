@@ -172,13 +172,16 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 .overview-link:hover { text-decoration: underline; }
 .is-link-target { outline: 3px solid var(--accent); outline-offset: 6px; border-radius: 8px; transition: outline-color .6s; }
 .report-list a { display: grid; gap: 1px; }
+.report-list .report-list-branch > summary { display: flex; align-items: center; gap: 2px; list-style: none; cursor: pointer; }
+.report-list .report-list-branch > summary::-webkit-details-marker { display: none; }
+.report-list .report-list-branch > summary::before { content: ""; flex: none; width: 6px; height: 6px; margin: 0 4px 0 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform .15s; }
+.report-list .report-list-branch[open] > summary::before { transform: rotate(45deg); }
+.report-list .report-list-branch > summary > a { flex: 1; min-width: 0; }
+.report-list .report-list-children { display: grid; gap: 2px; margin-left: 14px; padding-left: 6px; border-left: 1px solid var(--line); }
+.report-list .report-list-folder { padding: 7px 12px 7px 0; color: var(--muted); font-size: 12px; font-weight: 700; }
+.report-list > nav > a.report-list-link:first-child { margin-bottom: 4px; color: var(--ink); font-weight: 650; }
 .report-list .report-list-kind { color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
-.report-list .report-list-overview { margin-bottom: 4px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
-.report-list .report-list-direction { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--line); border-radius: 0 8px 8px 0; }
-.report-list .report-list-direction[aria-current="page"] { border-left-color: var(--accent); }
 .report-list { margin-top: 28px; }
-.rail-sections-label { margin-top: 22px; }
-.rail .rail-sections-label + nav { margin-top: 6px; }
 .rail .report-list nav { margin-top: 0; }
 .rail .report-list { margin: 26px 0 0; }
 /* The rail scrolls when its contents exceed the window; comment actions sit at the top so a long

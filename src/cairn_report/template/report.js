@@ -101,8 +101,6 @@ function renderReport(place) {
   reportData.then(showHeader);
   return Promise.all([reportData, narrativeText]).then(([data, narrative]) => {
     const prose = $("#report-prose"); prose.innerHTML = narrative; prose.removeAttribute("aria-busy");
-    $("#report-nav").replaceChildren();
-    document.querySelectorAll("#report-prose h2[id]").forEach(heading => { const link = el("a", null, heading.textContent); link.href = `#${heading.id}`; $("#report-nav").append(link); });
     bundleLinks(prose); loadReportList(data).then(() => bundleLinks($("#report-list")));
     bindFiguresInDocumentOrder(); loadComments();
     if (!pageBound) { pageBound = true; bindSelectionComments(); trackPosition(); }
@@ -193,23 +191,50 @@ async function prefetchReport(href) {
   } catch (_) {}
 }
 
-// The sidebar lists every report of the site, as a tree, so related reports are one click apart.
+// The sidebar lists every report of the site as a tree that follows the folder hierarchy. A folder
+// without its own report.md appears as a label holding the reports below it.
+function reportTree(reports) {
+  const rootKey = reports[0]?.key ?? "", root = {key: rootKey, name: "", report: reports[0], children: []}, nodes = new Map([[rootKey, root]]);
+  reports.slice(1).forEach(report => {
+    const relative = rootKey ? report.key.slice(rootKey.length + 1) : report.key;
+    let parent = root, key = rootKey;
+    relative.split("/").forEach(name => {
+      key = key ? `${key}/${name}` : name;
+      if (!nodes.has(key)) { const node = {key, name, report: null, children: []}; nodes.set(key, node); parent.children.push(node); }
+      parent = nodes.get(key);
+    });
+    parent.report = report;
+  });
+  return root;
+}
+function reportLink(report) {
+  const link = el("a", "report-list-link");
+  link.append(el("span", null, report.title));
+  link.href = siteHref(report.href);
+  link.title = report.subtitle || report.title;
+  if (report.key === reportKey) link.setAttribute("aria-current", "page");
+  else if (!BUNDLE) { link.addEventListener("pointerenter", () => prefetchReport(link.href), {once: true}); link.addEventListener("focus", () => prefetchReport(link.href), {once: true}); }
+  return link;
+}
+function reportBranch(node) {
+  const head = node.report ? reportLink(node.report) : el("span", "report-list-folder", node.name);
+  if (!node.children.length) return head;
+  const branch = el("details", "report-list-branch"), summary = el("summary");
+  summary.append(head);
+  branch.open = reportKey === node.key || reportKey.startsWith(`${node.key}/`) || !node.report;  // the current page's branch, and plain folders
+  const children = el("div", "report-list-children");
+  node.children.forEach(child => children.append(reportBranch(child)));
+  branch.append(summary, children);
+  return branch;
+}
 async function loadReportList(data) {
   const {reports = [], title} = await siteData;
   if (title) $("#site-title").textContent = title;
   const list = $("#report-list"); list.replaceChildren();
   if (reports.length < 2) return;
-  reports.forEach(report => {
-    const root = report.key === "";
-    const link = el("a", root ? "report-list-overview" : "report-list-direction");
-    link.append(el("span", null, report.title));
-    link.href = siteHref(report.href);
-    link.title = report.subtitle || report.title;
-    if (report.depth > 1) link.style.marginLeft = `${(report.depth - 1) * 12}px`;
-    if (report.key === reportKey) link.setAttribute("aria-current", "page");
-    else if (!BUNDLE) { link.addEventListener("pointerenter", () => prefetchReport(link.href), {once: true}); link.addEventListener("focus", () => prefetchReport(link.href), {once: true}); }
-    list.append(link);
-  });
+  const root = reportTree(reports);
+  list.append(reportLink(root.report));
+  root.children.forEach(child => list.append(reportBranch(child)));
   $("#report-list-section").hidden = false;
 }
 
