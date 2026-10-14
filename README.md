@@ -23,7 +23,7 @@ In a pixi project:
 graphviz = "*"   # only needed for Graphviz diagram fences
 
 [pypi-dependencies]
-cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.7.0" }
+cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.8.0" }
 
 [tasks]
 report-build = "cairn-report build"
@@ -67,7 +67,11 @@ Front matter is optional: `title` (default: the folder name), `subtitle`,
 
 - `python exec` fences (`hide` to run without showing the code) that read runs:
   `run_dir(name)`, `run_trials(study)`, `read_scalars`, `read_json`, `read_csv`,
-  `read_jsonl`, `mlflow_run(...)`, `track(path)`, plus `metric(...)` cards;
+  `read_jsonl`, `mlflow_run(...)`, `track(path)`, plus `metric(...)` cards.
+  Matplotlib figures a block creates become figure cards (`caption(text)` sets
+  the current figure's caption), and `graph(source, id=..., title=...,
+  caption=...)` turns generated Graphviz source into one, for example a model
+  architecture drawn from code;
 - `{{ expression }}` values in prose and in the `summary`;
 - figures as Markdown images: a path in the report folder, `run:<name>/<file>`
   (the run's latest folder, `run:<name>@<timestamp>/<file>` for a fixed one), or
