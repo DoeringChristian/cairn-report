@@ -32,7 +32,7 @@ report-serve = "cairn-report serve --host 127.0.0.1 --port 8000"
 
 With uv or pip: `uv add git+https://github.com/DoeringChristian/cairn-report.git`.
 Optional extras: `cairn-report[mlflow]` (MLflow backend), `cairn-report[mlflow-server]`
-(a project-managed MLflow server).
+(a project-managed MLflow server), `cairn-report[video]` (`log.video` from frames).
 
 ## Reports
 
@@ -77,8 +77,9 @@ Front matter is optional: `title` (default: the folder name), `subtitle`,
 - figures as Markdown images: a path in the report folder, `run:<name>/<file>`
   (the run's latest folder, `run:<name>@<timestamp>/<file>` for a fixed one), or
   `mlflow:<run-id>/<file>`; Plotly JSON files become interactive figures,
-  Matplotlib figures drawn in `python exec` blocks are embedded, and Graphviz
-  fences (`dot`, `neato`, ...) are laid out at build time;
+  videos (`.mp4`, `.m4v`, `.mov`, `.webm`) become video cards, Matplotlib
+  figures drawn in `python exec` blocks are embedded, and Graphviz fences
+  (`dot`, `neato`, ...) are laid out at build time;
 - `!!! <type> "Title"` callouts; `!!! finding <status> "Title"` blocks are
   collected with their status and counted on the parent's child cards;
 - `[text](report:<path>#anchor)` links to other reports (`report:/` is the root),
@@ -94,7 +95,12 @@ open, and a folder without a `report.md` shows as a label. A folder whose name
 is not lower-case letters, digits, `-` and `_` is skipped with a warning. Pages
 open
 figures in a lightbox that shows where they came from (run, the code that drew
-and logged them, the commit, the MLflow or hub run). Each build writes a
+and logged them, the commit, the MLflow or hub run). A video card loads near the viewport and plays muted and looped while it is on
+screen (not with reduced motion). In the lightbox it has a player: play/pause
+(click, Space, `k`), a scrub bar, frame steps (`,` `.`, or a sideways or Shift
+mouse wheel), ±1 s (Shift+←/→), speed from 0.1× to 2×, and the same zoom and
+pan as images. The frame rate is read from the MP4, so frame steps are exact.
+`serve` and the hub answer range requests, so browsers can seek. Each build writes a
 `manifest.json` per report: every file read with its hash, the runs used and
 their status, links, typed numbers in prose, and the tooling versions.
 
@@ -146,6 +152,7 @@ log.figure("errors", error_histogram, errs)  # figures/errors.png, records the p
 log.plotly("trace", spec)                    # figures/trace.plotly.json
 log.json("summary", result)                  # data/summary.json
 log.image("sample", array)                   # images/sample.png
+log.video("rollout", frames, fps=30)         # videos/rollout.mp4 (H.264, seekable); or a file path
 log.artifact("model", checkpoint_path)       # artifacts/model.<suffix>
 log.text("solver", solver_log)               # logs/solver.txt
 ```

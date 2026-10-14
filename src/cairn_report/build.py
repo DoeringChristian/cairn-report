@@ -352,6 +352,7 @@ class Build:
         self.hub_index = None
         self.hub_runs: dict[str, dict] = {}
         self.sizes: dict[str, tuple[int, int] | None] = {}
+        self.rates: dict[str, float | None] = {}  # frame rates of MP4/MOV videos
         self.ids: set[str] = set()
         self.findings: list[dict] = []
         self.figures = 0
@@ -586,6 +587,8 @@ class Build:
         shutil.copy2(resolved, target)
         trace = self.run_trace(relative, line)
         self.sizes[f"{ASSETS}/{relative.as_posix()}"] = image_size(resolved)
+        if resolved.suffix.lower() in (".mp4", ".m4v", ".mov"):
+            self.rates[f"{ASSETS}/{relative.as_posix()}"] = (mp4_info(resolved) or {}).get("fps")
         version = self.sources[relative.as_posix()][:12]  # content hash: the URL changes when the file does
         return f"{ASSETS}/{relative.as_posix()}?v={version}", trace.get("label", relative.as_posix()), trace
 
@@ -599,8 +602,78 @@ class Build:
         return f"{ASSETS}/generated/{name}?v={name.split('.')[0][:12]}"  # named by content: cache for good
 
 
+VIDEO_SUFFIXES = (".mp4", ".m4v", ".mov", ".webm")
+
+
+def _boxes(data: bytes, start: int = 0, end: int | None = None):
+    """The (type, payload start, payload end) of each ISO-BMFF box in data[start:end]."""
+    end = len(data) if end is None else end
+    while start + 8 <= end:
+        size, kind, header = int.from_bytes(data[start:start + 4], "big"), data[start + 4:start + 8], 8
+        if size == 1:
+            size, header = int.from_bytes(data[start + 8:start + 16], "big"), 16
+        elif size == 0:
+            size = end - start
+        if size < header:
+            return
+        yield kind, start + header, min(start + size, end)
+        start += size
+
+
+def mp4_info(path: Path) -> dict | None:
+    """Frame size and frame rate of the first video track of an MP4/MOV, read from its moov box."""
+    try:
+        with path.open("rb") as handle:
+            end, position = path.stat().st_size, 0
+            while position + 8 <= end:  # top-level boxes, to find moov without reading the media
+                handle.seek(position)
+                header = handle.read(16)
+                size, kind = int.from_bytes(header[:4], "big"), header[4:8]
+                size = int.from_bytes(header[8:16], "big") if size == 1 else end - position if size == 0 else size
+                if size < 8:
+                    return None
+                if kind == b"moov":
+                    handle.seek(position)
+                    moov = handle.read(min(size, 64 * 1024 * 1024))
+                    break
+                position += size
+            else:
+                return None
+    except OSError:
+        return None
+    for kind, start, stop in _boxes(moov, 8):
+        if kind != b"trak":
+            continue
+        info: dict = {}
+        stack = [(start, stop)]
+        while stack:  # walk trak > mdia > minf > stbl for tkhd, mdhd, and stts
+            first, last = stack.pop()
+            for inner, body, finish in _boxes(moov, first, last):
+                if inner in (b"mdia", b"minf", b"stbl"):
+                    stack.append((body, finish))
+                elif inner == b"tkhd":
+                    info["width"] = int.from_bytes(moov[finish - 8:finish - 4], "big") >> 16
+                    info["height"] = int.from_bytes(moov[finish - 4:finish], "big") >> 16
+                elif inner == b"mdhd":
+                    offset = body + (20 if moov[body] == 1 else 12)
+                    info["timescale"] = int.from_bytes(moov[offset:offset + 4], "big")
+                elif inner == b"stts" and int.from_bytes(moov[body + 4:body + 8], "big"):
+                    info["delta"] = int.from_bytes(moov[body + 12:body + 16], "big")  # first entry's sample duration
+        if info.get("width") and info.get("height"):  # a video track (audio has no size)
+            fps = info["timescale"] / info["delta"] if info.get("timescale") and info.get("delta") else None
+            return {"size": (info["width"], info["height"]), "fps": round(fps, 3) if fps else None}
+    return None
+
+
+def mp4_size(path: Path) -> tuple[int, int] | None:
+    info = mp4_info(path)
+    return info["size"] if info else None
+
+
 def image_size(path: Path) -> tuple[int, int] | None:
-    """Pixel size of a PNG, GIF, JPEG, or SVG, read from its header (None if unknown)."""
+    """Pixel size of a PNG, GIF, JPEG, or SVG, or the frame size of an MP4/MOV video (None if unknown)."""
+    if path.suffix.lower() in (".mp4", ".m4v", ".mov"):
+        return mp4_size(path)
     try:
         with path.open("rb") as handle:
             head = handle.read(64 * 1024)
@@ -655,6 +728,7 @@ def figure_card(
     kind: str = "image",
     trace: dict | None = None,
     size: tuple[int, int] | None = None,
+    fps: float | None = None,
 ) -> str:
     """One gallery card. `trace` says where the figure came from and is shown in the lightbox."""
     build.figures += 1
@@ -675,11 +749,14 @@ def figure_card(
         f'data-figure-id="{esc(fid)}" data-figure-type="{kind}" data-src="{esc(src)}" '
         f'data-line="{line}" data-comment-target="figure:{esc(fid)}" data-trace="{esc(json.dumps(trace))}"'
     )
-    media = (
-        '<div class="plotly-preview"></div>'
-        if kind == "plotly"
-        else f'<img data-src="{esc(src)}" alt="{esc(title)}"{dims} decoding="async">'  # loaded near the viewport
-    )
+    if kind == "plotly":
+        media = '<div class="plotly-preview"></div>'
+    elif kind == "video":  # loaded near the viewport; plays muted while on screen
+        rate = f' data-fps="{fps:g}"' if fps else ""
+        media = (f'<video data-src="{esc(src)}" aria-label="{esc(title)}"{dims}{rate} muted loop playsinline '
+                 f'preload="none" disablepictureinpicture></video>')
+    else:
+        media = f'<img data-src="{esc(src)}" alt="{esc(title)}"{dims} decoding="async">'  # loaded near the viewport
     copy = f"<h3>{esc(title)}</h3>"
     if caption:
         copy += f"<p>{esc(caption)}</p>"
@@ -862,10 +939,14 @@ def render(build: Build) -> str:
         line = token.meta.get("line", 0)
         src, source, trace = build.asset(token.attrGet("src"), line)
         if not token.meta.get("card"):
+            if source.lower().endswith(VIDEO_SUFFIXES):  # a video inside prose: the browser's own player
+                return (f'<video src="{esc(src)}" aria-label="{esc(token.content)}" controls muted loop playsinline '
+                        f'preload="metadata"></video>')
             token.attrSet("src", src)
             return default_image(tokens, idx, options, env)
         title = token.content or Path(source).stem
-        kind = "plotly" if source.endswith(".plotly.json") else "image"
+        kind = ("plotly" if source.endswith(".plotly.json")
+                else "video" if source.lower().endswith(VIDEO_SUFFIXES) else "image")
         fid = build.unique(
             token.attrGet("id") or f"fig-{slug(Path(source).name.split('.')[0])}", line
         )
@@ -878,6 +959,7 @@ def render(build: Build) -> str:
             line=line,
             source=source,
             size=build.sizes.get(src.split("?")[0]),
+            fps=build.rates.get(src.split("?")[0]),
             kind=kind,
             trace=trace,
         )

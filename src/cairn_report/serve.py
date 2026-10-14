@@ -21,6 +21,7 @@ from urllib.parse import unquote, urlparse
 
 from . import build as builder
 from .config import Config, load_config
+from .ranges import byte_range
 
 OUTPUT_ROOT = Path()  # set by serve()
 
@@ -53,13 +54,22 @@ class Handler(BaseHTTPRequestHandler):
         }
         if self.headers.get("If-None-Match") == etag:
             return self._send(304, b"", None, headers)
+        kind = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         compressed = path.with_name(path.name + ".gz")
         if "gzip" in self.headers.get("Accept-Encoding", "") and compressed.is_file():
             headers["Content-Encoding"] = "gzip"
-            body = compressed.read_bytes()
-        else:
-            body = path.read_bytes()
-        self._send(200, body, mimetypes.guess_type(path.name)[0] or "application/octet-stream", headers)
+            return self._send(200, compressed.read_bytes(), kind, headers)
+        headers["Accept-Ranges"] = "bytes"  # videos seek with range requests
+        wanted = byte_range(self.headers.get("Range"), info.st_size)
+        if wanted is False:
+            return self._send(416, b"", None, headers | {"Content-Range": f"bytes */{info.st_size}"})
+        if wanted is None:
+            return self._send(200, path.read_bytes(), kind, headers)
+        first, last = wanted
+        with path.open("rb") as handle:
+            handle.seek(first)
+            body = handle.read(last - first + 1)
+        self._send(206, body, kind, headers | {"Content-Range": f"bytes {first}-{last}/{info.st_size}"})
 
     def _send(self, status: int, body: bytes, kind: str | None, headers: dict) -> None:
         self.send_response(status)

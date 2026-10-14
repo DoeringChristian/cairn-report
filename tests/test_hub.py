@@ -217,3 +217,14 @@ def test_push_arguments_parse_in_any_order(monkeypatch):
         with pytest.raises(SystemExit):
             cli.main(argv)
         assert (calls[-1]["what"], calls[-1]["watch"], calls[-1]["command"]) == expected
+
+
+def test_files_answer_range_requests(hub, client):
+    config = load_config(client)
+    build_all(config)
+    push(config, what="report")
+    path = "/p/study/site.json"
+    whole = call(hub, "GET", path)[2]
+    status, headers, data = call(hub, "GET", path, headers={"Range": "bytes=5-14"})
+    assert status == 206 and data == whole[5:15] and headers["Content-Range"] == f"bytes 5-14/{len(whole)}"
+    assert call(hub, "GET", path, headers={"Range": f"bytes={len(whole)}-"})[0] == 416

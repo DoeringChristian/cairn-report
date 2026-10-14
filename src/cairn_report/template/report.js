@@ -63,7 +63,7 @@ async function renderPlot(node, figure, full = false) { const [spec] = await Pro
 
 // The builder renders every card from report.md; the page only adds behavior to them.
 function hydrateFigure(card) {
-  const item = {trace: JSON.parse(card.dataset.trace || "{}"), id: card.dataset.figureId, type: card.dataset.figureType, src: card.dataset.src, title: card.querySelector("h3")?.textContent || "", caption: card.querySelector(".figure-copy p")?.textContent || "", line: card.dataset.line || ""};
+  const item = {trace: JSON.parse(card.dataset.trace || "{}"), id: card.dataset.figureId, type: card.dataset.figureType, src: card.dataset.src, fps: Number(card.querySelector("video")?.dataset.fps) || 0, title: card.querySelector("h3")?.textContent || "", caption: card.querySelector(".figure-copy p")?.textContent || "", line: card.dataset.line || ""};
   const index = figures.push(item) - 1, target = `figure:${item.id}`;
   card.classList.add("comment-anchor");
   if (item.type === "plotly") {
@@ -72,6 +72,8 @@ function hydrateFigure(card) {
   } else {
     card.tabIndex = 0; card.setAttribute("role", "button"); card.onclick = () => openFigure(index); card.onkeydown = event => { if (event.key === "Enter" || event.key === " ") openFigure(index); };
     card.append(commentIcon(target, item.line));
+    const video = card.querySelector("video");
+    if (video) hydrateVideoCard(card, video);
     const image = card.querySelector("img");
     if (image) {
       /* The builder sets the card's shape from the image size; for an image it could not measure, take it on load. */
@@ -81,6 +83,25 @@ function hydrateFigure(card) {
     }
   }
 }
+/* A video card loads near the viewport and plays, muted and looped, only while mostly on screen
+   (never with reduced motion); the lightbox has the full player. */
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const playObserver = "IntersectionObserver" in window ? new IntersectionObserver(entries => entries.forEach(entry => {
+  const video = entry.target;
+  if (entry.isIntersecting && !reducedMotion.matches) video.play().catch(() => {}); else video.pause();
+}), {threshold: .5}) : null;
+const clock = seconds => { const whole = Math.max(0, seconds || 0); const minutes = Math.floor(whole / 60); return `${minutes}:${(whole - minutes * 60).toFixed(2).padStart(5, "0")}`; };
+function hydrateVideoCard(card, video) {
+  card.classList.add("video-card");
+  const badge = el("span", "video-badge", "▶"); card.querySelector(".figure-copy").before(badge);
+  video.addEventListener("loadedmetadata", () => {
+    const ratio = video.videoWidth / video.videoHeight;
+    if (ratio && !card.style.getPropertyValue("--figure-ratio")) { card.style.setProperty("--figure-ratio", Math.min(Math.max(ratio, 0.75), 10).toFixed(3)); card.classList.toggle("is-wide", ratio > 2); card.classList.toggle("is-tall", ratio < 1); }
+    badge.textContent = `▶ ${clock(video.duration).replace(/\.\d+$/, "")}`;
+  }, {once: true});
+  whenNear(card, () => { video.preload = "metadata"; video.src = video.dataset.src; playObserver?.observe(video); });
+}
+
 /* The header appears as soon as the small report-data.json arrives; the text follows, then figures as they near the screen. */
 let reportData, narrativeText;
 function fetchReport() {
@@ -238,8 +259,9 @@ async function loadReportList(data) {
   $("#report-list-section").hidden = false;
 }
 
-const lightbox = $("#lightbox"), lightboxImage = $("#lightbox-image"), lightboxPlot = $("#lightbox-plot");
-async function showFigure(index) { active = (index + figures.length) % figures.length; const figure = figures[active]; const interactive = figure.type === "plotly"; lightboxImage.hidden = interactive; lightboxPlot.hidden = !interactive; $(".zoom").hidden = interactive; if (interactive) { lightboxImage.src = ""; await renderPlot(lightboxPlot, figure, true); } else { if (globalThis.Plotly) Plotly.purge(lightboxPlot); lightboxImage.src = figure.src; lightboxImage.alt = figure.title; resetView(); } syncLightboxComment(); $("#lightbox-title").textContent = figure.title; $("#lightbox-caption").textContent = figure.caption || ""; renderTrace(figure.trace || {}); }
+const lightbox = $("#lightbox"), lightboxImage = $("#lightbox-image"), lightboxPlot = $("#lightbox-plot"), lightboxVideo = $("#lightbox-video");
+let viewMedia = lightboxImage;  // the image or the video the zoom, pan, and wheel act on
+async function showFigure(index) { active = (index + figures.length) % figures.length; const figure = figures[active]; const interactive = figure.type === "plotly", video = figure.type === "video"; lightboxImage.hidden = interactive || video; lightboxVideo.hidden = !video; $("#video-controls").hidden = !video; lightboxPlot.hidden = !interactive; $(".zoom").hidden = interactive; viewMedia = video ? lightboxVideo : lightboxImage; if (!video) stopVideo(); if (interactive) { lightboxImage.src = ""; await renderPlot(lightboxPlot, figure, true); } else { if (globalThis.Plotly) Plotly.purge(lightboxPlot); if (video) { lightboxImage.removeAttribute("src"); startVideo(figure); } else { lightboxImage.src = figure.src; lightboxImage.alt = figure.title; } resetView(); } syncLightboxComment(); $("#lightbox-title").textContent = figure.title; $("#lightbox-caption").textContent = figure.caption || ""; renderTrace(figure.trace || {}); }
 // Every enlarged figure says where it came from: file, run, producing code, commit.
 const codeRef = ref => ref ? `${ref.file || "?"}${ref.line ? `:${ref.line}` : ""}${ref.function ? ` · ${ref.function}()` : ""}` : "";
 let traceOpen = false;
@@ -284,21 +306,69 @@ function renderTrace(trace) {
 }
 function syncLightboxComment() { const button = $("#lightbox-comment"), figure = figures[active]; const has = Boolean(figure && commentFor(`figure:${figure.id}`)); button.classList.toggle("has-comment", has); button.title = has ? "Edit figure comment" : "Comment on figure"; }
 function openFigure(index) { showFigure(index); lightbox.showModal(); }
-function applyView() { lightboxImage.style.setProperty("--zoom", zoom); lightboxImage.style.setProperty("--pan-x", `${panX}px`); lightboxImage.style.setProperty("--pan-y", `${panY}px`); $("#zoom-label").textContent = `${Math.round(zoom * 100)}%`; }
+function applyView() { for (const media of [lightboxImage, lightboxVideo]) { media.style.setProperty("--zoom", zoom); media.style.setProperty("--pan-x", `${panX}px`); media.style.setProperty("--pan-y", `${panY}px`); } $("#zoom-label").textContent = `${Math.round(zoom * 100)}%`; }
 let hoverPoint = null;
-function imageCenter() { const parent = lightboxImage.offsetParent; if (!parent) { const rect = lightboxImage.getBoundingClientRect(); return {x: rect.left + rect.width / 2 - panX, y: rect.top + rect.height / 2 - panY}; } const box = parent.getBoundingClientRect(); return {x: box.left + lightboxImage.offsetLeft + lightboxImage.offsetWidth / 2, y: box.top + lightboxImage.offsetTop + lightboxImage.offsetHeight / 2}; }
+function imageCenter() { const media = viewMedia, parent = media.offsetParent; if (!parent) { const rect = media.getBoundingClientRect(); return {x: rect.left + rect.width / 2 - panX, y: rect.top + rect.height / 2 - panY}; } const box = parent.getBoundingClientRect(); return {x: box.left + media.offsetLeft + media.offsetWidth / 2, y: box.top + media.offsetTop + media.offsetHeight / 2}; }
 // Zoom about `point` (client coordinates) so the pixel under it stays fixed; without a point, zoom about the current view.
 function setZoom(value, point = null) { const next = Math.max(.5, Math.min(4, value)); if (next <= 1) { panX = 0; panY = 0; } else if (point) { const center = imageCenter(), ratio = next / zoom; panX = point.x - center.x - ratio * (point.x - center.x - panX); panY = point.y - center.y - ratio * (point.y - center.y - panY); } else { const ratio = next / zoom; panX *= ratio; panY *= ratio; } zoom = next; applyView(); }
 function resetView() { zoom = 1; panX = 0; panY = 0; applyView(); }
 lightbox.querySelector(".close").onclick = () => lightbox.close(); lightbox.querySelector(".previous").onclick = () => showFigure(active - 1); lightbox.querySelector(".next").onclick = () => showFigure(active + 1);
 $("#lightbox-comment").onclick = event => { const figure = figures[active]; const anchor = event.currentTarget.getBoundingClientRect(); lightbox.close(); openComment(`figure:${figure.id}`, figure.line || "", "", anchor, commentFor(`figure:${figure.id}`)); };
 lightbox.querySelector(".zoom").onclick = event => { const action = event.target.dataset.zoom; if (action === "in") setZoom(zoom + .25); if (action === "out") setZoom(zoom - .25); if (action === "reset") resetView(); };
-lightboxImage.addEventListener("wheel", event => { event.preventDefault(); setZoom(zoom + (event.deltaY < 0 ? .15 : -.15), {x: event.clientX, y: event.clientY}); }, {passive: false});
-lightboxImage.addEventListener("pointermove", event => { hoverPoint = {x: event.clientX, y: event.clientY}; });
-lightboxImage.addEventListener("pointerleave", () => { hoverPoint = null; });
-lightboxImage.draggable = false; lightboxImage.addEventListener("dragstart", event => event.preventDefault());
-lightboxImage.addEventListener("pointerdown", event => { if (zoom <= 1) return; event.preventDefault(); const startX = event.clientX - panX, startY = event.clientY - panY; lightboxImage.setPointerCapture(event.pointerId); lightboxImage.classList.add("is-panning"); const move = next => { panX = next.clientX - startX; panY = next.clientY - startY; applyView(); }; const done = () => { lightboxImage.classList.remove("is-panning"); lightboxImage.removeEventListener("pointermove", move); lightboxImage.removeEventListener("pointerup", done); lightboxImage.removeEventListener("pointercancel", done); }; lightboxImage.addEventListener("pointermove", move); lightboxImage.addEventListener("pointerup", done); lightboxImage.addEventListener("pointercancel", done); });
-document.addEventListener("keydown", event => { if (!lightbox.open) return; if (event.key === "ArrowLeft") showFigure(active - 1); if (event.key === "ArrowRight") showFigure(active + 1); if (event.key === "+" || event.key === "=") setZoom(zoom + .25, hoverPoint); if (event.key === "-") setZoom(zoom - .25, hoverPoint); if (event.key === "i" && !event.metaKey && !event.ctrlKey) toggleTrace(); if (event.key === "Escape") lightbox.close(); });
+for (const media of [lightboxImage, lightboxVideo]) {
+  // The wheel zooms; on a video, a sideways or Shift wheel scrubs frame by frame instead.
+  media.addEventListener("wheel", event => { event.preventDefault(); if (media === lightboxVideo && (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY))) { scrubWheel(event.shiftKey ? event.deltaY : event.deltaX); return; } setZoom(zoom + (event.deltaY < 0 ? .15 : -.15), {x: event.clientX, y: event.clientY}); }, {passive: false});
+  media.addEventListener("pointermove", event => { hoverPoint = {x: event.clientX, y: event.clientY}; });
+  media.addEventListener("pointerleave", () => { hoverPoint = null; });
+  media.draggable = false; media.addEventListener("dragstart", event => event.preventDefault());
+  media.addEventListener("pointerdown", event => { if (zoom <= 1) return; event.preventDefault(); const startX = event.clientX - panX, startY = event.clientY - panY; let moved = false; media.setPointerCapture(event.pointerId); media.classList.add("is-panning"); const move = next => { moved = true; panX = next.clientX - startX; panY = next.clientY - startY; applyView(); }; const done = () => { media.classList.remove("is-panning"); media._panned = moved; media.removeEventListener("pointermove", move); media.removeEventListener("pointerup", done); media.removeEventListener("pointercancel", done); }; media.addEventListener("pointermove", move); media.addEventListener("pointerup", done); media.addEventListener("pointercancel", done); });
+}
+
+/* The lightbox video player: play/pause, a scrub bar, frame steps, speed. The frame rate comes from the
+   builder (read from the MP4); otherwise it is the shortest frame interval seen while playing, 30 fps until then. */
+let frameTime = 1 / 30, knownRate = false, scrubbing = false, wheelRest = 0;
+const videoControls = $("#video-controls"), scrubBar = $("#video-scrub"), playButton = $("#video-play"), speedSelect = $("#video-speed");
+function startVideo(figure) {
+  if (lightboxVideo.dataset.src !== figure.src) { lightboxVideo.dataset.src = figure.src; lightboxVideo.src = figure.src; knownRate = figure.fps > 0; frameTime = knownRate ? 1 / figure.fps : 1 / 30; }
+  lightboxVideo.playbackRate = Number(speedSelect.value);
+  lightboxVideo.currentTime = 0; lightboxVideo.play().catch(() => {}); syncVideo();
+}
+function stopVideo() { lightboxVideo.pause(); if (lightboxVideo.dataset.src) { lightboxVideo.removeAttribute("src"); delete lightboxVideo.dataset.src; lightboxVideo.load(); } }
+function syncVideo() {
+  const duration = lightboxVideo.duration || 0, time = lightboxVideo.currentTime || 0;
+  if (!scrubbing) { scrubBar.max = duration || 1; scrubBar.value = time; }
+  scrubBar.style.setProperty("--progress", `${duration ? (time / duration) * 100 : 0}%`);
+  const frame = Math.round(time / frameTime) + 1, frames = Math.max(1, Math.round(duration / frameTime));
+  $("#video-time").textContent = `${clock(time)} / ${clock(duration)} · frame ${Math.min(frame, frames)}/${frames}`;
+  playButton.textContent = lightboxVideo.paused ? "▶" : "❚❚"; playButton.setAttribute("aria-label", lightboxVideo.paused ? "Play" : "Pause");
+}
+function togglePlay() { if (lightboxVideo.paused) lightboxVideo.play().catch(() => {}); else lightboxVideo.pause(); }
+function seekVideo(time) { const duration = lightboxVideo.duration || 0; lightboxVideo.currentTime = Math.min(Math.max(time, 0), Math.max(duration - frameTime / 2, 0)); syncVideo(); }
+function stepFrame(count) { lightboxVideo.pause(); seekVideo((Math.round(lightboxVideo.currentTime / frameTime) + count) * frameTime + frameTime / 2); }
+function scrubWheel(delta) { wheelRest += delta; const steps = Math.trunc(wheelRest / 30); if (steps) { wheelRest -= steps * 30; stepFrame(steps); } }
+if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+  let last = null;
+  const measure = (_, meta) => { if (!knownRate && last !== null && !lightboxVideo.paused) { const delta = meta.mediaTime - last; if (delta > 0.002 && delta < frameTime) frameTime = delta; } last = meta.mediaTime; syncVideo(); lightboxVideo.requestVideoFrameCallback(measure); };
+  lightboxVideo.requestVideoFrameCallback(measure);
+  lightboxVideo.addEventListener("loadedmetadata", () => { last = null; lightboxVideo.requestVideoFrameCallback(measure); });
+}
+["timeupdate", "play", "pause", "loadedmetadata", "seeked", "ratechange"].forEach(type => lightboxVideo.addEventListener(type, syncVideo));
+lightboxVideo.addEventListener("click", () => { if (lightboxVideo._panned) { lightboxVideo._panned = false; return; } if (zoom <= 1) togglePlay(); });
+playButton.onclick = togglePlay;
+$("#video-back").onclick = () => stepFrame(-1); $("#video-forward").onclick = () => stepFrame(1);
+speedSelect.onchange = () => { lightboxVideo.playbackRate = Number(speedSelect.value); };
+let resumeAfterScrub = false;
+scrubBar.addEventListener("pointerdown", () => { scrubbing = true; resumeAfterScrub = !lightboxVideo.paused; lightboxVideo.pause(); });
+scrubBar.addEventListener("input", () => { lightboxVideo.currentTime = Number(scrubBar.value); syncVideo(); });
+scrubBar.addEventListener("change", () => { scrubbing = false; if (resumeAfterScrub) lightboxVideo.play().catch(() => {}); resumeAfterScrub = false; });
+scrubBar.addEventListener("pointerup", () => scrubBar.blur());  // after a drag, the arrow keys browse figures again
+lightbox.addEventListener("close", stopVideo);
+document.addEventListener("keydown", event => { if (!lightbox.open) return; const onVideo = !lightboxVideo.hidden;
+  if (onVideo && event.target === scrubBar && event.key.startsWith("Arrow")) return;  // the scrub bar's own keys
+  if (onVideo && (event.key === "k" || (event.key === " " && !event.target.closest("select, input")))) { event.preventDefault(); togglePlay(); return; }
+  if (onVideo && (event.key === "," || event.key === ".")) { stepFrame(event.key === "," ? -1 : 1); return; }
+  if (onVideo && event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) { seekVideo(lightboxVideo.currentTime + (event.key === "ArrowLeft" ? -1 : 1)); return; }
+  if (event.key === "ArrowLeft") showFigure(active - 1); if (event.key === "ArrowRight") showFigure(active + 1); if (event.key === "+" || event.key === "=") setZoom(zoom + .25, hoverPoint); if (event.key === "-") setZoom(zoom - .25, hoverPoint); if (event.key === "i" && !event.metaKey && !event.ctrlKey) toggleTrace(); if (event.key === "Escape") lightbox.close(); });
 
 function bindFiguresInDocumentOrder() {
   let offset = 0;

@@ -199,3 +199,18 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 
 /* The site title next to the brand mark is text, not another mark. */
 .brand .site-title { display: inline; width: auto; height: auto; border-radius: 0; background: none; color: inherit; }
+
+/* Videos: cards play muted on screen; the lightbox has a player bar under the video. */
+.figure-card video { display: block; width: 100%; aspect-ratio: var(--figure-ratio, 16 / 9); max-height: 560px; object-fit: contain; background: #111; }
+.video-card { position: relative; }
+.video-badge { position: absolute; left: 10px; top: 10px; padding: 3px 8px; border-radius: 99px; background: #000000a8; color: white; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
+.report-prose video { display: block; max-width: 100%; margin: 18px 0; border-radius: 8px; background: #111; }
+.stage video { max-width: 90%; max-height: 100%; object-fit: contain; background: #000; border-radius: 6px; cursor: grab; touch-action: none; transform: translate(var(--pan-x, 0px), var(--pan-y, 0px)) scale(var(--zoom, 1)); transition: transform .12s; box-shadow: 0 20px 80px #0008; }
+.stage video.is-panning { cursor: grabbing; transition: none; }
+.video-controls { display: flex; align-items: center; gap: 8px; width: min(760px, 90%); margin-top: 12px; color: white; font-size: 12px; }
+.video-controls[hidden] { display: none; }
+.video-controls button, .video-controls select { flex: none; min-width: 32px; height: 32px; padding: 0 9px; border: 1px solid #ffffff33; border-radius: 8px; background: #ffffff18; color: white; font: inherit; cursor: pointer; }
+.video-controls select option { color: black; }
+.video-controls input[type=range] { flex: 1; min-width: 80px; accent-color: var(--accent); cursor: pointer; }
+.video-time { flex: none; min-width: 190px; text-align: right; font-variant-numeric: tabular-nums; color: #c5cec9; }
+@media (max-width: 760px) { .video-time { min-width: 0; } .video-controls { flex-wrap: wrap; } }

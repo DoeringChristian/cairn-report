@@ -324,6 +324,32 @@ class RunLogger:
         plt.imsave(buffer, image, format="png")
         return self._write(name, "image", f"images/{name}.png", buffer.getvalue())
 
+    def video(self, name: str, video: Any, fps: float = 30) -> Path:
+        """Copy a video file (MP4, WebM, MOV) or encode frames (T×H×W or T×H×W×C; uint8, or floats in
+        [0, 1]) as an H.264 MP4 that browsers play and seek (needs `imageio[ffmpeg]`)."""
+        if isinstance(video, (str, Path)):
+            source = Path(video)
+            return self._write(name, "video", f"videos/{name}{source.suffix.lower()}", source.read_bytes())
+        try:
+            import imageio.v3 as iio
+        except ImportError as error:
+            raise ImportError("log.video with frames needs imageio and imageio-ffmpeg "
+                              "(`pip install 'cairn-report[video]'`)") from error
+        import numpy as np
+
+        frames = np.asarray(video)
+        if frames.dtype != np.uint8:
+            frames = (np.clip(frames, 0, 1) * 255).round().astype(np.uint8)
+        if frames.ndim == 3:
+            frames = np.repeat(frames[..., None], 3, axis=-1)
+        frames = frames[..., :3]
+        # yuv420p (what every browser decodes) needs even sizes
+        frames = np.pad(frames, ((0, 0), (0, frames.shape[1] % 2), (0, frames.shape[2] % 2), (0, 0)), mode="edge")
+        data = iio.imwrite("<bytes>", frames, extension=".mp4", plugin="FFMPEG", fps=fps, codec="libx264",
+                           pixelformat="yuv420p", macro_block_size=1,  # keep the frame size as given
+                           output_params=["-movflags", "+faststart"])  # seekable before fully loaded
+        return self._write(name, "video", f"videos/{name}.mp4", data)
+
     # ------------------------------------------------------- other evidence
 
     def artifact(

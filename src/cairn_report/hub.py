@@ -47,6 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import __version__
 from .logger import read_jsonl
+from .ranges import byte_range
 
 PROJECT_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -618,14 +619,30 @@ class HubHandler(BaseHTTPRequestHandler):
         kind = mimetypes.guess_type(path.rsplit("/", 1)[-1])[0] or "application/octet-stream"
         if download:
             headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(path.rsplit('/', 1)[-1])}"
-        self.send_response(200)
+        size = blob.stat().st_size
+        wanted = None if encoding else byte_range(self.headers.get("Range"), size)  # videos seek with ranges
+        if not encoding:
+            headers["Accept-Ranges"] = "bytes"
+        if wanted is False:
+            return self._send(416, b"", headers=headers | {"Content-Range": f"bytes */{size}"})
+        first, last = wanted or (0, size - 1)
+        if wanted:
+            headers["Content-Range"] = f"bytes {first}-{last}/{size}"
+        self.send_response(206 if wanted else 200)
         self.send_header("Content-Type", kind)
-        self.send_header("Content-Length", str(blob.stat().st_size))
+        self.send_header("Content-Length", str(last - first + 1))
         for key, value in headers.items():
             self.send_header(key, value)
         self.end_headers()
         with blob.open("rb") as handle:
-            shutil.copyfileobj(handle, self.wfile, CHUNK)
+            handle.seek(first)
+            remaining = last - first + 1
+            while remaining > 0:
+                chunk = handle.read(min(CHUNK, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
 
     def _send(self, status: int, body: bytes, kind: str | None = None, headers: dict | None = None) -> None:
         if status >= 400:
