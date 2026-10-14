@@ -1,6 +1,6 @@
 # cairn-report
 
-Three small pieces for research projects that keep their evidence in plain run
+Small pieces for research projects that keep their evidence in plain run
 folders:
 
 - a **builder** that turns a tree of Markdown reports into a static site, reading
@@ -8,7 +8,9 @@ folders:
 - a **run logger** that writes evidence to fixed places in a run folder (and,
   optionally, to MLflow or a hub while the run executes);
 - a **hub**: a token-protected artifact store for reports and runs, with push
-  and pull.
+  and pull;
+- **run bookkeeping** for Hydra projects: each run's `run.json`, the `latest`
+  link, study completion, and a source snapshot per run.
 
 cairn-report provides mechanisms only. How reports are organised, which sections
 they have, and what counts as evidence is up to the project (for agents, the
@@ -32,7 +34,8 @@ report-serve = "cairn-report serve --host 127.0.0.1 --port 8000"
 
 With uv or pip: `uv add git+https://github.com/DoeringChristian/cairn-report.git`.
 Optional extras: `cairn-report[mlflow]` (MLflow backend), `cairn-report[mlflow-server]`
-(a project-managed MLflow server), `cairn-report[video]` (`log.video` from frames).
+(a project-managed MLflow server), `cairn-report[video]` (`log.video` from frames),
+`cairn-report[hydra]` (run bookkeeping for Hydra projects).
 
 ## Reports
 
@@ -189,6 +192,46 @@ and `run_dir()` through MLflow when the evidence is not local.
 With `serve = true` (plus `port`, `store`), the project runs its own MLflow
 server: `cairn-report serve` starts or reuses it next to the reports, and
 `cairn-report mlflow` runs it alone.
+
+## Hydra runs
+
+`cairn_report.runs` and `cairn_report.snapshot` keep the record of each Hydra
+run, so a project's entry point stays a few lines (needs the `hydra` extra):
+
+```python
+# experiments/run.py
+@hydra.main(version_base=None, config_path="../configs", config_name="config")
+def main(cfg: DictConfig) -> None:
+    run_experiment(cfg, Experiment)   # from cairn_report.runs; Experiment is the project's base class
+```
+
+```yaml
+# configs/config.yaml
+run:
+  name: feasibility            # a short lowercase slug
+  description: What the run tests.
+hydra:
+  run: {dir: "outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}"}
+  sweep: {dir: "outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}", subdir: "${hydra.job.num}"}
+  callbacks:
+    source_snapshot: {_target_: cairn_report.snapshot.SourceSnapshotCallback}
+    study_completion: {_target_: cairn_report.runs.StudyCompletion}   # multiruns
+```
+
+- `run_experiment` writes `run.json` (`running`, then `completed` or `failed`
+  with the error), requires the source snapshot, instantiates `cfg.experiment`,
+  and calls its `run(output_dir)`.
+- A completed single run becomes `outputs/<name>/latest`, a relative symlink;
+  a failed run stays for diagnosis and never moves it.
+- `StudyCompletion` writes a multirun study's `run.json` after the last trial
+  (completed only when every trial completed) and then moves `latest` to the
+  study. Trials never touch `latest`.
+- `SourceSnapshotCallback` stores the project's source files (size-bounded,
+  secrets and data files excluded) in each run's `provenance/`: in `git` mode
+  (default) the commit, the diff, and untracked sources; in `tree` mode a full
+  copy. It also records the runtime environment.
+- `cairn-report finalize-study outputs/<name>/<timestamp>` completes a study
+  whose launcher died, by the same rule, once every trial job has ended.
 
 ## Hub
 

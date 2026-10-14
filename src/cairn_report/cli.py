@@ -86,6 +86,13 @@ def cmd_hub_serve(args) -> None:
               max_blob=int(args.max_blob_gb * 1024**3), secure_cookie=not args.insecure_cookies)
 
 
+def cmd_finalize_study(args) -> None:
+    from .runs import finalize_study
+
+    completed = finalize_study(args.study)
+    print(f"{args.study}: {'completed; latest moved' if completed else 'failed (not every trial completed)'}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="cairn-report", description="Static reports from Markdown and run outputs, a run logger, and an artifact hub.")
     parser.add_argument("--version", action="version", version=f"cairn-report {__version__}")
@@ -107,6 +114,10 @@ def main(argv: list[str] | None = None) -> None:
     share.add_argument("--out", type=Path, help="where to write the page (default: <output_dir>/../share/index.html)")
     share.add_argument("--no-build", action="store_true", help="share the existing build output")
     share.set_defaults(run=cmd_share)
+
+    finalize = commands.add_parser("finalize-study", help="complete a multirun study whose launcher died, once every trial ended")
+    finalize.add_argument("study", type=Path, help="the study folder, outputs/<run-name>/<timestamp>")
+    finalize.set_defaults(run=cmd_finalize_study)
 
     tracker = commands.add_parser("mlflow", help="run the project's own MLflow tracking server ([logger.mlflow] serve = true)")
     tracker.add_argument("--host", default="127.0.0.1")
