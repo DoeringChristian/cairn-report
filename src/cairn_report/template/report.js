@@ -77,8 +77,10 @@ function hydrateFigure(card) {
     const image = card.querySelector("img");
     if (image) {
       /* The builder sets the card's shape from the image size; for an image it could not measure, take it on load. */
-      const fit = () => { if (!image.naturalWidth) return; const ratio = image.naturalWidth / image.naturalHeight; card.style.setProperty("--figure-ratio", Math.min(Math.max(ratio, 0.75), 10).toFixed(3)); card.classList.toggle("is-wide", ratio > 2); card.classList.toggle("is-tall", ratio < 1); };
+      const fit = () => { if (!image.naturalWidth) return; const ratio = image.naturalWidth / image.naturalHeight; card.style.setProperty("--image-ratio", ratio.toFixed(4)); card.style.setProperty("--figure-ratio", Math.min(Math.max(ratio, 0.75), 10).toFixed(3)); card.classList.toggle("is-wide", ratio > 2); card.classList.toggle("is-tall", ratio < 1); };
       if (!card.style.getPropertyValue("--figure-ratio")) image.addEventListener("load", fit, {once: true});
+      /* An image shown at more than twice its pixel size (a small reconstruction, a 64-pixel sample) keeps its pixels sharp. */
+      image.addEventListener("load", () => { if (image.naturalWidth && image.clientWidth > 2 * image.naturalWidth) image.classList.add("is-pixelated"); });
       if (image.dataset.src) whenNear(card, () => { image.src = image.dataset.src; });
     }
   }
@@ -96,7 +98,7 @@ function hydrateVideoCard(card, video) {
   const badge = el("span", "video-badge", "▶"); card.querySelector(".figure-copy").before(badge);
   video.addEventListener("loadedmetadata", () => {
     const ratio = video.videoWidth / video.videoHeight;
-    if (ratio && !card.style.getPropertyValue("--figure-ratio")) { card.style.setProperty("--figure-ratio", Math.min(Math.max(ratio, 0.75), 10).toFixed(3)); card.classList.toggle("is-wide", ratio > 2); card.classList.toggle("is-tall", ratio < 1); }
+    if (ratio && !card.style.getPropertyValue("--figure-ratio")) { card.style.setProperty("--image-ratio", ratio.toFixed(4)); card.style.setProperty("--figure-ratio", Math.min(Math.max(ratio, 0.75), 10).toFixed(3)); card.classList.toggle("is-wide", ratio > 2); card.classList.toggle("is-tall", ratio < 1); }
     badge.textContent = `▶ ${clock(video.duration).replace(/\.\d+$/, "")}`;
   }, {once: true});
   whenNear(card, () => { video.preload = "metadata"; video.src = video.dataset.src; playObserver?.observe(video); });
@@ -261,6 +263,7 @@ async function loadReportList(data) {
 
 const lightbox = $("#lightbox"), lightboxImage = $("#lightbox-image"), lightboxPlot = $("#lightbox-plot"), lightboxVideo = $("#lightbox-video");
 let viewMedia = lightboxImage;  // the image or the video the zoom, pan, and wheel act on
+lightboxImage.addEventListener("load", () => lightboxImage.classList.toggle("is-pixelated", lightboxImage.clientWidth > 2 * lightboxImage.naturalWidth));
 async function showFigure(index) { active = (index + figures.length) % figures.length; const figure = figures[active]; const interactive = figure.type === "plotly", video = figure.type === "video"; lightboxImage.hidden = interactive || video; lightboxVideo.hidden = !video; $("#video-controls").hidden = !video; lightboxPlot.hidden = !interactive; $(".zoom").hidden = interactive; viewMedia = video ? lightboxVideo : lightboxImage; if (!video) stopVideo(); if (interactive) { lightboxImage.src = ""; await renderPlot(lightboxPlot, figure, true); } else { if (globalThis.Plotly) Plotly.purge(lightboxPlot); if (video) { lightboxImage.removeAttribute("src"); startVideo(figure); } else { lightboxImage.src = figure.src; lightboxImage.alt = figure.title; } resetView(); } syncLightboxComment(); $("#lightbox-title").textContent = figure.title; $("#lightbox-caption").textContent = figure.caption || ""; renderTrace(figure.trace || {}); }
 // Every enlarged figure says where it came from: file, run, producing code, commit.
 const codeRef = ref => ref ? `${ref.file || "?"}${ref.line ? `:${ref.line}` : ""}${ref.function ? ` · ${ref.function}()` : ""}` : "";

@@ -59,9 +59,6 @@
 .comment-bubble { position: absolute; z-index: 6; top: 8px; right: 8px; min-width: 22px; height: 22px; padding: 0 6px; border: 2px solid var(--card); border-radius: 999px; background: var(--accent); color: white; box-shadow: 0 2px 8px #0002; font: 700 11px/18px system-ui; cursor: pointer; }
 .comment-bubble:hover { transform: scale(1.08); }
 .figure-grid { align-items: start; }
-.figure-card img { object-fit: contain; }
-/* Cards follow the image's aspect ratio (set by report.js, clamped to 3:4 to 10:1); tall images are capped. */
-.figure-card img, .figure-card:last-child:nth-child(odd) img { aspect-ratio: var(--figure-ratio, 16 / 10); max-height: 560px; }
 .figure-grid > .figure-card.is-wide { grid-column: 1 / -1; }
 .figure-grid > .figure-card.is-tall:last-child:nth-child(odd):not(:only-child) { grid-column: auto; }
 .stage img { cursor: grab; touch-action: none; transform: translate(var(--pan-x, 0px), var(--pan-y, 0px)) scale(var(--zoom, 1)); }
@@ -96,7 +93,6 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 .report-prose .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 18px 0; }
 .report-prose .columns > * { margin: 0; }
 /* report.md-driven components */
-.report-prose > p, .report-prose > ul, .report-prose > ol, .report-prose > blockquote { max-width: 72ch; }
 .report-prose .metric-grid { margin: 0 0 8px; }
 .report-prose .exec-block { margin: 22px 0; }
 .report-prose .report-value { font-variant-numeric: tabular-nums; font-weight: 650; }
@@ -201,7 +197,6 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 .brand .site-title { display: inline; width: auto; height: auto; border-radius: 0; background: none; color: inherit; }
 
 /* Videos: cards play muted on screen; the lightbox has a player bar under the video. */
-.figure-card video { display: block; width: 100%; aspect-ratio: var(--figure-ratio, 16 / 9); max-height: 560px; object-fit: contain; background: #111; }
 .video-card { position: relative; }
 .video-badge { position: absolute; left: 10px; top: 10px; padding: 3px 8px; border-radius: 99px; background: #000000a8; color: white; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
 .report-prose video { display: block; max-width: 100%; margin: 18px 0; border-radius: 8px; background: #111; }
@@ -214,3 +209,20 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 .video-controls input[type=range] { flex: 1; min-width: 80px; accent-color: var(--accent); cursor: pointer; }
 .video-time { flex: none; min-width: 190px; text-align: right; font-variant-numeric: tabular-nums; color: #c5cec9; }
 @media (max-width: 760px) { .video-time { min-width: 0; } .video-controls { flex-wrap: wrap; } }
+
+/* One reading column: the header, text, figures, callouts, tables, equations, and code share both
+   edges, about 75-80 characters of text wide. */
+:root { --column: 46rem; }
+main { width: min(100%, calc(var(--column) + 2 * clamp(24px, 5vw, 74px))); }
+@media (max-width: 760px) { main { width: 100%; } }
+
+/* Figures keep their own shape: as wide as their cell (small images are scaled up), unless that would
+   be taller than 80% of the window, then narrower; centered. The card and caption span the cell, as a
+   paper figure spans the column. The builder writes each image's aspect ratio (--image-ratio), so the
+   space is reserved before it loads. */
+#report-prose .figure-card img, #report-prose .figure-card video {
+  display: block; width: min(100%, calc(80vh * var(--image-ratio, 1.6))); height: auto; max-width: 100%;
+  margin: 0 auto; aspect-ratio: var(--image-ratio, 16 / 10); object-fit: contain;
+}
+#report-prose .figure-card video { background: #111; }
+#report-prose .figure-card img.is-pixelated, .stage img.is-pixelated { image-rendering: pixelated; }

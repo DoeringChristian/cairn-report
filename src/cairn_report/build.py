@@ -742,7 +742,7 @@ def figure_card(
     elif size and size[0] > 0 and size[1] > 0:  # the card's final shape, before the image arrives
         ratio = size[0] / size[1]
         classes += " is-wide" if ratio > 2 else " is-tall" if ratio < 1 else ""
-        style = f' style="--figure-ratio:{min(max(ratio, 0.75), 10):.3f}"'
+        style = f' style="--figure-ratio:{min(max(ratio, 0.75), 10):.3f};--image-ratio:{ratio:.4f}"'
         dims = f' width="{size[0]}" height="{size[1]}"'
     attrs = (
         f'class="{classes}"{style} id="{esc(fid)}" '
