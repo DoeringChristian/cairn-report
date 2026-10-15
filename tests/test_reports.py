@@ -450,7 +450,7 @@ def test_republishing_an_unchanged_report_creates_no_version(project, capsys):
 
 def test_lineage_connects_the_report_and_its_input(project):
     main(["publish", "reports/alpha"])
-    assert store.lineage("reports/alpha@v1") == {"inputs": ["study:descent@v1"], "consumers": []}
+    assert store.lineage("reports/alpha@v1") == {"inputs": ["study:descent@v1"], "consumers": [], "runs": []}
     assert store.lineage("descent@v1")["consumers"] == ["study:reports/alpha@v1"]
 
 

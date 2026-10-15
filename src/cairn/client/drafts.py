@@ -1,36 +1,30 @@
 """Drafts: a folder managed by Cairn that becomes an artifact's next version when it closes.
 
-    with cairn.draft("descent") as run:          # a fresh, empty folder: run.path
-        x = cairn.pull("datasets/quadratic@latest")   # recorded as an input of the draft
-        run.scalar("loss", 0.1, step=0)          # a draft is a run logger on its folder (client/logger.py)
-        (run.path / "notes.txt").write_text("...")
-    run.version                                  # descent@v<n> (a pending Version while the server is down)
+    with cairn.draft("models/student") as model:  # a fresh, empty folder: model.path
+        model.add({"val_loss": 0.1, "step": 0})   # a draft is a writer on its folder (client/logger.py)
+        model.add_file("model.pt")
+    model.version                                # models/student@v<n> (a pending Version while the server is down)
 
 A draft lives at `<base>/drafts/<name>/<uid>/` (the project's `.cairn/`, git-ignored; outside a project the
 data root's `drafts/`), with its record beside it, `<uid>.draft.json` (name, project, label, metadata,
-aliases, owner, state). While it is open, pulls made in the process record their exact versions in the
-draft's own `.cairn-inputs.jsonl` (`$CAIRN_INPUTS` points there and is restored when the draft closes; nested
-drafts restore in order). Leaving the block publishes the folder exactly like `cairn.publish(name, folder)`
-(inputs, the unchanged check, digest, aliases; the label defaults to the draft's start time) and removes it:
-its files now live in the store (blobs are cloned, or hard-linked where the filesystem cannot clone, never
-copied when avoidable), the replica, or the cache. An exception keeps the folder (state `kept`, printed on
-stderr) and marks a running version failed; `cairn drafts` lists kept and open drafts, `cairn drafts publish
-<uid>` publishes one later, `cairn drafts discard <uid>` removes it.
-
-Several drafts may be open at once (a model and its evaluation): a pull is recorded in every open draft, and
-a pull made while none is open is carried into the drafts opened next (store/inputs.py). `run.use(other)`
-declares another draft, a Version, or a reference as an input; when both drafts are published in this process
-the other goes first (a draft closed before its input waits for it) and the input names its exact version.
-A draft's version gets the draft's uid. `config=` (and, for a Hydra run dir, the resolved job config and its
-overrides) becomes `metadata["config"]` (`metadata["overrides"]`).
+aliases, owner, state, run). Every draft is an output of the process's run (cairn/client/runs.py): opening one
+starts the run if `cairn.init()` was not called, and the draft's one input is that run's version, named by its
+uid while the run is still running. What the process pulls is an input of the run, not of the draft. Leaving the
+block publishes the folder exactly like `cairn.publish(name, folder)` (the unchanged check, digest, aliases; the
+label defaults to the draft's start time) and removes it: its files now live in the store (blobs are cloned, or
+hard-linked where the filesystem cannot clone, never copied when avoidable), the replica, or the cache. An
+exception keeps the folder (state `kept`, printed on stderr) and marks a running version failed; `cairn drafts`
+lists kept and open drafts, `cairn drafts publish <uid>` publishes one later, `cairn drafts discard <uid>`
+removes it. A draft's version gets the draft's uid. `config=` (and, for a Hydra run dir, the resolved job config
+and its overrides) becomes `metadata["config"]` (`metadata["overrides"]`).
 
 `watch=True` starts a running version at once and keeps it synced while the block runs (a `Publication`,
 like `cairn publish --watch`: every `[store] interval` seconds when something changed, a heartbeat on a store
 server, `sync()` by hand); closing completes it, an exception fails it.
 
-Hydra points `hydra.run.dir` at `${cairn.draft:<name>}` (cairn/runs/hydra.py); `current_draft()` returns the
-draft the process writes into (the innermost open one, else the one `$CAIRN_INPUTS` or the working directory
-lies in), as a view on a trial's subfolder in a multirun.
+Hydra may point `hydra.run.dir` at `${cairn.draft:<name>}` (cairn/runs/hydra.py) to make the job folder an output
+draft; `current_draft()` returns the draft the process writes into (the innermost open one, else the one the
+working directory lies in), as a view on a trial's subfolder in a multirun.
 """
 
 from __future__ import annotations
@@ -44,18 +38,17 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..config import cairn_base, find_project, protect
-from ..store import INPUTS_ENV, INPUTS_FILE, StoreError, refs
-from ..store.inputs import close_sink, open_sink
+from ..config import cairn_base, protect
+from ..store import StoreError, refs
 from ..store.cache import data_root, read_json, write_json
 from ..store.uids import UID, new_uid
-from .logger import RunLogger
+from . import logger as _logger
+from .logger import Writer
 
 DRAFTS = "drafts"
 SUFFIX = ".draft.json"
-_UNSET = object()
 _ACTIVE: list["Draft"] = []  # the drafts open in this process, innermost last
-_PUBLISHED: dict[str, str] = {}  # draft uid -> the exact ref it was published as, in this process
+_logger._OWN_FILES.add(Path(__file__).resolve())
 
 
 def drafts_root() -> Path:
@@ -81,32 +74,48 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-class Draft(RunLogger):
+def _label() -> str:
+    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def reserve(name: str, *, label: str | None = None, metadata: dict | None = None, aliases=(), watch: bool = False,
+            folder: Path | None = None, uid: str | None = None, **extra) -> tuple[Path, dict]:
+    """Make a draft's folder (`folder`, default `<drafts root>/<name>/<uid>/`, fresh) and write its record."""
+    target = refs.parse(name)
+    if target.selector or target.path:
+        raise ValueError(f"a draft takes an artifact name, not {name!r}")
+    refs.valid_name(target.name)
+    if target.project:
+        refs.valid_project(target.project)
+    label = label or _label()
+    refs.valid_label(label)
+    uid = uid or new_uid()
+    given = folder is not None
+    folder = Path(folder) if given else drafts_root() / target.name / uid
+    folder.mkdir(parents=True, exist_ok=given)  # a given folder is a Hydra job's: Hydra made it
+    record = {"uid": uid, "project": target.project, "name": target.name, "label": label,
+              "metadata": metadata, "aliases": list(aliases), "watch": bool(watch),
+              "created": datetime.now(timezone.utc).isoformat(), "owner": {"host": socket.gethostname(), "pid": os.getpid()},
+              "state": "open", **extra}
+    write_json(_record_path(folder), record)
+    return folder.resolve(), record
+
+
+class Draft(Writer):
     """A fresh folder (`path`) that becomes the next version of artifact `name` when it closes.
 
     A context manager: normal exit publishes it (`publish`), an exception keeps it (`fail`). Without `with`,
-    call `publish()`, `fail()`, or `discard()` yourself. It is also a run logger on its folder (`scalar`,
-    `scalars`, `table`, `json`, `figure`, `plotly`, `image`, `video`, `artifact`, `text`)."""
+    call `publish()`, `fail()`, or `discard()` yourself (a draft still open when the process's run ends is
+    published with it, or kept when the run fails). It is also a writer on its folder (`add`, `add_figure`,
+    `add_image`, `add_video`, `add_plotly`, `add_table`, `add_json`, `add_text`, `add_file`, `add_dir`)."""
+
+    is_run = False
 
     def __init__(self, name: str, *, label: str | None = None, metadata: dict | None = None, aliases=(), watch: bool = False,
                  store=None, config: dict | None = None, interval: float | None = None, activate: bool = True):
-        target = refs.parse(name)
-        if target.selector or target.path:
-            raise ValueError(f"a draft takes an artifact name, not {name!r}")
-        refs.valid_name(target.name)
-        if target.project:
-            refs.valid_project(target.project)
         if config is not None:
             metadata = {**(metadata or {}), "config": config}
-        uid = new_uid()
-        folder = drafts_root() / target.name / uid
-        folder.mkdir(parents=True)
-        record = {"uid": uid, "project": target.project, "name": target.name,
-                  "label": label or datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
-                  "metadata": metadata, "aliases": list(aliases), "watch": bool(watch), "uses": [],
-                  "created": datetime.now(timezone.utc).isoformat(), "owner": {"host": socket.gethostname(), "pid": os.getpid()},
-                  "state": "open"}
-        write_json(_record_path(folder), record)
+        folder, record = reserve(name, label=label, metadata=metadata, aliases=aliases, watch=watch)
         self._setup(folder, folder, record, store, interval)
         if activate:
             self.activate()
@@ -118,7 +127,9 @@ class Draft(RunLogger):
         return draft
 
     def _setup(self, folder: Path, path: Path, record: dict, store, interval: float | None) -> None:
-        RunLogger.__init__(self, path)
+        from ..config import find_project
+
+        Writer.__init__(self, path)
         self.project = find_project()  # origins are relative to the project the job runs in
         self.folder, self.record = folder, record
         self.uid, self.name = record["uid"], record["name"]
@@ -126,18 +137,15 @@ class Draft(RunLogger):
         self.version = None
         self._store_arg, self._store = store, None
         self._interval = interval
-        self._previous = _UNSET
+        self._active = False
         self._pub = None
         self._lock = threading.Lock()
         self._stop: threading.Event | None = None
         self._watcher: threading.Thread | None = None
         self._closed = False
-        self._waiting: list["Draft"] = []  # drafts this one uses that were still open when it was published
-        self._dependents: list["Draft"] = []  # drafts waiting for this one to be published first
-        self._uses: list["Draft"] = []  # the open drafts `use` named, in this process
 
     def __repr__(self) -> str:
-        return f"<cairn.Draft {self.name} {self.uid} {self.path}>"
+        return f"<cairn.{type(self).__name__} {self.name} {self.uid} {self.path}>"
 
     # ------------------------------------------------------------ properties
 
@@ -197,36 +205,44 @@ class Draft(RunLogger):
         """The Artifact this draft becomes a version of."""
         return self.store.project(self.record.get("project")).artifact(self.name)
 
+    @property
+    def ref(self) -> str:
+        """`project:name@<uid>`: this draft's version, exactly, before and after it is published."""
+        target = self.target
+        return f"{target.project.name}:{target.name}@{self.uid}"
+
+    @property
+    def run_ref(self) -> str | None:
+        """The run this draft is an output of (`project:runs/<name>@<uid>`), once it is open."""
+        return self.record.get("run")
+
     # ------------------------------------------------------------ activation
 
     def activate(self) -> "Draft":
-        """Record this process's pulls in the draft (`$CAIRN_INPUTS`) and, with `watch`, start the running version."""
-        if self._previous is not _UNSET:
+        """Make this the draft the process writes into, as an output of the process's run (started now if it is
+        not yet), and, with `watch`, start the running version."""
+        if self._active:
             return self
-        self._previous = os.environ.get(INPUTS_ENV)
-        os.environ[INPUTS_ENV] = str(self.path / INPUTS_FILE)
+        self._active = True
+        if not self.is_run and not self.trial:
+            from . import runs
+
+            run = runs.input_for(self)
+            if run and run != self.record.get("run"):
+                self.record["run"] = run
+                self._save()
         _ACTIVE.append(self)
-        open_sink(self.path / INPUTS_FILE)
         if self.watch and not self.trial and self._pub is None:
             self._start_watch()
         return self
 
     def deactivate(self) -> None:
-        """Give `$CAIRN_INPUTS` back (to the enclosing draft, or what it was before)."""
-        if self._previous is _UNSET:
+        if not self._active:
             return
-        previous, self._previous = self._previous, _UNSET
-        close_sink(self.path / INPUTS_FILE)
+        self._active = False
         index = next((i for i, item in enumerate(_ACTIVE) if item is self), None)
         if index is not None:
             del _ACTIVE[index]
-            if index < len(_ACTIVE):  # a draft opened inside this one is still open: it restores to what we had
-                _ACTIVE[index]._previous = previous
-                return
-        if previous is None:
-            os.environ.pop(INPUTS_ENV, None)
-        else:
-            os.environ[INPUTS_ENV] = previous
 
     def __enter__(self) -> "Draft":
         return self.activate()
@@ -240,49 +256,49 @@ class Draft(RunLogger):
 
     # ------------------------------------------------------------ inputs and config
 
-    def use(self, other) -> str:
-        """Declare an input explicitly: another draft (open or published; when both are published in this process,
-        the other one goes first and this one names its exact version), a `Version`, or a reference. Returns the
-        reference recorded (a draft's is `project:name@<uid>` until it is published)."""
-        if isinstance(other, Draft):
-            if other is self or other.folder == self.folder:
-                raise ValueError("a draft cannot use itself")
-            target = other.target
-            ref = f"{target.project.name}:{target.name}@{other.uid}"
-            if not other._closed:
-                self._uses.append(other)
-            entry = {"draft": other.uid, "ref": ref}
-        else:
-            ref = getattr(other, "ref", None) or str(other)
-            refs.parse(ref)
-            entry = {"ref": ref}
-        if entry not in self.record.setdefault("uses", []):
-            self.record["uses"].append(entry)
-            self._save()
-        return ref
-
     def _inputs(self) -> list[str]:
-        """The explicit inputs (`use`), with each draft published in this process by its exact version."""
-        found = []
-        for entry in self.record.get("uses") or []:
-            ref = _PUBLISHED.get(entry.get("draft"), entry["ref"])
-            if ref not in found:
-                found.append(ref)
+        """The version's inputs: its run (while that is running or completed), and any listed in the record."""
+        found = [*(self.record.get("inputs") or [])]
+        run = self.record.get("run")
+        if run and run not in found and self._run_usable(run):
+            found.insert(0, run)
         return found
+
+    def _run_usable(self, ref: str) -> bool:
+        from . import runs
+
+        current = runs.current()
+        if current is not None and current.uid == refs.parse(ref).selector:
+            return True
+        if os.environ.get(runs.RUN_ENV) == ref:
+            return True
+        try:
+            status = self.store.version(ref).status
+        except StoreError as error:
+            print(f"warning: {self.name}@{self.uid}: its run {ref} is not available ({error}); publishing it without",
+                  file=sys.stderr, flush=True)
+            return False
+        if status in ("running", "completed"):
+            return True
+        print(f"warning: {self.name}@{self.uid}: its run {ref} is {status}; publishing it without that input",
+              file=sys.stderr, flush=True)
+        return False
 
     @property
     def config(self) -> dict | None:
-        """The run's configuration (`metadata["config"]`; Hydra drafts get the resolved job config)."""
+        """The configuration (`metadata["config"]`; Hydra drafts get the resolved job config)."""
         return (self.record.get("metadata") or {}).get("config")
 
     def set_metadata(self, **values) -> None:
         """Add metadata (for example `config=`, `overrides=`) before the draft is published."""
+        if self._pub is not None:
+            raise StoreError(f"{self.name}@{self.uid} is already running on the store: its metadata is fixed")
         self.record["metadata"] = {**(self.record.get("metadata") or {}), **values}
         self._save()
 
     # ------------------------------------------------------------ watching
 
-    def _start_watch(self) -> None:
+    def _start_watch(self, follow: bool = True) -> None:
         from .publishing import Publication
 
         target = self.target
@@ -293,6 +309,8 @@ class Draft(RunLogger):
         self.version = target.version(self._pub.uid)
         self.record["running"] = {"uid": self._pub.uid, "number": self._pub.version}
         self._save()
+        if not follow:
+            return
         interval = float(self._interval if self._interval is not None else self._pub.config.store.get("interval", 30))
         self._stop = threading.Event()
         self._watcher = threading.Thread(target=self._follow, args=(self._stop, interval), name=f"cairn-draft {self.uid}",
@@ -344,18 +362,12 @@ class Draft(RunLogger):
         `allow_incomplete`."""
         self._ensure_open()
         self.deactivate()
-        waiting = [other for other in self._uses if not other._closed]
-        if waiting:  # its inputs go first: published right after the last of them
-            self._waiting = waiting
-            for other in waiting:
-                if self not in other._dependents:
-                    other._dependents.append(self)
-            return None
         self._stop_watch()
         try:
+            inputs = self._inputs()
             if self._pub is not None:
                 with self._lock:
-                    self._pub.inputs = self._inputs()
+                    self._pub.inputs = inputs
                     self._pub.complete()
                 version = self.target.version(self._pub.uid)
                 version.manifest  # noqa: B018  (load it now)
@@ -366,32 +378,14 @@ class Draft(RunLogger):
                 record["attempted"] = True
                 self._save()
                 version = self.target.publish(self.folder, metadata=record.get("metadata"), aliases=record.get("aliases") or (),
-                                              label=self.label, inputs=self._inputs(), allow_incomplete=allow_incomplete,
+                                              label=self.label, inputs=inputs, allow_incomplete=allow_incomplete,
                                               _link=True, _uid=uid)
         except BaseException as error:
             self._keep(error)
-            self._release(error)
             raise
         self.version = version
-        _PUBLISHED[self.uid] = version.ref
         self._remove()
-        self._release(None)
         return version
-
-    def _release(self, failed) -> None:
-        """This draft is published (`failed` None) or will not be: publish (or keep) the drafts that waited for it."""
-        dependents, self._dependents = self._dependents, []
-        for other in dependents:
-            if other._closed or self not in other._waiting:
-                continue
-            other._waiting.remove(self)
-            if failed is not None:
-                other._waiting = []
-                reason = f"its input {self.name}@{self.uid} was not published ({failed})"
-                other._keep(reason)
-                other._release(reason)
-            elif not other._waiting:
-                other.publish()
 
     def fail(self, error: BaseException | str | None = None) -> None:
         """Keep the folder for inspection (state `kept`, printed on stderr) and mark a running version failed."""
@@ -402,7 +396,6 @@ class Draft(RunLogger):
         self._stop_watch()
         self.deactivate()
         self._keep(error)
-        self._release(error or "failed")
 
     def _keep(self, error) -> None:
         if self._pub is not None:
@@ -419,6 +412,7 @@ class Draft(RunLogger):
         reason = f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else error
         self.record.update(state="kept", error=reason, ended=datetime.now(timezone.utc).isoformat())
         self._save()
+        self._closed = True
         print(f"cairn: kept the draft {self.folder}{f' ({reason})' if reason else ''}; `cairn drafts publish {self.uid}`"
               f" publishes it, `cairn drafts discard {self.uid}` removes it", file=sys.stderr, flush=True)
 
@@ -434,7 +428,6 @@ class Draft(RunLogger):
         elif (self.record.get("running") or {}).get("number") is not None:
             self._fail_running()
         self._remove()
-        self._release("discarded")
 
     def _fail_running(self) -> None:
         """A kept or abandoned watch draft's running version on a local store: fail it (a server fails it by heartbeat)."""
@@ -454,6 +447,8 @@ class Draft(RunLogger):
         self._closed = True
         shutil.rmtree(self.folder, ignore_errors=True)
         _record_path(self.folder).unlink(missing_ok=True)
+        if find(self.folder.parent) is not None:  # a trial's folder inside its sweep's: the sweep's folder stays
+            return
         root = drafts_root().resolve()
         parent = self.folder.parent.resolve()
         while parent != root and root in parent.parents:
@@ -485,13 +480,13 @@ def draft(name: str, *, label: str | None = None, metadata: dict | None = None, 
           store=None, config: dict | None = None) -> Draft:
     """A fresh, empty folder managed by Cairn (`.path`) that becomes the next version of `name` when it closes.
 
-        with cairn.draft("descent") as run:
-            run.scalar("loss", 0.1)            # or write files into run.path
-        run.version                            # the published Version
+        with cairn.draft("models/student") as model:
+            model.add_file("model.pt")         # or write files into model.path
+        model.version                          # the published Version; its input is the process's run
 
     `label` defaults to the start time (`YYYY-MM-DD_HH-MM-SS`); `watch=True` keeps a running version synced while
     the block runs. `store` as for `cairn.publish` (None: the configured store). `config` (a plain dict) becomes
-    `metadata["config"]`. The version's uid is the draft's uid."""
+    `metadata["config"]`. The version's uid is the draft's uid. The process's run starts now if it has not."""
     return Draft(name, label=label, metadata=metadata, aliases=aliases, watch=watch, store=store, config=config)
 
 
@@ -542,15 +537,12 @@ def load(where: Path | str, store=None) -> Draft:
 
 
 def current_draft() -> Draft | None:
-    """The draft this process writes into: the innermost open one, else the one `$CAIRN_INPUTS` or the working
-    directory lies in (a Hydra job whose run dir is `${cairn.draft:...}`, or a subprocess of one), else None."""
+    """The draft this process writes into: the innermost open one, else the one the working directory lies in (a
+    Hydra job whose run dir is `${cairn.draft:...}`, or a subprocess of one), else None. The run is `cairn.run()`."""
     if _ACTIVE:
         return _ACTIVE[-1]
-    if os.environ.get(INPUTS_ENV):
-        found = find(Path(os.environ[INPUTS_ENV]).parent)
-        if found is not None:
-            return found
-    return find(Path.cwd())
+    found = find(Path.cwd())
+    return None if found is None or found.record.get("kind") == "run" else found
 
 
 def age(seconds: float) -> str:

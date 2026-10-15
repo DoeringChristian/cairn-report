@@ -1,0 +1,443 @@
+"""Runs (`cairn.init`, cairn/client/runs.py): every process that reads or writes artifacts is a run, a version of
+`runs/<name>`. Its inputs are what the process used, every draft it publishes has the run as its one input, and its
+folder records the output, the machine, the code, and the packages. Against a local store and a store server; the
+end-of-process behaviour in subprocesses (kept short)."""
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import textwrap
+import time
+
+import pytest
+
+import cairn
+from cairn.client import drafts, runs
+from cairn.formats import read_jsonl
+
+from test_drafts import published_dataset
+from test_objects import configured  # noqa: F401  (local store or store server, with cairn.toml)
+from test_store import env, folder  # noqa: F401
+
+
+def finish_and_sync(run):
+    version = run.finish()
+    store = cairn.connect()
+    if store.remote:
+        store.sync()
+    return version
+
+
+# ------------------------------------------------------------------ in this process
+
+
+def test_the_first_use_pull_or_draft_starts_the_run(configured, env):
+    dataset = published_dataset(env)
+    assert cairn.run() is None
+    used = cairn.use("datasets/toy@latest")
+    run = cairn.run()
+    assert isinstance(run, cairn.Run) and run.implicit and run.name == f"runs/{runs.default_name()}"
+    assert isinstance(used, cairn.Version) and used == dataset and used.ref == "study:datasets/toy@v1"
+    assert (used.path / "x.txt").read_text() == "1"  # materialized on first use
+    store = cairn.connect()
+    running = store.version(run.ref)
+    assert running.status == "running" and running.metadata == {"kind": "run"} and running.uid == run.uid
+    assert cairn.pull("datasets/toy@v1").is_dir() and cairn.run() is run  # one run
+    version = finish_and_sync(run)
+    assert version.status == "completed" and version.inputs == [dataset.ref] and cairn.run() is None
+    assert dataset.consumers == [version.ref]
+
+
+def test_one_run_per_process(env):
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    run = cairn.init(name="train", config={"lr": 0.1}, metadata={"note": "first"}, system=False, code=False)
+    assert run.name == "runs/train" and cairn.init() is run and cairn.init(name="train") is run and cairn.run() is run
+    with pytest.raises(cairn.StoreError, match="one run per process"):
+        cairn.init(name="other")
+    with cairn.draft("model") as model:
+        model.add_text("w", "w")
+    assert model.run_ref == run.ref
+    version = run.finish()
+    assert version.metadata == {"kind": "run", "note": "first", "config": {"lr": 0.1}} and version.label == run.label
+    assert cairn.run() is None
+    implicit = cairn.draft("again")  # after finish(), a new run starts
+    assert cairn.run() is not run and cairn.run().implicit
+    with pytest.raises(cairn.StoreError, match="before those"):
+        cairn.init(config={"lr": 0.2})
+    implicit.discard()
+
+
+def test_use_refuses_versions_that_are_not_completed(env):
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    run = cairn.init(name="producer", system=False, code=False)
+    with pytest.raises(cairn.StoreError, match="running"):
+        cairn.use(run.ref)
+    run.finish()
+
+
+def test_running_inputs_by_uid_are_accepted_failed_and_unknown_ones_refused(configured, env):
+    store = cairn.connect()
+    backend = store.backend
+    backend.create_project("study")
+    number = backend.start_version("study", "runs/job", label="t", metadata={"kind": "run"})
+    uid = backend.get_version("study", "runs/job", number)["uid"]
+    data = folder(env, "out", {"a.txt": "a"})
+    out = store.project().artifact("out").publish(data, inputs=[f"study:runs/job@{uid}"])
+    assert out.inputs == ["study:runs/job@v1"]  # stored by number, like any exact input
+    assert store.backend.lineage(f"study:runs/job@{uid}")["consumers"] == [out.ref]
+    with pytest.raises(cairn.StoreError, match="running"):  # by number or alias, a running version is no input
+        store.project().artifact("out2").publish(data, inputs=["study:runs/job@v1"])
+    from cairn.store.uids import new_uid
+
+    with pytest.raises(cairn.StoreError):
+        store.project().artifact("out3").publish(data, inputs=[f"study:runs/job@{new_uid()}"])
+    backend.fail_version("study", "runs/job", number)
+    with pytest.raises(cairn.StoreError, match="failed"):
+        store.project().artifact("out4").publish(data, inputs=[f"study:runs/job@{uid}"])
+    marks = store.backend.lineage(out.ref, marks=True)
+    assert marks["inputs"] == ["study:runs/job@v1"] and marks["nodes"]["study:runs/job@v1"] == {"status": "failed", "kind": "run"}
+    with pytest.raises(cairn.Protected):  # the failed run is still an input of a version: protected as before
+        store.version("runs/job@v1").delete()
+
+
+def test_lineage_looks_through_runs(env):
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    data = published_dataset(env, "datasets/a")
+    first = cairn.init(name="train", system=False, code=False)
+    cairn.use("datasets/a@v1")
+    with cairn.draft("models/m") as model:
+        model.add_text("w", "w")
+    first.finish()
+    second = cairn.init(name="evaluate", system=False, code=False)
+    cairn.use("models/m@v1")
+    with cairn.draft("evals/m") as evaluation:
+        evaluation.add_json("score", 1)
+    second.finish()
+    store = cairn.connect()
+    evals = store.version("evals/m@v1")
+    assert evals.inputs == ["study:runs/evaluate@v1"] and evals.run.ref == "study:runs/evaluate@v1"
+    assert [v.ref for v in evals.upstream()] == ["study:models/m@v1"]
+    assert [v.ref for v in data.downstream()] == ["study:models/m@v1"]
+    assert cairn.lineage("models/m@v1") == {"inputs": [data.ref], "consumers": ["study:evals/m@v1"],
+                                            "runs": ["study:runs/train@v1", "study:runs/evaluate@v1"]}
+    assert cairn.lineage("models/m@v1", through_runs=False) == {"inputs": ["study:runs/train@v1"],
+                                                                "consumers": ["study:runs/evaluate@v1"]}
+    run = store.version("runs/train@v1")
+    assert [v.ref for v in run.upstream()] == [data.ref] and [v.ref for v in run.downstream()] == ["study:models/m@v1"]
+
+
+def test_open_drafts_are_published_with_the_run(env):
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    run = cairn.init(name="loose", system=False, code=False)
+    left_open = cairn.draft("forgotten")
+    left_open.add({"x": 1})
+    run.finish()
+    assert left_open.version.number == 1 and left_open.version.inputs == ["study:runs/loose@v1"]
+    assert drafts.drafts() == []
+
+
+def test_a_subprocess_of_a_run_records_in_that_run(env):
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    data = published_dataset(env)
+    run = cairn.init(name="parent", system=False, code=False)
+    child = "import cairn; cairn.use('datasets/toy@v1'); d = cairn.draft('child-out'); d.add({'x': 1}); d.publish(); assert cairn.run() is None"
+    subprocess.run([sys.executable, "-c", child], check=True, cwd=env, env=dict(os.environ))
+    version = run.finish()
+    assert version.inputs == [data.ref] and version.consumers == ["study:child-out@v1"]
+    assert [item.name for item in cairn.connect().project().artifacts(prefix="runs/")] == ["runs/parent"]
+
+
+def test_watch_syncs_a_running_run_to_the_server(configured, env):
+    if configured is None:
+        pytest.skip("a store server only (a local store syncs the run when it ends, unless watch=True)")
+    (env / "cairn.toml").write_text((env / "cairn.toml").read_text().replace('project = "study"', 'project = "study"\ninterval = 0.2'))
+    run = cairn.init(name="live", system=False, code=False)
+    assert run.watch  # the default with a store server
+    run.add({"loss": 1.0, "step": 0})
+    store = cairn.connect()
+    deadline = time.time() + 20
+    files = []
+    while time.time() < deadline:
+        try:
+            files = [entry.path for entry in store.version(run.ref).refresh().files]
+        except cairn.StoreError:
+            files = []
+        if "metrics.jsonl" in files:
+            break
+        time.sleep(0.1)
+    assert "metrics.jsonl" in files and store.version(run.ref).status == "running"
+    from cairn.client import replica
+
+    assert replica.load(run.uid)["sync"] == "running" and (replica.folder_of(run.uid) / replica.HEARTBEAT).is_file()
+    version = finish_and_sync(run)
+    assert version.status == "completed" and "metrics.jsonl" in [f.path for f in version.files]
+
+
+def test_a_run_and_its_output_published_while_the_server_is_down(configured, env):
+    if configured is None:
+        pytest.skip("a store server only")
+    store = cairn.connect()
+    configured.stop()
+    run = cairn.init(name="offline", system=False, code=False)
+    with cairn.draft("result") as result:
+        result.add({"x": 1})
+    assert result.version.pending and result.version.inputs == [run.ref]
+    run.finish()
+    configured.start()
+    store.sync()
+    out = store.project().artifact("result").latest
+    assert out.inputs == ["study:runs/offline@v1"] and store.version("runs/offline@v1").status == "completed"
+
+
+# ------------------------------------------------------------------ whole processes
+
+SCRIPT = """\
+import os, sys, time
+import cairn
+
+run = cairn.init(name="job", config={"a": 1}, system=0.1)
+print("hello out", flush=True)
+print("hello err", file=sys.stderr, flush=True)
+os.system("echo from a subprocess")
+run.add({"loss": 1.0, "step": 0})
+cairn.use("datasets/toy@v1")
+with cairn.draft("out") as out:
+    out.add_text("note", "x")
+mode = sys.argv[1]
+if mode == "wait":
+    open("started", "w").close()
+    for _ in range(600):
+        time.sleep(0.05)
+time.sleep(0.3)
+if mode == "fail":
+    raise ValueError("boom")
+"""
+
+
+@pytest.fixture
+def script_project(env):
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    (env / "job.py").write_text(SCRIPT)
+    (env / "secrets.env").write_text("TOKEN=x")
+    (env / "data").mkdir()
+    (env / "data" / "big.json").write_text("{}")
+    (env / ".gitignore").write_text(".cairn/\n")
+    for command in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+        subprocess.run(["git", *command], cwd=env, check=True)
+    (env / "untracked.py").write_text("x = 1\n")
+    published_dataset(env)
+    return env
+
+
+def job(project, mode, **kwargs):
+    environ = {key: value for key, value in os.environ.items() if not key.startswith("SLURM_")}
+    environ |= {"SLURM_JOB_ID": "123", "SLURM_ARRAY_TASK_ID": "4", "CUDA_VISIBLE_DEVICES": "0", "MY_SECRET": "hidden"}
+    return subprocess.Popen([sys.executable, "job.py", mode], cwd=project, env=environ, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, **kwargs)
+
+
+def test_a_script_is_a_run_that_completes_at_exit(script_project):
+    process = job(script_project, "ok")
+    out, err = process.communicate(timeout=120)
+    assert process.returncode == 0, err
+    assert "hello out" in out and "from a subprocess" in out and "hello err" in err  # still printed
+    store = cairn.connect()
+    run = store.version("runs/job@latest")
+    assert run.status == "completed" and run.metadata == {"kind": "run", "config": {"a": 1}}
+    assert run.inputs == ["study:datasets/toy@v1"] and run.consumers == ["study:out@v1"]
+    assert store.version("out@v1").inputs == [run.ref]
+    folder_ = run.pull()
+    assert "hello out" in (folder_ / "logs" / "stdout.txt").read_text()
+    assert "from a subprocess" in (folder_ / "logs" / "stdout.txt").read_text()  # the file descriptor is teed
+    assert "hello err" in (folder_ / "logs" / "stderr.txt").read_text()
+    samples = read_jsonl(folder_ / "system" / "metrics.jsonl")
+    assert len(samples) >= 2 and all("time" in row and "disk_percent" in row for row in samples)
+    assert any("cpu_percent" in row or "load_1m" in row for row in samples) and any("memory_percent" in row or "process_max_rss_gb" in row for row in samples)
+    info = json.loads((folder_ / "system" / "info.json").read_text())
+    assert info["host"] and info["argv"] == ["job.py", "ok"] and info["cwd"] == str(script_project) and info["pid"]
+    assert info["slurm"] == {"job_id": "123", "array_task_id": "4"} and info["run"].startswith("study:runs/job@")
+    assert info["environment"] == {"CUDA_VISIBLE_DEVICES": "0", "SLURM_ARRAY_TASK_ID": "4", "SLURM_JOB_ID": "123"}
+    assert "packages" not in info and "cairn==" in (folder_ / "environment" / "pip-freeze.txt").read_text()
+    manifest = json.loads((folder_ / "code" / "manifest.json").read_text())
+    assert manifest["mode"] == "git" and len(manifest["commit"]) == 40
+    assert (folder_ / "code" / "git-tree.tar.gz").is_file() and (folder_ / "code" / "untracked" / "untracked.py").is_file()
+    assert "secrets.env" not in manifest["working_files"] and "data/big.json" not in manifest["working_files"]
+    assert not (folder_ / "run.json").exists()  # the version's status is the record
+    assert [row["loss"] for row in read_jsonl(folder_ / "metrics.jsonl")] == [1.0]
+    assert drafts.drafts() == []
+
+
+def test_an_unhandled_exception_fails_the_run(script_project):
+    process = job(script_project, "fail")
+    out, err = process.communicate(timeout=120)
+    assert process.returncode == 1 and "ValueError: boom" in err
+    store = cairn.connect()
+    [run] = store.project().artifact("runs/job").versions()
+    assert run.status == "failed" and "logs/error.txt" in [f.path for f in run.files]
+    assert run.consumers == ["study:out@v1"] and store.version("out@v1").inputs == ["study:runs/job@v1"]  # the edge stays
+    [kept] = drafts.drafts()
+    assert kept.uid == run.uid and kept.state == "kept"
+    assert "ValueError: boom" in (kept.folder / "logs" / "error.txt").read_text()
+    assert "ValueError: boom" in (kept.folder / "logs" / "stderr.txt").read_text()
+
+
+def test_sigterm_fails_the_run(script_project):
+    process = job(script_project, "wait")
+    deadline = time.time() + 60
+    while not (script_project / "started").exists() and time.time() < deadline:
+        time.sleep(0.05)
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=120)
+    assert process.returncode == 143
+    [run] = cairn.connect().project().artifact("runs/job").versions()
+    assert run.status == "failed"
+    [kept] = drafts.drafts()
+    assert "terminated by signal SIGTERM" in (kept.folder / "logs" / "error.txt").read_text()
+
+
+def test_capture_and_system_can_be_turned_off(env):
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    code = "import cairn; run = cairn.init(name='quiet', capture=False, system=False, code=False); print('hi')"
+    result = subprocess.run([sys.executable, "-c", code], cwd=env, capture_output=True, text=True)
+    assert result.returncode == 0 and result.stdout == "hi\n", result.stderr
+    version = cairn.connect().version("runs/quiet@latest")
+    assert version.files == []
+
+
+def test_the_default_name_follows_the_script(env):
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    (env / "pkg").mkdir()
+    (env / "pkg" / "__init__.py").write_text("")
+    (env / "pkg" / "Train_Model.py").write_text("import cairn\nprint(cairn.init(system=False, code=False).name)\n")
+    by_module = subprocess.run([sys.executable, "-m", "pkg.Train_Model"], cwd=env, capture_output=True, text=True)
+    by_path = subprocess.run([sys.executable, "pkg/Train_Model.py"], cwd=env, capture_output=True, text=True)
+    by_code = subprocess.run([sys.executable, "-c", "import cairn; print(cairn.init(system=False, code=False).name)"], cwd=env,
+                             capture_output=True, text=True)
+    assert [by_module.stdout.strip(), by_path.stdout.strip(), by_code.stdout.strip()] == \
+        ["runs/pkg.train_model", "runs/train_model", "runs/interactive"], by_module.stderr + by_path.stderr
+
+
+# ------------------------------------------------------------------ Hydra: ${cairn.run:}
+
+CONFIG = """\
+defaults:
+  - _self_
+run:
+  name: demo
+experiment:
+  _target_: experiments.toy.Toy
+  pull: null
+  fail: false
+hydra:
+  run:
+    dir: ${cairn.run:}
+  sweep:
+    dir: ${cairn.run:}
+    subdir: ${hydra.job.num}
+  callbacks:
+    source_snapshot:
+      _target_: cairn.runs.snapshot.SourceSnapshotCallback
+    study_completion:
+      _target_: cairn.runs.hydra.StudyCompletion
+"""
+
+TOY = """\
+import cairn
+
+
+class Toy:
+    def __init__(self, pull=None, fail=False):
+        self.pull, self.fail = pull, fail
+
+    def run(self, output_dir):
+        if self.pull:
+            cairn.use(self.pull)
+        run = cairn.run()
+        assert run is not None and run.path == output_dir
+        print("training", flush=True)
+        run.add({"score": 1.0, "step": 0})
+        (output_dir / "result.txt").write_text("ok")
+        with cairn.draft("models/toy") as model:
+            model.add_text("weights", "w")
+        if self.fail:
+            raise RuntimeError("asked to fail")
+"""
+
+
+@pytest.fixture
+def run_project(configured, env):
+    pytest.importorskip("hydra")
+    from test_drafts import RUN
+
+    (env / "configs").mkdir()
+    (env / "configs" / "config.yaml").write_text(CONFIG)
+    (env / "experiments").mkdir()
+    (env / "experiments" / "__init__.py").write_text("")
+    (env / "experiments" / "run.py").write_text(RUN)
+    (env / "experiments" / "toy.py").write_text(TOY)
+    (env / ".gitignore").write_text(".cairn/\n")
+    for command in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+        subprocess.run(["git", *command], cwd=env, check=True)
+    return env
+
+
+def hydra(project, *overrides):
+    return subprocess.run([sys.executable, "experiments/run.py", *overrides], cwd=project, capture_output=True, text=True)
+
+
+def synced():
+    store = cairn.connect()
+    if store.remote:
+        store.sync()
+    return store
+
+
+def test_a_hydra_job_is_a_run_in_its_job_folder(run_project):
+    dataset = published_dataset(run_project)
+    result = hydra(run_project, "experiment.pull=datasets/toy@latest")
+    assert result.returncode == 0, result.stderr
+    store = synced()
+    run = store.version("runs/demo@latest")
+    paths = {f.path for f in run.files}
+    assert {"result.txt", "metrics.jsonl", ".hydra/config.yaml", "provenance/manifest.json", "logs/stdout.txt",
+            "system/info.json", "system/metrics.jsonl"} <= paths and "run.json" not in paths
+    assert run.status == "completed" and run.inputs == [dataset.ref] and run.consumers == ["study:models/toy@v1"]
+    assert run.metadata["kind"] == "run" and run.metadata["config"]["experiment"]["pull"] == "datasets/toy@latest"
+    assert run.metadata["overrides"] == ["experiment.pull=datasets/toy@latest"]
+    assert "training" in run.open("logs/stdout.txt").read().decode()
+    assert store.version("models/toy@v1").inputs == [run.ref]
+    assert drafts.drafts() == []
+
+
+def test_a_failed_hydra_job_fails_its_run(run_project):
+    result = hydra(run_project, "experiment.fail=true")
+    assert result.returncode != 0
+    store = synced()
+    [run] = store.project().artifact("runs/demo").versions()
+    assert run.status == "failed" and store.version("models/toy@v1").inputs == ["study:runs/demo@v1"]
+    [kept] = drafts.drafts()
+    assert "asked to fail" in (kept.folder / "logs" / "error.txt").read_text()
+
+
+def test_a_hydra_sweep_is_a_run_per_trial_and_a_summary_run(run_project):
+    first = published_dataset(run_project, "datasets/a")
+    second = published_dataset(run_project, "datasets/b")
+    result = hydra(run_project, "-m", "experiment.pull=datasets/a@v1,datasets/b@v1")
+    assert result.returncode == 0, result.stderr
+    store = synced()
+    trial0, trial1, summary = store.project().artifact("runs/demo").versions()
+    assert [trial0.metadata["sweep"]["num"], trial1.metadata["sweep"]["num"]] == [0, 1]
+    assert trial0.label == f"{summary.label}/0" and trial1.label == f"{summary.label}/1"
+    assert trial0.metadata["sweep"]["uid"] == summary.uid and trial0.metadata["config"]["experiment"]["pull"] == "datasets/a@v1"
+    assert trial0.inputs == [first.ref] and trial1.inputs == [second.ref]
+    assert {".hydra/config.yaml", "result.txt", "logs/stdout.txt"} <= {f.path for f in trial0.files}
+    assert summary.metadata["kind"] == "run" and summary.inputs == [trial0.ref, trial1.ref]
+    assert [row["status"] for row in summary.metadata["sweep"]["trials"]] == ["completed", "completed"]
+    assert summary.metadata["overrides"] == ["experiment.pull=datasets/a@v1,datasets/b@v1"]
+    assert {"multirun.yaml", "trials.jsonl"} <= {f.path for f in summary.files}
+    assert not any(f.path.startswith("0/") for f in summary.files)  # each trial is its own version
+    assert [v.ref for v in summary.upstream()] == [first.ref, second.ref]
+    assert [v.inputs for v in store.project().artifact("models/toy").versions()] == [[trial0.ref], [trial1.ref]]
+    assert drafts.drafts() == []

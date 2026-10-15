@@ -222,15 +222,22 @@ def test_pull_records_inputs_in_cwd_and_env(env, tmp_path, monkeypatch):
     s = LocalStore(tmp_path / "s", project="study")
     s.create_project("study")
     s.publish("study", "datasets/crops", put(s, {"a.txt": "1"}))
-    path = store.pull("datasets/crops@v1", store=s)
+    objects = store.Store(s)  # the object API outside a run: the working directory's file, or $CAIRN_INPUTS
+    path = objects.pull("datasets/crops@v1")
     assert (path / "a.txt").read_text() == "1"
     rows = [json.loads(line) for line in (env / ".cairn-inputs.jsonl").read_text().splitlines()]
     assert [r["ref"] for r in rows] == ["study:datasets/crops@v1"]
     target = tmp_path / "elsewhere.jsonl"
     monkeypatch.setenv("CAIRN_INPUTS", str(target))
-    assert store.pull("datasets/crops//a.txt", store=s).read_text() == "1"
+    assert objects.pull("datasets/crops//a.txt").read_text() == "1"
     assert json.loads(target.read_text())["ref"] == "study:datasets/crops@v1"
     assert len((env / ".cairn-inputs.jsonl").read_text().splitlines()) == 1
+    # cairn.pull starts the process's run: the run's inputs file, and the inherited one is still told
+    assert store.pull("datasets/crops@v1", store=s).is_dir()
+    run = store.run()
+    assert os.environ["CAIRN_INPUTS"] == str(run.path / ".cairn-inputs.jsonl")
+    assert [json.loads(line)["ref"] for line in target.read_text().splitlines()] == ["study:datasets/crops@v1"] * 2
+    assert json.loads((run.path / ".cairn-inputs.jsonl").read_text())["ref"] == "study:datasets/crops@v1"
 
 
 # ------------------------------------------------------------------ light API
@@ -246,7 +253,7 @@ def test_configured_store_pull_publish_lineage(env, tmp_path):
     work = env / "work"
     work.mkdir()
     os.chdir(work)
-    crops = store.pull("datasets/crops@paper")
+    crops = store.connect().pull("datasets/crops@paper")  # the object API outside a run records in the working directory
     out = folder(work, "out", {"res.txt": (crops / "a.txt").read_text() + "!"})
     (work / ".cairn-inputs.jsonl").rename(out / ".cairn-inputs.jsonl")
     assert store.publish("fit", out, metadata={"loss": 0.1}) == 1
@@ -255,7 +262,7 @@ def test_configured_store_pull_publish_lineage(env, tmp_path):
     assert version["label"] == "out" and version["metadata"] == {"loss": 0.1}
     assert version["source"]["folder"] == str(out.resolve())
     assert ".cairn-inputs.jsonl" not in {f["path"] for f in version["files"]}
-    assert store.lineage("fit") == {"inputs": ["study:datasets/crops@v1"], "consumers": []}
+    assert store.lineage("fit") == {"inputs": ["study:datasets/crops@v1"], "consumers": [], "runs": []}
     assert store.lineage("datasets/crops")["consumers"] == ["study:fit@v1"]
     assert store.publish("fit", out, metadata={"loss": 0.1}) == 1  # unchanged
     store.alias("fit@v1", "best")

@@ -96,7 +96,7 @@ def test_shortcuts_stay_compatible(configured, env):
     assert [v["version"] for v in cairn.versions("data")] == [1] and UID.fullmatch(cairn.versions("data")[0]["uid"])
     cairn.alias("data@v1", "paper")
     assert (cairn.pull("data@paper", record=False) / "a.txt").read_text() == "1"
-    assert cairn.lineage("data") == {"inputs": [], "consumers": []}
+    assert cairn.lineage("data") == {"inputs": [], "consumers": [], "runs": []}
     store = cairn.connect()
     assert cairn.pull("data@v1//a.txt", store=store, record=False).read_text() == "1"
 

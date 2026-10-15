@@ -106,13 +106,40 @@ class Store:
         return self.project(ref.project).artifact(ref.name)
 
     def version(self, ref: str, *, offline: bool = False) -> "Version":
-        """The version a reference names (`[project:]name[@selector]`), resolved now (with the offline fallbacks)."""
-        project, name, manifest = fallback.resolve_version(self.backend, refs.parse(ref), offline)
+        """The version a reference names (`[project:]name[@selector]`), resolved now (with the offline fallbacks). An
+        exact reference (`@v<n>`, `@<uid>`) also names a running or failed version."""
+        parsed = refs.parse(ref)
+        try:
+            project, name, manifest = fallback.resolve_version(self.backend, parsed, offline)
+        except (Deleted, NotFound, Unreachable):
+            raise
+        except StoreError:
+            found = self._exact_version(ref) if parsed.exact else None
+            if found is None:
+                raise
+            return found
         return Version(self.project(project).artifact(name), manifest)
 
     def pull(self, ref: str, *, record: bool = True, offline: bool = False) -> Path:
         """A read-only local copy of the version (or of the file after `//`) a reference names."""
         return fallback.pull(self.backend, ref, record, offline)
+
+    def _exact_version(self, ref: str) -> "Version | None":
+        """The version an exact reference names, whatever its status (a deleted one as its tombstone), else None."""
+        try:
+            project, name, manifest = fallback.resolve_version(self.backend, refs.parse(ref))
+            return Version(self.project(project).artifact(name), manifest)
+        except (StoreError, ValueError):
+            pass
+        try:
+            parsed = refs.parse(ref)
+            project = parsed.project or self.backend.project
+            selector = parsed.version if parsed.version is not None else parsed.uid
+            if selector is None:
+                return None
+            return Version(self.project(project).artifact(parsed.name), self.backend.get_version(project, parsed.name, selector))
+        except (StoreError, ValueError):
+            return None
 
     def pending(self) -> list["Version"]:
         """The versions of this machine the server does not have yet: pending, running, rejected (none for a local store)."""
@@ -484,6 +511,63 @@ class Version:
         if self.number is None:
             return []
         return self.artifact.backend.lineage(self.ref)["consumers"]
+
+    # ------------------------------------------------------------- runs and lineage
+
+    @property
+    def is_run(self) -> bool:
+        """Whether this version is a run (`metadata.kind == "run"`, cairn/client/runs.py)."""
+        return (self.manifest.get("metadata") or {}).get("kind") == "run"
+
+    @property
+    def run(self) -> "Version | None":
+        """The run this version is an output of (the run among its inputs), else None."""
+        for ref in self.inputs:
+            found = self.artifact.store._exact_version(ref)
+            if found is not None and found.is_run:
+                return found
+        return None
+
+    def upstream(self, *, _runs: list | None = None) -> list["Version"]:
+        """The versions this one comes from, looking through runs: every input that is a run is replaced by that
+        run's own inputs (a sweep's summary run by its trials' inputs). `inputs` stays the direct edges."""
+        return self._through("inputs", _runs)
+
+    def downstream(self, *, _runs: list | None = None) -> list["Version"]:
+        """The versions made from this one, looking through runs: every consumer that is a run is replaced by what
+        that run published (its consumers). `consumers` stays the direct edges."""
+        return self._through("consumers", _runs)
+
+    def _through(self, side: str, runs: list | None) -> list["Version"]:
+        store = self.artifact.store
+        found: list[Version] = []
+        seen = {self.ref}
+
+        def walk(items: list[str]) -> None:
+            for ref in items:
+                if ref in seen:
+                    continue
+                seen.add(ref)
+                version = store._exact_version(ref)
+                if version is None:
+                    continue
+                if version.is_run:
+                    if runs is not None and version.ref not in runs:
+                        runs.append(version.ref)
+                    try:
+                        walk(version.inputs if side == "inputs" else version.consumers)
+                    except StoreError:
+                        pass
+                elif version not in found:
+                    found.append(version)
+
+        walk(self.inputs if side == "inputs" else self.consumers)
+        return found
+
+    @property
+    def path(self) -> Path:
+        """The whole version, read-only, as a local folder (materialized on first use; not recorded again)."""
+        return self.pull(record=False)
 
     # ------------------------------------------------------------- reading
 

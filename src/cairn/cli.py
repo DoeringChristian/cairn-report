@@ -196,6 +196,14 @@ def cmd_show(args) -> None:
         for key, value in _flatten(config):
             print(f"  {key} = {value}")
     print(f"inputs       {', '.join(version.inputs) or '-'}")
+    if not version.is_run:
+        try:
+            run = version.run
+            if run is not None:
+                print(f"run          {run.ref} ({run.status})")
+                print(f"data         {', '.join(item.ref for item in version.upstream()) or '-'}")
+        except StoreError as error:
+            print(f"run          (unknown: {error})")
     try:
         consumers = version.consumers
     except StoreError as error:

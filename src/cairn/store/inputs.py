@@ -2,10 +2,10 @@
 `.cairn-inputs.jsonl` in the working directory, and `publish` carries that file along as the version's
 `inputs`. That is how lineage is recorded without any framework hook.
 
-Inside one process, open drafts (cairn/client/drafts.py) add their own inputs files as sinks: a pull is recorded
-in every open draft, not only the innermost one `$CAIRN_INPUTS` names. A pull made while no draft is open is
-also kept as a loose input, which every draft opened before the next one closes carries along (so
-`x = cairn.pull(...)` right before `with cairn.draft(...)` is an input of that draft)."""
+A Cairn run (cairn/client/runs.py) points `$CAIRN_INPUTS` at its own folder's inputs file, so what the process
+and its plain subprocesses pull are the run's inputs. When the process inherited `$CAIRN_INPUTS` from a parent
+that is not a Cairn run (`cairn publish --watch -- command`), the run keeps that file as an extra sink: every pull
+is recorded there too."""
 
 from __future__ import annotations
 
@@ -19,8 +19,7 @@ from .blobs import now
 INPUTS_FILE = ".cairn-inputs.jsonl"
 INPUTS_ENV = "CAIRN_INPUTS"
 
-_SINKS: list[Path] = []  # the inputs files of the drafts open in this process
-_LOOSE: list[str] = []  # pulls made while no draft was open, carried into the drafts opened next
+_SINKS: list[Path] = []  # further inputs files every pull of this process is recorded in
 
 
 def _append(target: Path, exact: str) -> None:
@@ -30,7 +29,7 @@ def _append(target: Path, exact: str) -> None:
 
 def record_input(exact: str) -> None:
     """Append one exact reference to the inputs file the environment names (else the working directory's), and to
-    every open draft's (each file once); with no draft open, also remember it as a loose input."""
+    every sink (each file once)."""
     target = Path(os.environ.get(INPUTS_ENV) or INPUTS_FILE)
     done = {os.path.abspath(target)}
     _append(target, exact)
@@ -38,24 +37,28 @@ def record_input(exact: str) -> None:
         if os.path.abspath(sink) not in done:
             done.add(os.path.abspath(sink))
             _append(sink, exact)
-    if not _SINKS and exact not in _LOOSE:
-        _LOOSE.append(exact)
 
 
 def open_sink(path: Path) -> None:
-    """A draft opened: record pulls in `path` from now on, starting with the loose ones made before."""
-    for exact in _LOOSE:
-        _append(path, exact)
+    """Record every pull in `path` too, from now on."""
     _SINKS.append(Path(path))
 
 
 def close_sink(path: Path) -> None:
-    """A draft closed: stop recording into `path`; the loose inputs have been handed out."""
+    """Stop recording into `path`."""
     for index, sink in enumerate(_SINKS):
         if sink == Path(path):
             del _SINKS[index]
             break
-    _LOOSE.clear()
+
+
+def recorded(path: Path) -> list[str]:
+    """The distinct references one inputs file holds, in order."""
+    found: list[str] = []
+    for row in read_jsonl(path):
+        if row.get("ref") and row["ref"] not in found:
+            found.append(row["ref"])
+    return found
 
 
 def read_inputs(folder: Path) -> list[str]:

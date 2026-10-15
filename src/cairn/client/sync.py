@@ -197,6 +197,7 @@ class Replica:
         remote.create_project(project)
         if record["status"] == "completed":
             record["digest"] = manifest_digest(record["files"])  # the server recomputes it from the files and refuses a mismatch
+            self._start_inputs(record)
         manifest = {key: record.get(key) for key in ("label", "metadata", "source")}
         if record["kind"] == "publish":
             for attempt in range(RETRIES):
@@ -245,6 +246,29 @@ class Replica:
                 for alias in record["aliases"]:
                     remote.set_alias(project, name, alias, record["number"])
         return self._done(record)
+
+    def _start_inputs(self, record: dict) -> None:
+        """An input that is a running version of this machine (the run an output comes from) must exist on the server
+        before the output names it: create it there now (idempotent by uid; its owner keeps syncing it)."""
+        from ..store import refs
+
+        for item in record.get("inputs") or []:
+            try:
+                uid = refs.parse(item).uid
+            except ValueError:
+                continue
+            if uid is None:
+                continue
+            other = replica.load(uid)
+            if other is None or other.get("sync") != "running" or other.get("number") is not None:
+                continue
+            manifest = {key: other.get(key) for key in ("label", "metadata", "source")}
+            self.remote.create_project(other["project"])
+            number = self.remote.start_version(other["project"], other["name"], uid=other["uid"], **manifest)
+            current = replica.load(uid)
+            if current is not None and current.get("number") is None:
+                current["number"] = number
+                self.save(current)
 
     def _done(self, record: dict) -> bool:
         """The server has the version: remember its number, and promote the record into the cache."""

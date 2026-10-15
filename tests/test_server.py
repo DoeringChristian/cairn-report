@@ -299,12 +299,12 @@ def test_pull_materializes_once_and_never_downloads_a_blob_twice(server, env, tm
 def test_pull_records_inputs_like_the_local_store(server, env):
     r = use_remote(env, server)
     store.publish("data", folder(env, "d", {"a.txt": "1"}), store=r)
-    store.pull("data@latest", store=r)
+    store.Store(r).pull("data@latest")  # the object API outside a run: recorded in the working directory
     assert (env / ".cairn-inputs.jsonl").read_text().count("study:data@v1") == 1
     published = store.publish("fit", folder(env, "out", {"r.txt": "r", ".cairn-inputs.jsonl": (env / ".cairn-inputs.jsonl").read_text()}), store=r)
     assert store.versions("fit", store=r)[published - 1]["inputs"] == ["study:data@v1"]
-    assert store.lineage("data@v1", store=r) == {"inputs": [], "consumers": ["study:fit@v1"]}
-    assert store.lineage("fit@v1", store=r) == {"inputs": ["study:data@v1"], "consumers": []}
+    assert store.lineage("data@v1", store=r) == {"inputs": [], "consumers": ["study:fit@v1"], "runs": []}
+    assert store.lineage("fit@v1", store=r, through_runs=False) == {"inputs": ["study:data@v1"], "consumers": []}
 
 
 def test_cli_pull_prints_the_path_and_copies_into_a_folder(server, env, capsys):
