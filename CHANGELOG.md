@@ -102,26 +102,50 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
   - One reading column for text and figures; figures keep their own shape; small images stay
     pixel-sharp.
   - Copy-location buttons give LLM-ready markers.
-- **Drafts: writing a version directly.** `with cairn.draft("descent") as run:` (also
+- **Runs as artifacts.** Every process that uses or publishes artifacts is a run: `cairn.init(name=...,
+  config=...)` (or, implicitly, the first `cairn.use`, `cairn.pull`, or `cairn.draft`) makes it a version of
+  `runs/<name>` (`metadata.kind = "run"`, `metadata.config`), running from the start and completed when the
+  process exits (failed on an unhandled exception or SIGTERM, with `logs/error.txt`). One run per process;
+  `cairn.run()`; `run.finish()`.
+  - Its folder records `code/` (the source snapshot), `environment/` (installed packages, pixi.lock),
+    `logs/stdout.txt` and `stderr.txt` (a tee; still printed), and `system/info.json` and
+    `system/metrics.jsonl` (CPU, memory, disk, network, GPUs every 10 s; psutil and pynvml when installed).
+    It writes no `run.json`: the version's status is the record.
+  - With a store server it is synced while it runs (`watch`, with a heartbeat), so the UI shows it live.
+  - `cairn.use(ref)` returns the exact `Version` (lazy files, `.path` materializes) and records it as an
+    input of the run; a subprocess of a run (`$CAIRN_RUN`) records into that run.
+- **Lineage through runs.** A run's inputs are what the process used; every draft it publishes has exactly
+  one input, its run (by uid while the run is running: the store now accepts a running version as an input
+  when named by its exact uid, and still refuses unknown, failed, and deleted ones). `Version.run`,
+  `Version.upstream()` / `downstream()`, and `cairn.lineage(ref, through_runs=True)` look through runs;
+  `Version.inputs` stays the direct edges; `cairn show` prints the run and the data behind it. The store's
+  lineage answer has `nodes` (status and kind of each reference).
+- **Drafts: writing a version directly.** `with cairn.draft("models/student") as model:` (also
   `Artifact.draft(...)`) gives a fresh, empty folder in `.cairn/drafts/<name>/<uid>/` that becomes the
-  artifact's next version when the block ends, exactly as `cairn.publish` would store it (inputs,
-  unchanged check, digest, aliases; the label defaults to the start time; the version gets the
-  draft's uid), and is then removed; blobs are cloned or hard-linked, not copied, where possible.
-  - A draft is the run logger: `run.scalar(...)`, `run.figure(...)`, `run.json(...)`, ... write the
-    same files as `RunLogger` (which moved to `cairn.client.logger`; `cairn.runs.logger` re-exports it).
-  - An exception keeps the folder for inspection and publishes nothing.
-  - Pulls are recorded in every open draft; a pull made before a draft opens is carried into it;
-    `run.use(other)` declares another draft (published first, then named by its exact version), a
-    version, or a reference as an input.
-  - `config=` becomes `metadata["config"]`; `cairn show` prints it compactly and the UI shows it as a
-    table.
-  - `watch=True` keeps a running version synced while the block runs, like `--watch`.
-  - `cairn.current_draft()`; `cairn drafts`, `cairn drafts publish <uid>`, `cairn drafts discard <uid>`.
-- **Hydra run bookkeeping as a library** (`cairn.runs.hydra`, `cairn.runs.snapshot`):
-  `run_experiment`, `StudyCompletion`, the source snapshot, and `cairn finalize-study`.
-  `hydra.run.dir: ${cairn.draft:<name>}` (an OmegaConf resolver, one folder per job or sweep) makes a
-  completed run a version of `<name>` with the resolved config and overrides as metadata; a sweep
-  draft is published once, by `StudyCompletion`, with every trial as a subfolder.
+  artifact's next version when the block ends, exactly as `cairn.publish` would store it (unchanged check,
+  digest, aliases; the label defaults to the start time; the version gets the draft's uid), and is then
+  removed; blobs are cloned or hard-linked, not copied, where possible. An exception keeps the folder for
+  inspection and publishes nothing. `config=` becomes `metadata["config"]`; `watch=True` keeps a running
+  version synced; `cairn.current_draft()`; `cairn drafts`, `cairn drafts publish <uid>`,
+  `cairn drafts discard <uid>`.
+- **One writer API for runs and drafts.** `add({...})` appends one entry (any keys; `step` is just a key)
+  to `metrics.jsonl`; `add_figure(name, fig_or_plot_function, metadata, *args)`, `add_image`,
+  `add_video`, `add_plotly`, `add_table`, `add_json`, `add_text` (text/), `add_file` and `add_dir`
+  (files/) each take an optional `metadata` dict for the item, kept in `artifacts.jsonl`. The readers
+  (`read_scalars`, `read_jsonl`, the new `read_series`) take entries with several keys and the one-scalar
+  lines of earlier logs. `cairn.runs.logger.RunLogger` keeps the old names (`scalar`, `figure`, ...) for
+  one release with a DeprecationWarning; drafts have only the new ones.
+- **Hydra jobs are runs** (`cairn.runs.hydra`, `cairn.runs.snapshot`): `run_experiment` calls
+  `cairn.init(name=cfg.run.name, config=<resolved config>, metadata={"overrides": ...})`;
+  `hydra.run.dir: ${cairn.run:}` makes the job folder the run's folder (`.hydra/` and `provenance/`
+  included). A sweep (`hydra.sweep.dir: ${cairn.run:}`) is one run per trial (label `<sweep>/<n>`,
+  `metadata.sweep`) plus the summary run `StudyCompletion` publishes, whose inputs are the trial runs.
+  `${cairn.draft:<name>}` keeps working as an output draft. `cairn finalize-study` covers both.
+  Labels may be words joined by `/`.
+- **UI: runs.** A Run panel for versions of kind `run` (charts of `metrics.jsonl` and the system metrics,
+  the tails of stdout and stderr, refreshed while running, the config, where it ran); run nodes in the
+  lineage graph (a `run` pill, failed and running marked) and a "Data only" toggle; a Runs tab and rail
+  section; "Download zip" for a whole version (`/files/<p>/<name>@<sel>.zip`, streamed).
 - **Package layout.** `store`, `client`, `server`, `ui`, `reports` and `runs`, with import
   boundaries enforced by a test. `import cairn` loads no server, UI, report or plotting code.
 
@@ -141,3 +165,9 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
   `cairn.reports.build` module).
 - Reports: move each report to `reports/<slug>/report.md`, publish the runs it reads, declare them
   under `inputs:`, and replace `run:` with `input:`.
+- Logging: `run.scalar(name, v, step=s)` is `run.add({name: v, "step": s})`; `figure(name, f, *args)` is
+  `add_figure(name, f, None, *args)`; `table`, `json`, `plotly`, `image`, `video` gain the `add_` prefix;
+  `text` writes `text/<name>.txt` (was `logs/`) and `artifact` is `add_file` (`files/`, was `artifacts/`).
+- Drafts no longer record pulls themselves and `Draft.use()` is gone: what a process pulls is its run's
+  input, and its drafts' one input is the run. Code that read `version.inputs` of an output for the data
+  reads `version.upstream()` (or `cairn.lineage(ref)`, which now looks through runs and also returns `runs`).

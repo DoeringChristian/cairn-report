@@ -9,10 +9,12 @@ has five parts:
 - the **UI** (`cairn ui`), which explores a store, local or remote, in a browser;
 - **single-page reports**: Markdown pages that read numbers and figures from the artifacts they
   declare as `inputs:`, built into a static site and published as artifacts themselves;
-- **drafts** (`with cairn.draft("fit") as run:`): a fresh folder Cairn manages, which is also a run
-  logger, and which becomes the artifact's next version when the block ends;
-- **Hydra helpers**: `hydra.run.dir: ${cairn.draft:fit}`, each run's `run.json`, study completion, a
-  source snapshot.
+- **runs and drafts**: every process that uses or publishes artifacts is a **run** (`cairn.init()`), a
+  version of `runs/<name>` that records its config, inputs, metrics, output, code, packages, and machine;
+  what it publishes goes into **drafts** (`with cairn.draft("models/student") as model:`), fresh folders
+  Cairn manages that become the artifact's next version, with the run as their input;
+- **Hydra helpers**: `hydra.run.dir: ${cairn.run:}` (the job folder is the run's), one run per sweep
+  trial plus a summary run, a source snapshot.
 
 Cairn provides mechanisms only. How reports are organised, which sections they have, and what
 counts as evidence is up to the project.
@@ -27,10 +29,21 @@ cairn pull fit@latest               # prints the path of a read-only local copy
 cairn ui                            # explore projects, versions, files and lineage in the browser
 ```
 
-With no `[store] url` the store is a local folder, `.cairn/store`; nothing needs to run. A job
-that pulls an artifact records the exact version it read, and `cairn publish` carries that along
-as the new version's `inputs`. A report is a folder `reports/<slug>/report.md` that pins what it
-reads:
+With no `[store] url` the store is a local folder, `.cairn/store`; nothing needs to run. In Python a
+job is a run that uses some versions and publishes others (see "Runs: the Python API"):
+
+```python
+import cairn
+
+run = cairn.init(name="fit", config={"lr": 0.1})   # optional: the first cairn.use() or cairn.draft() starts it
+data = cairn.use("datasets/crops@latest")           # an input of the run, at its exact version
+run.add({"loss": 0.3, "step": 0})                   # the run's metrics.jsonl
+with cairn.draft("fit") as fit:                     # an output of the run: fit@v<n>
+    fit.add({"rmse": 0.5})
+    fit.add_figure("errors", fig)
+```
+
+A report is a folder `reports/<slug>/report.md` that pins what it reads:
 
 ````markdown
 ---
@@ -281,142 +294,178 @@ Publish the file exactly as written; it says so in its first lines. On
 claude.ai, that is the Artifact tool with this `file_path` and nothing else. To
 change the page, edit the report and run `share` again.
 
-## Drafts: writing a version directly
-
-A draft is a fresh, empty folder that Cairn manages and that becomes the next version of an artifact
-when it closes. A job writes into it instead of into a `runs/` folder, and nothing needs to be
-published afterwards:
+## Runs: the Python API
 
 ```python
-import shutil
-
 import cairn
 
-data = cairn.pull("datasets/quadratic@latest")         # recorded as an input of the draft below
-with cairn.draft("descent", aliases=["best"]) as run:  # a new version: its own uid folder
-    run.scalars({"loss": loss}, step=step)             # the draft is a run logger (see Logging runs)
-    run.figure("trajectory", fig)
-    shutil.copy("model.pt", run.path)                  # or write files there directly
-run.version                                            # descent@v<n>, a cairn.Version
+run = cairn.init(name="train", config=cfg)       # optional; started implicitly by the first cairn.use() or cairn.draft()
+data = cairn.use("datasets/crops@latest")         # an input of the run: the exact Version (data.path: its files)
+run.add({"loss": loss, "psnr": psnr, "step": step})            # a plain entry -> metrics.jsonl
+run.add_figure("samples", fig, {"loss": loss, "step": step})    # every add_* takes optional metadata for that item
+with cairn.draft("models/student") as model:      # an output of the run
+    model.add({"val_loss": v, "step": step})
+    model.add_file("model.pt")
+# the run completes when the process exits (failed on an unhandled exception / crash)
 ```
 
-- **Where.** `run.path` is `.cairn/drafts/<name>/<uid>/` (git-ignored with the rest of `.cairn/`;
-  outside a project, `drafts/` in the data root), with its record beside it (`<uid>.draft.json`).
-  The version gets the draft's uid.
-- **Closing.** Leaving the block publishes the folder exactly like `cairn.publish(name, run.path)`:
-  its inputs, the unchanged check (an unchanged folder makes no new version), the digest, the
-  aliases, and `label` (default: the start time, `YYYY-MM-DD_HH-MM-SS`). The folder is then removed:
-  its files live in the store (on a local store the blobs are copy-on-write clones, or hard links where
-  the filesystem cannot clone; never a copy when avoidable), or in the replica while the server is
-  down (`run.version` is pending then). Without `with`, call `run.publish()`, `run.fail()`, or
-  `run.discard()`; `Artifact.draft(...)` does the same on the object API.
-- **Failing.** An exception keeps the folder for inspection (its path is printed on stderr, its
-  state is `kept`), publishes nothing, and re-raises.
-- **Inputs.** While a draft is open, `$CAIRN_INPUTS` points at its `.cairn-inputs.jsonl` (restored
-  when it closes; nested drafts restore in order), so its pulls, and its subprocesses' pulls, are its
-  inputs. Several drafts may be open at once (a model and its evaluation): a pull is recorded in
-  every open one, and a pull made while none is open goes into the drafts opened next.
-  `evaluation.use(model)` declares another draft (or a `Version`, or a reference) as an input; when
-  both are published in one process the input goes first (a draft that closes before its input waits
-  for it) and is named by its exact version.
-- **Metadata.** `metadata=`, and `config=` (a plain dict) for `metadata["config"]`; `run.set_metadata(...)`
-  adds more before it closes. `cairn show` prints the config as `key.sub = value` lines and the UI
-  shows it as a table.
-- **Watching.** `cairn.draft(name, watch=True)` starts a running version at once and keeps it synced
-  while the block runs (like `cairn publish --watch`: every `[store] interval` seconds when something
-  changed, with a heartbeat on a store server; `run.sync()` syncs now); closing completes it, an
-  exception fails it.
-- **`cairn.current_draft()`** returns the draft the process writes into: the innermost open one, or the
-  one `$CAIRN_INPUTS` or the working directory lies in (a Hydra job, a subprocess).
+- **A run** is a version of the artifact `runs/<name>`, with `metadata.kind = "run"` and
+  `metadata.config` (`metadata=` adds more). The name defaults to the script's stem (`python -m pkg.mod`:
+  the module's name; an interactive session: `interactive`). There is one run per process:
+  `cairn.init()` again returns it (another name raises), `cairn.run()` returns it or None. If
+  `cairn.init` was not called, the first `cairn.use`, `cairn.pull`, or `cairn.draft` starts one; call
+  `init` first to give it a name and a config. `run.finish()` ends it early (a Hydra job does).
+- **Its version exists from the start** (running), so the outputs published while it runs can name it
+  by its uid. With a store server it is synced every `[store] interval` seconds with a heartbeat
+  (`watch`, the default there), so the UI shows it live; with a local store it is synced when it ends
+  (`watch=True` to follow it).
+- **It ends with the process:** its open drafts are published, then the run completes. An unhandled
+  exception (also Ctrl-C) or SIGTERM (when no other handler is installed) fails it: the traceback goes
+  to `logs/error.txt`, the version is marked failed (its outputs keep their edge to it, and the UI
+  shows it failed), and its folder is kept (`cairn drafts`). A run killed outright (SIGKILL, a node
+  failure) stays running until a store server's heartbeat timeout fails it.
+- **`cairn.use(ref)`** resolves once, records the exact version as an input of the run, and returns the
+  `Version` (its files are listed lazily; `.path` materializes it read-only; `.open(path)` streams one
+  file). `cairn.pull(ref)` does the same and returns the folder. A subprocess sees the run's inputs file
+  as `$CAIRN_INPUTS` (so `cairn pull` in a shell script is recorded too) and the run as `$CAIRN_RUN`: a
+  Python subprocess does not start a run of its own, its pulls and drafts belong to the parent's run.
+- **`cairn.draft(name)`** is a fresh, empty folder (`.path`, in `.cairn/drafts/<name>/<uid>/`, git-ignored)
+  that becomes the next version of `name` when the block ends: published exactly like `cairn.publish`
+  (the unchanged check, the digest, `aliases=`, `label=`, default the start time), then removed (on a
+  local store its blobs are copy-on-write clones, or hard links where the filesystem cannot clone). An
+  exception keeps the folder (state `kept`) and publishes nothing. Without `with`: `publish()`,
+  `fail()`, `discard()`; `Artifact.draft(...)` on the object API; `watch=True` keeps a running version
+  synced while it is open; `config=`/`metadata=`/`set_metadata()` for its metadata. Its one input is the
+  run; there is no other linking: what the process used is the run's input, wherever it was pulled.
+- `cairn.current_draft()` returns the innermost open draft (or the one the working directory lies in).
 
 ```bash
-cairn drafts                                  # open, abandoned, and kept drafts: name, uid, state, age, size, path
+cairn drafts                                  # open, abandoned, and kept drafts and runs: name, uid, state, age, size, path
 cairn drafts publish <uid|path>               # publish a kept one (refused if its run.json says failed,
                                               #   unless --allow-incomplete)
 cairn drafts discard <uid|path>               # delete it
 ```
 
-## Logging runs
+### The run folder
 
-```python
-from cairn.runs.logger import RunLogger      # the same writer a draft is, for a plain folder
+`init(capture=True, system=True, code=True)` decide what the run records besides what the job adds:
 
-log = RunLogger(output_dir)                  # one logger per run folder; with a draft: run.scalar(...), ...
-log.scalar("rmse", rmse)                     # metrics.jsonl; step=... for a series
-log.table("cases", rows)                     # tables/cases.csv
-log.figure("errors", error_histogram, errs)  # figures/errors.png, records the plot function
-log.plotly("trace", spec)                    # figures/trace.plotly.json
-log.json("summary", result)                  # data/summary.json
-log.image("sample", array)                   # images/sample.png
-log.video("rollout", frames, fps=30)         # videos/rollout.mp4 (H.264, seekable); or a file path
-log.artifact("model", checkpoint_path)       # artifacts/model.<suffix>
-log.text("solver", solver_log)               # logs/solver.txt
+```text
+runs/<name>@v<n>/
+├── metrics.jsonl          run.add({...}): one entry per call, the dict as given plus time and origin
+├── artifacts.jsonl        one entry per add_* file: name, kind, path, time, origin, metadata
+├── figures/ images/ videos/ tables/ data/ text/ files/    what add_figure, add_image, ... wrote
+├── code/                  the source snapshot: the commit (git-tree.tar.gz), the diff (working-tree.patch),
+│                          untracked sources (untracked/), or a copy (tree/) outside git; manifest.json says
+│                          what was captured and skipped (secrets, data/, datasets/, run and Cairn folders never)
+├── environment/           pip-freeze.txt (the installed distributions), pixi.lock when the project has one
+├── logs/                  stdout.txt and stderr.txt (a tee of the file descriptors: still printed, also what
+│                          subprocesses write; capture=False turns it off), error.txt when the run failed
+├── system/                info.json (host, platform, Python, command line, cwd, pid, the Slurm job and array
+│                          task, the variables SLURM_* and CUDA_VISIBLE_DEVICES and no others), metrics.jsonl
+│                          (CPU, memory, disk, network, GPUs, every 10 s; system=<seconds> for another interval)
+└── .hydra/ provenance/    for a Hydra job whose folder is the run's (see Hydra runs)
 ```
 
-`metrics.jsonl` and `artifacts.jsonl` are append-only; every event records the
-code location that logged it. `read_scalars(run)` and `read_artifacts(run)` fold
-them to the latest value per name and the latest entry per file.
+A run writes no `run.json`: the version's status (running, completed, failed) and its times are the
+record. System metrics come from psutil when it is installed, else `/proc` and the standard library
+(load average, maximum RSS, disk usage); GPUs from pynvml, else `nvidia-smi`, else none.
 
-The logger only writes these files into the run folder (it lives in `cairn.client.logger`;
-`cairn.runs.logger` re-exports it). A draft is a logger on its own folder, so a run that logs into a
-draft needs no publishing step; `cairn.draft(name, watch=True)` follows it from another machine
-while it runs. A plain folder is followed with `cairn publish runs/x/latest x --watch -- python
-run.py`, which adds new and changed files to one running version of the artifact `x` every
-`[store] interval` seconds, then completes it (or marks it failed when the command fails).
+### Lineage through runs
 
-**Watching a job.** `--watch` follows the folder as it exists when it starts. A Hydra run that
-writes into a timestamped folder (`runs/<name>/<timestamp>`) is either published after it finishes
-(`cairn publish runs/x/latest x`) or, simpler, given a draft as its run dir (see Hydra runs).
+A run's inputs are every version the process used or pulled; every draft it published has exactly one
+input, the run (named by its uid while the run runs; the store accepts a running version as an input
+only by its exact uid, and still refuses unknown, failed, and deleted ones). So the store records
+`datasets/crops@v3 -> runs/train@v7 -> models/student@v2`. `Version.inputs` and `consumers` are those
+direct edges; `Version.run` is the run an output came from; `Version.upstream()` and `downstream()`
+look through runs (the data an output came from, the outputs made from a dataset), and so does
+`cairn.lineage(ref)` (`through_runs=False` for the direct edges); `cairn show` prints the run and the
+data behind it. A run with outputs is protected from deletion as their input, like any input. The UI
+draws runs as their own nodes (a `run` pill; failed and running ones marked) and has a "Data only"
+toggle that leaves them out.
+
+### Writing files: `add` and `add_*`
+
+A run and a draft share one writer (`cairn.client.logger.Writer`); every `add_*` takes an optional
+`metadata` dict for that item, kept with its entry in `artifacts.jsonl`:
+
+```python
+w.add({"loss": loss, "psnr": psnr, "step": step})   # metrics.jsonl; non-finite numbers are null, listed in `nonfinite`
+w.add_figure("errors", error_histogram, {"step": 3}, errs)   # figures/errors.png; a plot function is called with errs
+w.add_image("sample", array, {"step": 3})           # images/sample.png (or a copy of an image file)
+w.add_video("rollout", frames, None, fps=30)        # videos/rollout.mp4 (H.264, seekable); or a file path
+w.add_plotly("trace", spec)                         # figures/trace.plotly.json
+w.add_table("cases", rows)                          # tables/cases.csv
+w.add_json("summary", result)                       # data/summary.json
+w.add_text("solver", solver_log)                    # text/solver.txt
+w.add_file("checkpoints/best.pt")                   # files/best.pt (name="model.pt" for another name)
+w.add_dir("checkpoints/", "ckpt")                   # files/ckpt/...
+```
+
+Both index files are append-only, and every entry records the code location that wrote it. Reports and
+scripts read them with `read_scalars(folder)` (the latest value of every key), `read_series(folder,
+key)` (every value with its step and time), `read_jsonl`, and `read_artifacts(folder)`; they also read
+the one-scalar lines (`{name, value, step}`) of earlier releases.
+
+For a plain folder, `cairn.runs.logger.RunLogger(folder)` is the same writer without any store. It
+keeps the method names of earlier releases (`scalar`, `scalars`, `table`, `json`, `figure`, `plotly`,
+`image`, `video`, `artifact`, `text`) for one release, with a DeprecationWarning; they write where they
+did. A plain folder is followed with `cairn publish runs/x/latest x --watch -- python run.py`, which
+adds new and changed files to one running version of `x` every `[store] interval` seconds, then
+completes it (or marks it failed when the command fails); the command's pulls become the version's
+inputs.
 
 ## Hydra runs
 
-`cairn.runs.hydra` and `cairn.runs.snapshot` keep the record of each Hydra
-run, so a project's entry point stays a few lines (needs the `hydra` extra):
+`cairn.runs.hydra` makes every Hydra job a run (needs the `hydra` extra), so a project's entry point
+stays a few lines:
 
 ```python
 # experiments/run.py
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
-    run_experiment(cfg, Experiment)   # from cairn.runs; Experiment is the project's base class
+    run_experiment(cfg, Experiment)   # from cairn.runs.hydra; Experiment is the project's base class
 ```
 
 ```yaml
 # configs/config.yaml
 run:
-  name: feasibility            # a short lowercase slug
+  name: feasibility            # a short lowercase slug: the run is a version of runs/feasibility
   description: What the run tests.
 hydra:
-  run: {dir: "${cairn.draft:feasibility}"}                                  # a draft: published when the run completes
-  sweep: {dir: "${cairn.draft:feasibility-sweep}", subdir: "${hydra.job.num}"}   # one draft, trials as subfolders
+  run: {dir: "${cairn.run:}"}                                   # the job folder is the run's folder
+  sweep: {dir: "${cairn.run:}", subdir: "${hydra.job.num}"}     # one run per trial, plus the sweep's summary run
   callbacks:
     source_snapshot: {_target_: cairn.runs.snapshot.SourceSnapshotCallback}
     study_completion: {_target_: cairn.runs.hydra.StudyCompletion}   # multiruns
 ```
 
-- `${cairn.draft:<name>}` is an OmegaConf resolver, registered when `cairn.runs.hydra` is imported
-  (the entry point's `from cairn.runs.hydra import run_experiment` does it). It is cached, so every
-  resolution in a job, and every trial of a sweep, gets the same draft folder.
-- `run_experiment` writes `run.json` (`running`, then `completed` or `failed`
-  with the error), requires the source snapshot, instantiates `cfg.experiment`,
-  and calls its `run(output_dir)`. In a draft it also records the job's pulls in the run
-  folder (a trial's own subfolder in a sweep), and `cairn.current_draft()` gives the experiment
-  the draft to log into (`draft.scalar(...)`; a view on its trial folder in a sweep).
-- A completed single run in a draft is published as the next version of `<name>`, with the
-  resolved job config as `metadata["config"]` and its overrides as `metadata["overrides"]`, and the
-  folder is removed; a failed one keeps its draft (`cairn drafts`) and publishes nothing.
-- With a plain run dir (`runs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}`), a completed single run becomes
-  `runs/<name>/latest`, a relative symlink; a failed run stays for diagnosis and never moves it.
-- `StudyCompletion` writes a multirun study's `run.json` after the last trial
-  (completed only when every trial completed). A sweep draft is then published once, with every
-  trial folder and the inputs of all of them, the base config and the sweep's overrides as
-  metadata; a study with a failed trial keeps its draft. A plain sweep dir moves `latest` to the
-  study instead. Trials never publish and never touch `latest`.
-- `SourceSnapshotCallback` stores the project's source files (size-bounded,
-  secrets and data files excluded) in each run's `provenance/`: in `git` mode
-  (default) the commit, the diff, and untracked sources; in `tree` mode a full
-  copy. It also records the runtime environment.
-- `cairn finalize-study <study folder>` completes a study (a sweep draft too)
-  whose launcher died, by the same rule, once every trial job has ended.
+- `run_experiment` calls `cairn.init(name=cfg.run.name, config=<the resolved job config>,
+  metadata={"overrides": [...]})`, requires the source snapshot, instantiates `cfg.experiment`, calls its
+  `run(output_dir)`, and finishes the run when it returns (failed, with the traceback, when it raises).
+  The experiment gets the run with `cairn.run()` (`run.add(...)`) and publishes its outputs with
+  `cairn.draft(...)`.
+- `${cairn.run:}` (an OmegaConf resolver, registered when `cairn.runs.hydra` is imported, and cached so
+  every resolution in a job and every trial of a sweep gets the same folder) reserves a run folder: the
+  job folder is the run's, so `.hydra/`, `provenance/` (the snapshot, which then replaces `code/`), the
+  job's files, and the run's logs and system metrics are one version of `runs/<run.name>`.
+- **A sweep:** each trial (`<sweep>/<n>`) is a run of its own, a version of `runs/<run.name>` labelled
+  `<sweep label>/<n>` with `metadata.sweep` = {uid, label, num, ref}, published when the trial ends (its
+  folder then leaves the sweep's; trials.jsonl lists it). `StudyCompletion` (and `cairn finalize-study
+  <sweep folder>`, for a launcher that died) publishes the sweep folder (multirun.yaml, trials.jsonl) as
+  the summary: a run of its own whose inputs are the trial runs, with `metadata.sweep.trials` and the
+  sweep's base config and overrides; it is kept, not published, when a trial did not complete.
+- `${cairn.draft:<name>}` still works: the job folder is then an output draft of `<name>` (a sweep's
+  trials its subfolders) and the run gets a folder of its own. A single job's draft is published when
+  the experiment completes, with the job's run as its input and the job config as its metadata; a sweep
+  draft by `StudyCompletion`, with the trial runs as inputs.
+- With a plain run dir (`runs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}`), the job folder gets `run.json`
+  (`running`, then `completed` or `failed`, and `run`: the run's reference), and a completed single job
+  becomes `runs/<name>/latest`, a relative symlink; `StudyCompletion` writes a study's `run.json` and
+  moves `latest` once every trial completed. Only such job folders get a `run.json`.
+- `SourceSnapshotCallback` stores the project's source files (size-bounded, secrets and data excluded)
+  in each job's `provenance/` (`git` mode by default: the commit, the diff, and untracked sources;
+  `tree`: a copy) and the runtime environment.
 
 ## Store
 
@@ -582,14 +631,19 @@ fit.alias("paper", v)
 with fit.publishing("runs/live") as running:    # a running version that follows a folder while a job writes it
     ...
     running.sync()
-with fit.draft(aliases=["best"]) as run:        # a fresh folder that becomes the next version (see Drafts)
-    run.scalar("loss", 0.1)
-run.version
+with fit.draft(aliases=["best"]) as model:      # a fresh folder that becomes the next version (see Runs)
+    model.add({"loss": 0.1})
+model.version                                   # its input is the process's run
+model.version.run, model.version.upstream()     # the run, and the data behind it (see Lineage through runs)
 ```
 
+`cairn.init`, `cairn.run`, `cairn.use`, `cairn.draft`, and `cairn.current_draft` are the run API above.
 The functions `cairn.pull`, `cairn.publish`, `cairn.alias`, `cairn.versions`, `cairn.lineage`, and
-`cairn.Publication` stay, as shortcuts on top of these objects (and `cairn.draft`, `cairn.current_draft`) (`cairn.publish` returns the
-version number, or None while the version is pending).
+`cairn.Publication` stay, as shortcuts on top of these objects (`cairn.publish` returns the version
+number, or None while the version is pending). The object API alone (`Version.pull()`, `open()`)
+starts no run: inside one, what it reads is the run's input; outside, it is recorded in `$CAIRN_INPUTS`
+or the working folder's `.cairn-inputs.jsonl`, which `cairn publish` carries along as the folder's
+inputs.
 
 ### Deleting and garbage collection
 
@@ -842,24 +896,37 @@ system):
 
 - `/` projects (title, description, artifacts, last update);
 - `/p/<project>/` the project: a search box (names, titles, status, aliases), then the tabs
-  "Reports" (title, status, summary, latest version, an Open report link) and "Artifacts" (latest,
-  aliases, versions, updated), sorted by update;
+  "Reports" (title, status, summary, latest version, an Open report link), "Artifacts" (latest,
+  aliases, versions, updated), and "Runs" (the `runs/` artifacts: latest completed version, config
+  keys, versions), sorted by update;
 - `/p/<project>/a/<name>[@vN|@alias]` an artifact: its versions (status, label, aliases, source
   host) with a version picker, and for the chosen version a copyable reference and `cairn pull`
   command, the files (download, inline preview of images, video, text and JSON, a file
   reference to copy), the metadata, the inputs and the consumers, and the lineage graph (inputs on
   the left, the version in the middle, consumers on the right; click a node to open it, `+` to
-  expand one more level). A report artifact has an Open report button;
+  expand one more level; runs are drawn with a `run` pill, failed and running ones marked, and a run
+  in between counts no level, so the data behind it comes along; "Show runs / Data only" toggles
+  them). A "Download zip" button streams the whole version as `<name>-v<n>.zip` (a running version:
+  what is synced so far). A report artifact has an Open report button. A version of kind `run` has a
+  Run panel: a chart of every numeric key of `metrics.jsonl` (over `step`, else time) and of
+  `system/metrics.jsonl`, the tails of `logs/stdout.txt`, `stderr.txt`, and `error.txt`, where it ran
+  (host, command, directory, Slurm job, Python, sweep), and its config; it refreshes every 5 s while
+  the run is running;
 - `/p/<project>/r/<slug>[@vN]/` a report version's built page, as before (a report is an artifact
   `reports/<slug>` with `site/` and `source/`); its Data panel links each input to the artifact page
   of the exact version, and its brand link returns to the project in the app;
-- `/files/<project>/<name>@vN//<path>` the store's files, with Range (videos seek).
+- `/files/<project>/<name>@vN//<path>` the store's files, with Range (videos seek);
+  `/files/<project>/<name>@vN.zip` a whole version as a zip (folders kept under `<name>-v<n>/`, a
+  stored symlink as its target's file, compressed types stored and the rest deflated, ZIP64), written
+  while it is sent: nothing is held in memory or written to disk.
 
 The app talks to the UI process through `/ui-api/` (GET unless noted), a session-scoped passthrough
 to the store interface: `me` (scope: `owner`, `project`, or `store` when a remote store decides),
 `projects`, `projects/<p>`, `projects/<p>/artifacts/<name>` (summary, versions, aliases),
 `projects/<p>/artifacts/<name>/versions/<n>` (manifest with files, consumers; `<n>` may also be an
-alias or label), `lineage?ref=<project:name@sel>[&depth=1..3]` (inputs and consumers, assembled from
+alias or label), `projects/<p>/artifacts/<name>/versions/<n>/run` (the Run panel's data: metrics and
+system rows, numbers only, thinned to 2000; the last 64 KB of the logs; info.json; config),
+`lineage?ref=<project:name@sel>[&depth=1..3]` (inputs and consumers, assembled from
 one-level lookups, capped at 200 nodes), and `POST login`. Every call needs the session and the
 header `X-Cairn: 1` (a cross-site request cannot send it); a name may be one URL-encoded segment.
 
@@ -922,7 +989,7 @@ W&B's `./wandb/`). It creates a `.gitignore` containing `*` inside, so git ignor
 ├── pending/        the data root: versions/<uid>/, blobs/, stores/ (pending, running, rejected versions)
 ├── cache/          the cache root: versions/<uid>/, blobs/, hash caches (throwaway)
 ├── build/          built report pages
-├── drafts/         open and kept drafts: <name>/<uid>/ and <name>/<uid>.draft.json (`cairn drafts`)
+├── drafts/         open and kept drafts and runs: <name>/<uid>/ and <name>/<uid>.draft.json (`cairn drafts`)
 └── share/          `cairn share` pages (next to build/)
 ```
 
@@ -938,7 +1005,7 @@ Each place is resolved separately; the first match wins:
 | drafts | `<base>/drafts`, else `<data root>/drafts` outside a project |
 
 The project root is the nearest folder above the working directory with a `cairn.toml`,
-`pixi.toml`, or `pyproject.toml`. Source snapshots of Hydra runs skip `.cairn`.
+`pixi.toml`, or `pyproject.toml`. Source snapshots (a run's `code/`, a Hydra job's `provenance/`) skip `.cairn`.
 
 Earlier layouts move on first use (once, announced on stderr, never overwriting anything): a
 project's `.store/` becomes `.cairn/store/`; pending versions in the global `~/.local/share/cairn`

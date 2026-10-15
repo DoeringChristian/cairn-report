@@ -1,13 +1,16 @@
 """Gradient descent on a quadratic: the experiment of the example project.
 
-    python descent.py            # publishes the run as the next version of the artifact `descent`
+    python descent.py                      # a run of runs/descent, and its result, the artifact `descent`
+    python descent.py --learning-rate 0.08
 
-It pulls the problem from the artifact `datasets/quadratic` and writes its results into a draft: a fresh
-folder Cairn manages (in .cairn/drafts/), which becomes `descent@v<n>` when the block ends, with the
-exact dataset version it pulled as its input. The draft is also the run logger. A plain script on purpose:
-Cairn needs no framework.
+The process is a run (`cairn.init`): a version of `runs/descent` that records the config, what it used (the
+dataset `datasets/quadratic`, at its exact version), the loss curve (`run.add`), its output, code, packages, and
+the machine. The result goes into a draft, a fresh folder Cairn manages (in .cairn/drafts/), which becomes
+`descent@v<n>` when the block ends, with the run as its input. The run completes when the script exits. A plain
+script on purpose: Cairn needs no framework.
 """
 
+import argparse
 import json
 
 import matplotlib
@@ -29,21 +32,29 @@ def trajectory(points: np.ndarray, A: np.ndarray):
     return fig
 
 
-def main() -> "cairn.Version":
-    with cairn.draft("descent") as run:
-        problem = json.loads((cairn.pull("datasets/quadratic@latest") / "problem.json").read_text())  # an input of the run
-        A, x, rate = np.array(problem["A"]), np.array(problem["x0"]), problem["learning_rate"]
-        run.set_metadata(config={"learning_rate": rate, "steps": problem["steps"]})
-        points = [x.copy()]
-        for step in range(problem["steps"]):
-            x = x - rate * A @ x
-            points.append(x.copy())
-            run.scalars({"loss": float(0.5 * x @ A @ x)}, step=step)
-        run.json("final", {"loss": float(0.5 * x @ A @ x), "steps": problem["steps"], "learning_rate": rate})
-        run.figure("trajectory", trajectory, np.array(points), A)
-    print(f"published {run.version.ref}")  # leaving the block published the draft and removed its folder
-    return run.version
+def main(config: dict) -> "cairn.Version":
+    run = cairn.init(name="descent", config=config)            # runs/descent@v<n>, running until the script exits
+    data = cairn.use(config["dataset"])                         # an input of the run, at its exact version
+    problem = json.loads((data.path / "problem.json").read_text())
+    A, x, rate = np.array(problem["A"]), np.array(problem["x0"]), config["learning_rate"]
+    points = [x.copy()]
+    for step in range(config["steps"]):
+        x = x - rate * A @ x
+        points.append(x.copy())
+        run.add({"loss": float(0.5 * x @ A @ x), "step": step})  # the loss curve, in the run's metrics.jsonl
+    loss = float(0.5 * x @ A @ x)
+    print(f"final loss {loss:.3e} after {config['steps']} steps")  # also in the run's logs/stdout.txt
+    with cairn.draft("descent") as result:                      # the result artifact: an output of the run
+        result.add_json("final", {"loss": loss, "steps": config["steps"], "learning_rate": rate}, {"dataset": data.ref})
+        result.add_figure("trajectory", trajectory, {"steps": config["steps"]}, np.array(points), A)
+    print(f"published {result.version.ref} from {data.ref}")    # leaving the block published it, removed its folder
+    return result.version
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--dataset", default="datasets/quadratic@latest")
+    parser.add_argument("--learning-rate", type=float, default=0.15)
+    parser.add_argument("--steps", type=int, default=60)
+    args = parser.parse_args()
+    main({"dataset": args.dataset, "learning_rate": args.learning_rate, "steps": args.steps})

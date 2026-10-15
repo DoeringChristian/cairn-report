@@ -29,7 +29,7 @@ crosses the arrows below.
 
 ```text
 src/cairn/
-├── __init__.py   the light API: connect (Store, Project, Artifact, Version), pull, publish, alias, versions, lineage, Publication, open_store (client names load lazily)
+├── __init__.py   the light API: init, run, use, draft, connect (Store, Project, Artifact, Version), pull, publish, alias, versions, lineage, Publication, open_store (client names load lazily)
 ├── cli.py        argument parsing only; every command imports its part lazily
 ├── __main__.py
 ├── config.py     cairn.toml (leaf: imports nothing from cairn)
@@ -39,13 +39,14 @@ src/cairn/
 ├── migrate.py    the one-off conversion of an old hub (knows the old report layout)
 ├── store/        core, no HTTP: refs, uids (UUIDv7), local (LocalStore), blobs, tokens, cache (the two roots, pull, uid-keyed, NFS-safe), errors, inputs
 ├── client/       http (Client, scan/hash/upload), remote (RemoteStore), objects (connect, Store, Project, Artifact, Version),
-│                 publishing (publish, Publication, --watch), drafts (draft, Draft, current_draft), logger (RunLogger), replica (the local replica: data and cache roots,
+│                 publishing (publish, Publication, --watch), drafts (draft, Draft, current_draft), runs (init, Run, the process's run),
+│                 system (info, system metrics, output capture), code (source snapshot, packages), logger (Writer, RunLogger), replica (the local replica: data and cache roots,
 │                 records, claims, heartbeats, store files, migration), sync (sending pending versions), prune,
 │                 offline (resolution through the replica), open (open_store)
 ├── server/       app (handler + routes), auth, files (/files, Range, ETag), spawn (UI child); exports make_server, serve_store
 ├── ui/           server (UI HTTP server + /ui-api), sessions, backends (Local/RemoteBackend), static/ (built app)
 ├── reports/      build, serve, share, publishing (report -> artifact), template/
-└── runs/         logger (re-exports client.logger), hydra (run_experiment, StudyCompletion, finalize_study, the cairn.draft resolver), snapshot
+└── runs/         logger (re-exports client.logger), hydra (run_experiment, StudyCompletion, finalize_study, the cairn.run and cairn.draft resolvers), snapshot
 web/              React + TS + Vite source of the UI (builds into src/cairn/ui/static/)
 ```
 
@@ -122,9 +123,29 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
      `<base>/drafts/<name>/<uid>/` that is published (like `cairn.publish`, the version taking the draft's uid) and
      removed when it closes, kept on an exception; it is the run logger (RunLogger moved to client/logger.py, so
      `client` may import the leaf `formats`); pulls go into every open draft (and loose pulls into the next ones),
-     `use()` declares draft-to-draft inputs (published inputs first); `watch=True` reuses `Publication`. Hydra:
+     `use()` declares draft-to-draft inputs (published inputs first; both replaced by runs, below); `watch=True` reuses `Publication`. Hydra:
      the `${cairn.draft:name}` resolver (cached, so one folder per job and per sweep), `run_experiment` publishes a
      single run's draft with the job config as metadata, `StudyCompletion` a sweep's. `cairn drafts [publish|discard]`.
+   - **Runs as artifacts** (owner-approved, on `artifact-store`, replacing "inputs go directly onto outputs"):
+     every process that uses or publishes artifacts is a run, `cairn.init(name, config=...)` or implicitly the
+     first `use`/`pull`/`draft`: a draft of `runs/<name>` (`metadata.kind = "run"`) whose version is running
+     from the start and completes at exit (atexit via threading's exit callbacks, so thread pools still work;
+     failed on an unhandled exception or SIGTERM, `logs/error.txt`). One run per process (`cairn.run()`,
+     `run.finish()`). Its folder: the writer's files, `code/` (the source snapshot, client/code.py, moved out of
+     runs/snapshot.py so it needs no Hydra), `environment/` (pip-freeze.txt, pixi.lock), `logs/` (an fd-level tee of
+     stdout and stderr), `system/info.json` and `system/metrics.jsonl` (client/system.py); no run.json. With a
+     store server it is watched (synced with a heartbeat). Lineage: a run's inputs are what the process used
+     (`$CAIRN_INPUTS` points at the run's folder; an inherited one stays a sink; `$CAIRN_RUN` lets subprocesses
+     record into the parent's run); every draft has exactly one input, its run, by uid while it runs. The one
+     store rule change: `_exact_inputs` accepts a running version named by its exact uid (unknown, failed, and
+     deleted are still refused; the server inherits it); lineage of an exact version works in any status and
+     answers `nodes` (status, kind). The replica creates a running input version on the server before sending
+     an output that names it. `Version.run`, `upstream()`, `downstream()`, `cairn.lineage(through_runs=True)`.
+     Writer API: `add({...})` and `add_*` with per-item metadata (Draft has only these; `RunLogger` keeps the old
+     names deprecated for one release); `formats.py` folds multi-key entries and old lines. Hydra: `${cairn.run:}`
+     reserves the run folder (the job folder), a sweep is a run per trial (label `<sweep>/<n>`) plus a summary run
+     whose inputs are the trials. UI: Run panel, run nodes and a data-only toggle, a Runs tab, and (owner request)
+     `GET /files/<p>/<name>@<sel>.zip` in the UI server (streamed, ZIP64; the store server is unchanged).
    - *Done (on `artifact-store`):* the ref syntax for uids is a format check, not a prefix: a selector in
      the canonical lowercase UUIDv7 form is a uid, and aliases and labels may not take that form.
    - **Version identity:**
