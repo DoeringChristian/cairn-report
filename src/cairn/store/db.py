@@ -70,6 +70,8 @@ class Database:
         self.write_lock = threading.Lock()  # this process's writers queue here, not in SQLite's busy loop
         fresh = not self.path.exists()
         connection = self.connection()
+        if not fresh and self._ready(connection):  # the usual open: a read, no write lock
+            return
         with self.write_lock:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -82,8 +84,17 @@ class Database:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        if self.meta(connection, "legacy") is None:
+        if self.meta(connection, "legacy") != "done":
             import_legacy(self)
+
+    @staticmethod
+    def _ready(connection: sqlite3.Connection) -> bool:
+        """The schema exists and any legacy import is done."""
+        try:
+            rows = dict(connection.execute("SELECT key, value FROM meta WHERE key IN ('schema', 'legacy')").fetchall())
+        except sqlite3.OperationalError:  # no meta table yet
+            return False
+        return rows.get("schema") == str(SCHEMA) and rows.get("legacy") == "done"
 
     def connection(self) -> sqlite3.Connection:
         connection = getattr(self._local, "connection", None)
@@ -150,11 +161,17 @@ def import_legacy(database: Database) -> None:
             for record_file in sorted(projects.glob("*/project.json")) if projects.is_dir() else []:
                 _import_project(connection, database.store_uid, record_file.parent)
             connection.execute("INSERT INTO meta VALUES ('legacy', 'imported')")
+    renamed = True
     for file in _legacy_files(root):
         try:
             os.replace(file, file.with_name(file.name + ".migrated"))
-        except OSError:  # a read-only root: the database is what counts now
+        except FileNotFoundError:  # another process renamed it first
             pass
+        except OSError:  # a read-only root: the database is what counts now; try again next time
+            renamed = False
+    if renamed:
+        with database.write() as connection:
+            connection.execute("UPDATE meta SET value = 'done' WHERE key = 'legacy'")
 
 
 def _import_project(connection: sqlite3.Connection, store_uid: str, folder: Path) -> None:
