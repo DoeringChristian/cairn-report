@@ -1,5 +1,5 @@
 """The core: projects, artifacts, and immutable versions in a folder (`LocalStore`), their references, blobs,
-tokens, the pull cache, and migration. No HTTP, no reports, no UI: everything else builds on this."""
+tokens, the pull cache. No HTTP, no reports, no UI: everything else builds on this."""
 
 from __future__ import annotations
 

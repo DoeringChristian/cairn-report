@@ -21,10 +21,10 @@ from pathlib import Path
 
 import yaml
 
-from ..formats import read_jsonl
-from . import refs
-from .blobs import clean_entries
-from .local import LocalStore
+from .formats import read_jsonl
+from .store import refs
+from .store.blobs import clean_entries
+from .store.local import LocalStore
 
 FRONT = re.compile(r"---\n(.*?)\n---", re.S)
 

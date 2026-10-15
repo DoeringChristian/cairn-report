@@ -16,6 +16,7 @@ ALLOWED = {
     "ui": {"ui", "store", "client", "config", "ranges", "_version"},
     "reports": {"reports", "store", "client", "config", "ranges", "formats", "_version"},
     "runs": {"runs", "store", "client", "config", "formats", "_version"},
+    "migrate": {"migrate", "store", "formats", "_version"},  # the one-off hub conversion; knows the old report layout
     "__init__": {"store", "client", "_version"},  # the API (client lazily)
     "cli": set(),  # argument parsing: anything, lazily; checked separately
 }

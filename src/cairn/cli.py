@@ -98,7 +98,7 @@ def cmd_ui(args) -> None:
 
 
 def cmd_migrate(args) -> None:
-    from .store.migrate import migrate
+    from .migrate import migrate
 
     for line in migrate(args.old_root, args.new_root):
         print(line)
