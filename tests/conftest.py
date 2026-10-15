@@ -1,5 +1,4 @@
 import json
-import threading
 from pathlib import Path
 
 import matplotlib
@@ -8,10 +7,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pytest
 
-from cairn_report.hub import make_hub
 from cairn_report.logger import RunLogger
 
-TOKEN = "t" * 40
 RUN = "demo/2026-01-01_00-00-00"
 
 
@@ -83,14 +80,3 @@ def project(tmp_path, monkeypatch):
     make_tree(folder)
     make_run(folder)
     return folder
-
-
-@pytest.fixture
-def hub(tmp_path):
-    root = tmp_path / "hub"
-    root.mkdir()
-    server = make_hub(root, port=0, token=TOKEN, secure_cookie=False)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield {"url": f"http://127.0.0.1:{server.server_address[1]}", "root": root, "port": server.server_address[1]}
-    server.shutdown()

@@ -20,7 +20,7 @@ def default_root() -> Path:
 def materialize(store, ref, cache_root: Path | str) -> Path:
     """Write a version's files into the cache (once) and return its folder, or the file `ref` names after `//`.
 
-    Files are hard-linked from the store's blobs when both are on one filesystem, else copied, and made
+    Files are hard-linked from the store's blobs (a remote store keeps them in a blob cache under `cache_root`) when both are on one filesystem, else copied, and made
     read-only (a hard link shares its blob, so the blob is protected too). The folder is built aside and
     renamed into place, and holds a marker once complete, so an interrupted pull is simply redone.
     """
@@ -36,7 +36,7 @@ def materialize(store, ref, cache_root: Path | str) -> Path:
                 if "link" in entry:
                     os.symlink(entry["link"], target)
                     continue
-                source = store.blob_path(entry["sha256"])
+                source = store.blob_file(project, name, version["version"], entry, cache_root)
                 try:
                     os.link(source, target)
                 except OSError:

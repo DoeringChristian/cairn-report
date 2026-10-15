@@ -1,7 +1,7 @@
 """LocalStore: projects, artifacts, and immutable versions in a folder.
 
     <root>/
-      blobs/<aa>/<sha256-rest>                         file contents, as in the hub (hub.Store)
+      blobs/<aa>/<sha256-rest>                         file contents (blobs.BlobStore)
       projects/<p>/project.json                        name, title, description, created
       projects/<p>/consumers.jsonl                     consumer ref -> input ref, when a version with inputs completes
       projects/<p>/artifacts/<name>/versions.jsonl     one line per version state change; the last line per version wins
@@ -19,10 +19,9 @@ import os
 import threading
 from pathlib import Path
 
-from ..hub import Store as BlobStore
-from ..hub import _append_lines, clean_entries, now
 from ..logger import read_jsonl
 from . import refs
+from .blobs import BlobStore, append_lines, clean_entries, now
 from .refs import Ref
 
 
@@ -63,6 +62,10 @@ class LocalStore:
     def blob_path(self, sha: str) -> Path:
         return self._blobs.blob_path(sha)
 
+    def blob_file(self, project: str, name: str, version: int, entry: dict, cache_root=None) -> Path:
+        """A local file with the contents of a version's entry (here: the blob itself)."""
+        return self.blob_path(entry["sha256"])
+
     def has_blob(self, sha: str) -> bool:
         return self._blobs.has_blob(sha)
 
@@ -96,6 +99,16 @@ class LocalStore:
     def get_project(self, name: str) -> dict:
         return json.loads((self._project_dir(name) / "project.json").read_text())
 
+    def update_project(self, name: str, title: str | None = None, description: str | None = None) -> dict:
+        folder = self._project_dir(name)
+        with self.lock:
+            record = json.loads((folder / "project.json").read_text())
+            record.update({key: value for key, value in (("title", title), ("description", description)) if value is not None})
+            temporary = folder / f"project.json.{os.getpid()}.tmp"
+            temporary.write_text(json.dumps(record, indent=1))
+            os.replace(temporary, folder / "project.json")
+            return record
+
     def projects(self) -> list[dict]:
         return [json.loads(file.read_text()) for file in sorted(self._blobs.projects.glob("*/project.json"))]
 
@@ -109,7 +122,7 @@ class LocalStore:
         return {row["version"]: row for row in read_jsonl(self._artifact_dir(project, name) / "versions.jsonl")}
 
     def _write(self, project: str, name: str, record: dict) -> None:
-        _append_lines(self._artifact_dir(project, name) / "versions.jsonl", [record])
+        append_lines(self._artifact_dir(project, name) / "versions.jsonl", [record])
 
     def artifacts(self, project: str) -> list[str]:
         base = self._project_dir(project) / "artifacts"
@@ -117,6 +130,20 @@ class LocalStore:
 
     def versions(self, project: str, name: str) -> list[dict]:
         return [dict(state) for _, state in sorted(self._states(project, name).items())]
+
+    def get_version(self, project: str, name: str, version: int) -> dict:
+        """One version's manifest, whatever its status."""
+        state = self._states(project, name).get(version)
+        if state is None:
+            raise NotFound(f"{project}:{name} has no version v{version}")
+        return dict(state)
+
+    def summary(self, project: str, name: str) -> dict:
+        """The artifact at a glance: latest completed version, version count, aliases, last change."""
+        states, aliases = self._states(project, name), self.aliases(project, name)
+        stamps = [state.get("completed") or state["created"] for state in states.values()]
+        return {"name": name, "latest": aliases.get("latest"), "versions": len(states), "aliases": aliases,
+                "updated": max(stamps, default="")}
 
     def aliases(self, project: str, name: str) -> dict[str, int]:
         """Where each alias points now (the last move wins)."""
@@ -155,7 +182,7 @@ class LocalStore:
 
     def _add(self, project, name, version, entries) -> dict:
         state = self._running(project, name, version)
-        clean = clean_entries(entries, None)
+        clean = clean_entries(entries)
         missing = self.missing(clean)
         if missing:
             raise StoreError(f"{len(missing)} blobs are not in the store yet, e.g. {missing[0]}")
@@ -176,12 +203,12 @@ class LocalStore:
         me = refs.exact(project, name, version)
         for text in exact:
             source = refs.parse(text)
-            _append_lines(self._project_dir(source.project) / "consumers.jsonl", [{"consumer": me, "input": text, "time": now()}])
+            append_lines(self._project_dir(source.project) / "consumers.jsonl", [{"consumer": me, "input": text, "time": now()}])
         return record
 
     def _move_alias(self, project, name, alias, version) -> None:
         if self.aliases(project, name).get(alias) != version:
-            _append_lines(self._artifact_dir(project, name) / "aliases.jsonl", [{"alias": alias, "version": version, "time": now()}])
+            append_lines(self._artifact_dir(project, name) / "aliases.jsonl", [{"alias": alias, "version": version, "time": now()}])
 
     def start_version(self, project: str, name: str, label: str | None = None, metadata: dict | None = None,
                       source: dict | None = None) -> int:
@@ -190,7 +217,7 @@ class LocalStore:
             return self._start(project, name, label, metadata, source)["version"]
 
     def add_files(self, project: str, name: str, version: int, entries: list[dict]) -> None:
-        """Add or replace files in a running version (entries as in `hub.clean_entries`, blobs already uploaded)."""
+        """Add or replace files in a running version (entries as in `blobs.clean_entries`, blobs already uploaded)."""
         with self.lock:
             self._add(project, name, version, entries)
 
@@ -212,7 +239,7 @@ class LocalStore:
         is created and its number is returned (the aliases are still applied).
         """
         self._artifact_dir(project, name)
-        clean = sorted(clean_entries(entries, None), key=lambda entry: entry["path"])
+        clean = sorted(clean_entries(entries), key=lambda entry: entry["path"])
         _check_tree(clean)
         with self.lock:
             exact = self._exact_inputs(inputs)

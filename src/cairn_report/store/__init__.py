@@ -8,8 +8,9 @@
     store.versions("descent")
     store.lineage("reports/boundary@v2")
 
-`store=None` means the configured store (`[store]` in cairn-report.toml): for now a local folder,
-`path` (default `.store` in the project root) with the project named by `project` (default: the
+`store=None` means the configured store (`[store]` in cairn-report.toml): a store server when `url`
+is set (`RemoteStore`; the token comes from CAIRN_STORE_TOKEN or `token_file`), else a local folder,
+`path` (default `.store` in the project root). `project` names the default project (default: the
 project folder's slug). Every `pull` appends the exact version to `$CAIRN_INPUTS`, else to
 `.cairn-inputs.jsonl` in the working directory; `publish` carries a folder's `.cairn-inputs.jsonl`
 along as the version's `inputs`, which is how lineage is recorded without any framework hook.
@@ -17,51 +18,47 @@ along as the version's `inputs`, which is how lineage is recorded without any fr
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import os
 import socket
 from pathlib import Path
 
 from ..config import Config, load_config
-from ..hub import now
 from ..logger import read_jsonl
-from ..push import HashCache, Limited, entries_for, project_name, scan
+from ..push import HashCache, Limited, connect, entries_for, project_name, scan
 from . import refs
+from .blobs import now
 from .cache import default_root, materialize
 from .local import LocalStore, NotFound, StoreError
 from .refs import Ref
+from .remote import RemoteStore
 
-__all__ = ["LocalStore", "NotFound", "Ref", "StoreError", "alias", "lineage", "Publication", "open_store", "publish", "pull", "versions"]
+__all__ = ["LocalStore", "NotFound", "Ref", "RemoteStore", "StoreError", "alias", "lineage", "Publication", "open_store", "publish", "pull", "versions"]
 
 INPUTS_FILE = ".cairn-inputs.jsonl"
 INPUTS_ENV = "CAIRN_INPUTS"
 
 
-def open_store(config: Config | None = None) -> LocalStore:
+def open_store(config: Config | None = None) -> LocalStore | RemoteStore:
     """The store `[store]` in cairn-report.toml names, with the project as the default for references."""
     config = config or load_config()
     settings = config.store
+    project = project_name(config)
     if settings.get("url"):
-        raise NotImplementedError("remote stores arrive in step 4")
+        return RemoteStore(connect(config), project)
     root = Path(settings.get("path", ".store")).expanduser()
-    store = LocalStore(root if root.is_absolute() else config.project / root, project_name(_named(config)))
+    store = LocalStore(root if root.is_absolute() else config.project / root, project)
     store.create_project(store.project)
     return store
 
 
-def _named(config: Config) -> Config:
-    """project_name reads the hub's project key; hand it the store's."""
-    return dataclasses.replace(config, hub={"project": config.store.get("project")})
-
-
-def _store(store) -> LocalStore:
+def _store(store) -> LocalStore | RemoteStore:
     if store is None:
         return open_store()
-    return store if isinstance(store, LocalStore) else LocalStore(store)
+    return store if isinstance(store, (LocalStore, RemoteStore)) else LocalStore(store)
 
 
-def pull(ref: str, *, store: LocalStore | Path | str | None = None, record: bool = True) -> Path:
+def pull(ref: str, *, store: LocalStore | RemoteStore | Path | str | None = None, record: bool = True) -> Path:
     """A read-only local copy of an artifact version (or of the file after `//`), recorded as an input.
 
     `record=False` leaves the inputs file alone: the report builder records a report's inputs in the
@@ -87,7 +84,7 @@ def read_inputs(folder: Path) -> list[str]:
     return found
 
 
-def _target(name: str, store: LocalStore) -> tuple[str, str]:
+def _target(name: str, store: LocalStore | RemoteStore) -> tuple[str, str]:
     """(project, artifact name) for a publish target, creating the project."""
     target = refs.parse(name)
     if target.selector or target.path:
@@ -99,21 +96,25 @@ def _target(name: str, store: LocalStore) -> tuple[str, str]:
     return project, target.name
 
 
-def _stage(store: LocalStore, local: Path, config: Config, cache: HashCache) -> list[dict]:
+def _stage(store: LocalStore | RemoteStore, local: Path, config: Config, cache: HashCache) -> list[dict]:
     """Entries for a folder's files (its inputs record excluded) with their blobs put in the store."""
     files = scan(local, "", config, exclude=config.store.get("exclude", []))
     files.pop(INPUTS_FILE, None)
     entries, sources = entries_for(files, cache)
     cache.save()
-    for sha in store.missing(entries):
-        file, size = sources[sha]
-        with file.open("rb") as handle:
-            store.put_blob(sha, Limited(handle, size), size)
+    if isinstance(store, RemoteStore):  # asks the server what it lacks, then uploads in parallel
+        store.upload(sources, cache)
+        cache.save()
+    else:
+        for sha in store.missing(entries):
+            file, size = sources[sha]
+            with file.open("rb") as handle:
+                store.put_blob(sha, Limited(handle, size), size)
     return entries
 
 
 def publish(name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-            inputs=None, store: LocalStore | Path | str | None = None, config: Config | None = None) -> int:
+            inputs=None, store: LocalStore | RemoteStore | Path | str | None = None, config: Config | None = None) -> int:
     """Store a folder as the next version of artifact `name`; returns the version number.
 
     A symlinked folder is followed (the label defaults to the resolved folder's name). When nothing
@@ -145,7 +146,7 @@ class Publication:
     """
 
     def __init__(self, name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                 inputs=None, store: LocalStore | Path | str | None = None):
+                 inputs=None, store: LocalStore | RemoteStore | Path | str | None = None):
         self.local = Path(folder).resolve()
         self.store = _store(store)
         self.project, self.name = _target(name, self.store)
@@ -195,14 +196,14 @@ class Publication:
             self.fail()
 
 
-def alias(ref: str, alias: str, *, store: LocalStore | Path | str | None = None) -> None:
+def alias(ref: str, alias: str, *, store: LocalStore | RemoteStore | Path | str | None = None) -> None:
     """Point `alias` at the version `ref` names (which must be completed)."""
     store = _store(store)
     project, name, version = store.resolve(ref)
     store.set_alias(project, name, alias, version["version"])
 
 
-def versions(name: str, *, store: LocalStore | Path | str | None = None) -> list[dict]:
+def versions(name: str, *, store: LocalStore | RemoteStore | Path | str | None = None) -> list[dict]:
     """Every version of an artifact, oldest first, whatever its status."""
     store = _store(store)
     parsed = refs.parse(name)
@@ -212,6 +213,6 @@ def versions(name: str, *, store: LocalStore | Path | str | None = None) -> list
     return store.versions(project, parsed.name)
 
 
-def lineage(ref: str, *, store: LocalStore | Path | str | None = None) -> dict[str, list[str]]:
+def lineage(ref: str, *, store: LocalStore | RemoteStore | Path | str | None = None) -> dict[str, list[str]]:
     """One level up (`inputs`) and down (`consumers`) from a version, as exact references."""
     return _store(store).lineage(ref)

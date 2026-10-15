@@ -267,10 +267,23 @@ def test_publish_follows_symlinked_folder_and_labels_by_target(env, tmp_path):
     assert store.pull("descent@2026-10-15_07-49-37//r.txt").read_text() == "x"
 
 
-def test_remote_url_is_not_available_yet(env):
+def test_remote_store_needs_a_token_and_refuses_plain_http(env, monkeypatch):
+    monkeypatch.delenv("CAIRN_STORE_TOKEN", raising=False)
     (env / "cairn-report.toml").write_text('[store]\nurl = "https://store.example.org"\n')
-    with pytest.raises(NotImplementedError, match="step 4"):
+    with pytest.raises(SystemExit, match="no store token"):
         store.pull("a@v1")
+    monkeypatch.setenv("CAIRN_STORE_TOKEN", "t" * 40)
+    (env / "cairn-report.toml").write_text('[store]\nurl = "http://store.example.org"\n')
+    with pytest.raises(SystemExit, match="plain HTTP"):
+        store.open_store()
+    (env / "cairn-report.toml").write_text('[store]\nurl = "http://store.example.org"\nallow_http = true\n')
+    assert isinstance(store.open_store(), store.RemoteStore)
+
+
+def test_old_hub_table_points_to_the_store(env):
+    (env / "cairn-report.toml").write_text('[hub]\nurl = "https://hub.example.org"\n')
+    with pytest.raises(ValueError, match=r"\[hub\] was removed.*\[store\] url"):
+        store.open_store()
 
 
 def test_store_config_validation(env):

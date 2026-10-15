@@ -7,8 +7,8 @@ folders:
   numbers and figures from the artifacts each report declares as inputs;
 - a **run logger** that writes evidence to fixed places in a run folder (and,
   files only; `cairn-report publish --watch` syncs a running job's folder to the store);
-- a **hub**: a token-protected artifact store for reports and runs, with push
-  and pull;
+- an **artifact store**: named, versioned folders (datasets, run outputs, reports) in a local
+  folder or on a token-protected server, with `publish`, `pull`, and lineage;
 - **run bookkeeping** for Hydra projects: each run's `run.json`, the `latest`
   link, study completion, and a source snapshot per run.
 
@@ -65,8 +65,8 @@ The build also writes `generated/reports/index.html`, a project index with one
 card per report (title, status, summary, update time, number of inputs), and
 `site.json`, the flat report list the sidebar uses. `serve` moves to the next
 free port when the requested one is taken (`--strict-port` fails instead). The
-output is a static site: any web server, the project server, or a hub can serve
-it, at any address prefix.
+output is a static site: any web server, the project server, or a store server can
+serve it, at any address prefix.
 
 ### Writing a report
 
@@ -156,7 +156,7 @@ reduced motion). In the lightbox it has a player: play/pause (click, Space,
 `k`), a scrub bar, frame steps (`,` `.`, or a sideways or Shift mouse wheel),
 ±1 s (Shift+←/→), speed from 0.1× to 2×, and the same zoom and pan as images.
 The frame rate is read from the MP4, so frame steps are exact. `serve` and the
-hub answer range requests, so browsers can seek.
+store server answer range requests, so browsers can seek.
 
 ### Publishing a report
 
@@ -280,48 +280,79 @@ hydra:
 - `cairn-report finalize-study outputs/<name>/<timestamp>` completes a study
   whose launcher died, by the same rule, once every trial job has ended.
 
-## Hub
+## Store
 
-A hub stores each project's **report** (every push that changes it is a new,
-complete version of its sources and built pages) and its **runs** (files under
-`outputs/`, version by version). Nothing stored is deleted or overwritten, and
-the hub never runs pushed code.
+The store holds **artifacts**: named, versioned folders inside a **project**. A name is a
+slash path (`descent`, `datasets/crops`); reports are the artifacts `reports/<slug>`. A
+version is immutable once completed and records its files (by content hash), metadata,
+the exact versions it consumed (`inputs`), and where it was published from. Aliases
+(`latest` moves by itself; `best`, `paper` by hand) and labels select versions:
+`[project:]name[@v3|@alias|@label][//file]`.
+
+A project works offline against a store folder (`.store` by default, `[store] path`). To share
+it, serve a folder over HTTP and point projects at the server.
 
 ```bash
-cairn-report hub serve /srv/hub    # 127.0.0.1:8800; put an HTTPS reverse proxy in front
+cairn-report store serve /srv/store      # 127.0.0.1:8800; put an HTTPS reverse proxy in front
 ```
 
-The first `serve` of a new folder creates it with a random token (owner-only, in
-`<folder>/token`); every launch prints the token to the terminal, for the browser
-login and for clients. `cairn-report hub init <folder>` only creates the folder.
+The first `serve` of a new folder creates it with a random owner token (owner-only, in
+`<folder>/token`); every launch prints `Store: <url>` and `Token: <owner token>` to the terminal
+(never into a URL). Binding to a non-local `--host` warns: the server speaks plain HTTP.
+
+```bash
+cairn-report store token create /srv/store --project my-study --write --name cluster   # printed once
+cairn-report store token list /srv/store       # names, projects, access: never token values
+cairn-report store token revoke /srv/store cluster
+```
+
+The owner token can do everything. A scoped token reads one project, and publishes to it only
+with `--write`; everything else is 403 and a scoped token only sees its own project. Scoped
+tokens are stored hashed (`tokens.jsonl`); revoking one takes effect immediately, also for
+browser sessions (the cookie holds a signed token id, never the token).
 
 In a project:
 
 ```toml
-[hub]
-url = "https://hub.example.org"
+[store]
+url = "https://store.example.org"                 # omit for a local store
 project = "my-study"                              # default: the folder name
-token_file = "~/.config/cairn-report/hub-token"   # chmod 600; or CAIRN_HUB_TOKEN
-exclude = [".submitit/**/*.pkl"]                  # never pushed
-interval = 30                                     # seconds between pushes with --watch / the hub backend
+token_file = "~/.config/cairn-report/store-token" # chmod 600; or CAIRN_STORE_TOKEN
+allow_http = false                                # plain HTTP to a non-local server (default: refused)
+exclude = [".submitit/**/*.pkl"]                  # never published: gitignore-style globs on project paths
+interval = 30                                     # seconds between syncs with --watch
 ```
 
 ```bash
-cairn-report push                  # a new report version (if changed) and new run files
-cairn-report push report|runs      # only one of them
-cairn-report push --watch -- python experiments/run.py   # push while a command runs, and after
-cairn-report pull                  # the latest report back (refuses to overwrite local changes; --force)
-cairn-report pull --runs [NAME]    # also runs; --version N for an older report
-cairn-report pull --name P --into DIR   # restore another project into a folder
+cairn-report publish data/crops datasets/crops --alias paper      # a folder becomes the next version (none if unchanged)
+cairn-report publish runs/x/latest x --watch -- python run.py     # sync a running job; complete (or fail) with it
+cairn-report publish reports/alpha                                # build a report and publish reports/alpha
+cairn-report pull datasets/crops@paper                            # print the local, read-only copy's path
+cairn-report pull x@latest --into DIR [--no-record]               # copy it into DIR instead
 ```
 
-The hub serves `/` (every project), `/p/<project>/` (the latest report),
-`/p/<project>@<n>/` (version n), and `/runs/<project>/` (runs and their files).
-Clients authenticate with the token as a bearer header; browsers log in once and
-keep an HttpOnly, SameSite=Strict cookie (`--insecure-cookies` for plain-HTTP
-tunnels). The client refuses plain HTTP to a non-local hub unless `--allow-http`.
-`exclude` takes gitignore-style globs on project paths: `*` and `?` stay within
-a folder, `**` spans folders, a leading `/` anchors to the project root.
+```python
+from cairn_report import store
+crops = store.pull("datasets/crops@v3")      # works with a local and a remote store alike
+```
+
+`exclude` takes gitignore-style globs on project paths: `*` and `?` stay within a folder, `**`
+spans folders, a leading `/` anchors to the project root. Pulled copies live in
+`~/.cache/cairn-report/artifacts/`, with a blob cache beside them, so a file is downloaded once.
+
+The server serves the pages for people, with the same login (any valid token, kept as an
+HttpOnly, SameSite=Strict cookie; `--insecure-cookies` for plain-HTTP tunnels):
+
+- `/` projects (reports, artifacts, last update);
+- `/p/<project>/` its reports (title, status, summary, latest version), then its other artifacts;
+- `/p/<project>/r/<slug>[@vN]/` a report version's built page; its Data panel links each input
+  to the artifact page of the exact version;
+- `/p/<project>/a/<name>[@vN]` an artifact: versions, the files of one version, its metadata,
+  its inputs and its consumers (the back-trace view).
+
+The API lives under `/api/v2/` and files under `/files/<project>/<name>@vN//<path>` (ETag, Range);
+the routes are listed in `cairn_report/store/server.py`. The server never runs pushed code, but it
+serves pushed HTML: give write tokens to people whose reports you trust.
 
 ## Configuration
 
@@ -330,7 +361,7 @@ Everything has a default; `cairn-report.toml` at the project root changes it:
 ```toml
 reports_dir = "reports"            # holds one folder per report
 output_dir = "generated/reports"   # the built site
-outputs_dir = "outputs"            # run folders (pushed to a hub)
+outputs_dir = "outputs"            # run folders
 
 [style]
 css = ["style.css"]                # extra stylesheets, loaded after the default style

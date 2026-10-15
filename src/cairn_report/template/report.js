@@ -6,7 +6,7 @@ const PAGE = document.currentScript?.dataset || {};
 const PLOTLY_SRC = PAGE.plotly || "plotly.min.js";  // loaded on first use
 const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
 /* The builder tells each page where the site root is (relative) and which report (slug) it shows,
-   so the same build works at any address: a project server, a hub prefix, or plain static hosting. */
+   so the same build works at any address: a project server, a store server's /p/<project>/r/, or plain static hosting. */
 const siteRoot = new URL(PAGE.root || "./", location.href).pathname;
 /* `cairn-report share` writes one page that carries the shared reports (#cairn-bundle); links between
    reports then switch the report inside the page, so it works on hosts that serve a single file. */
@@ -140,12 +140,19 @@ function showHeader(data) {
   bundleLinks($(".hero"));
 }
 /* The Data panel: each input the report was built from, pinned to an exact version. The version carries its exact
-   reference in data-artifact; a store server's page for it (/p/<project>/a/<name>@v<n>/) can link it from there. */
+   reference in data-artifact. Served by a store server (under /p/<project>/r/), it links to that version's artifact page
+   (/p/<project>/a/<name>@v<n>); in local and bundle modes it stays plain text. */
+const STORE_SERVED = !BUNDLE && /^\/p\/[^/]+\/r\//.test(location.pathname);
+function artifactPage(exact) {
+  const match = /^([^:@/]+):(.+)@(v\d+)$/.exec(exact);
+  return STORE_SERVED && match ? `/p/${encodeURIComponent(match[1])}/a/${match[2].split("/").map(encodeURIComponent).join("/")}@${match[3]}` : null;
+}
 function showData(inputs) {
   const panel = $("#data-panel"); if (!panel) return;
   const list = $("#data-list"); list.replaceChildren();
   Object.entries(inputs).forEach(([name, input]) => {
-    const row = el("li", "data-row"), version = el("span", "data-version", input.resolved.split(":").pop());
+    const page = artifactPage(input.resolved), row = el("li", "data-row"), version = el(page ? "a" : "span", "data-version", input.resolved.split(":").pop());
+    if (page) version.href = page;
     version.dataset.artifact = input.resolved; version.title = input.requested ? `declared as ${input.requested}` : input.resolved;
     const button = el("button", "image-copy"); button.type = "button"; button.title = "Copy exact version"; button.setAttribute("aria-label", "Copy exact version"); button.dataset.tooltip = "Copy exact version"; button.innerHTML = COPY_ICON;
     button.onclick = async () => flashTip(button, (await copyText(input.resolved)) ? "Version copied" : "Copy failed");

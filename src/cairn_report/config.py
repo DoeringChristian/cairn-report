@@ -14,18 +14,12 @@ something, add a `cairn-report.toml` at the project root:
     [page]
     copy_preamble = "..."              # text put before the comments the Copy button copies
 
-    [hub]                              # where `cairn-report push` sends runs and reports
-    url = "https://hub.example.org"    # or CAIRN_HUB_URL
-    project = "my-study"               # default: the project folder name
-    token_file = "~/.config/cairn-report/hub-token"  # or CAIRN_HUB_TOKEN; never the token itself
-    interval = 30                      # seconds between pushes with --watch
-    exclude = [".submitit/**/*.pkl"]   # files never pushed: gitignore-style globs (*, ?, **) on project paths
-
     [store]                            # the artifact store `cairn_report.store` reads and writes
     path = ".store"                    # a local store folder (default), or:
-    url = "https://store.example.org"  # a store server (not available yet)
+    url = "https://store.example.org"  # a store server (`cairn-report store serve`)
     project = "my-study"               # default: the project folder name
     token_file = "~/.config/cairn-report/store-token"  # or CAIRN_STORE_TOKEN; never the token itself
+    allow_http = false                 # send the token over plain HTTP to a non-local server (default: refuse)
     exclude = ["*.pkl"]                # files never published: gitignore-style globs on project paths
     interval = 30                      # seconds between syncs of `cairn-report publish --watch`
     publish = [{ folder = "runs/descent/latest", name = "descent" }]  # folders `cairn-report publish` syncs
@@ -52,7 +46,6 @@ class Config:
     outputs_dir: Path
     extra_css: tuple[Path, ...] = field(default_factory=tuple)
     template_dir: Path | None = None
-    hub: dict = field(default_factory=dict)
     store: dict = field(default_factory=dict)
     page: dict = field(default_factory=dict)
 
@@ -79,7 +72,10 @@ def load_config(project: Path | str | None = None) -> Config:
     if "logger" in data:
         raise ValueError(f"{root / CONFIG_FILE}: [logger] was removed: the logger only writes files into the run folder "
                          "(sync a running job with `cairn-report publish <folder> <name> --watch`)")
-    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub", "store", "page"}
+    if "hub" in data:
+        raise ValueError(f"{root / CONFIG_FILE}: [hub] was removed: point [store] url at a store server "
+                         "(`cairn-report store serve`) and publish with `cairn-report publish`")
+    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "store", "page"}
     if unknown:
         raise ValueError(f"{root / CONFIG_FILE}: unknown keys {sorted(unknown)}")
     style = data.get("style", {})
@@ -87,24 +83,17 @@ def load_config(project: Path | str | None = None) -> Config:
     if unknown_style:
         raise ValueError(f"{root / CONFIG_FILE}: unknown [style] keys {sorted(unknown_style)}")
 
-    hub = data.get("hub", {})
-    if "token" in hub:
-        raise ValueError(f"{root / CONFIG_FILE}: never put the hub token in the config; use token_file or CAIRN_HUB_TOKEN")
-    unknown_hub = set(hub) - {"url", "project", "token_file", "interval", "exclude"}
-    if not isinstance(hub.get("exclude", []), list) or not all(isinstance(item, str) for item in hub.get("exclude", [])):
-        raise ValueError(f"{root / CONFIG_FILE}: [hub] exclude must be a list of glob patterns")
-    if unknown_hub:
-        raise ValueError(f"{root / CONFIG_FILE}: unknown [hub] keys {sorted(unknown_hub)}")
-
     store = data.get("store", {})
     if "token" in store:
         raise ValueError(f"{root / CONFIG_FILE}: never put the store token in the config; use token_file or CAIRN_STORE_TOKEN")
-    unknown_store = set(store) - {"path", "url", "project", "token_file", "exclude", "publish", "interval"}
+    unknown_store = set(store) - {"path", "url", "project", "token_file", "exclude", "publish", "interval", "allow_http"}
     if unknown_store:
         raise ValueError(f"{root / CONFIG_FILE}: unknown [store] keys {sorted(unknown_store)}")
     for key in ("path", "url", "project", "token_file"):
         if not isinstance(store.get(key, ""), str):
             raise ValueError(f"{root / CONFIG_FILE}: [store] {key} must be text")
+    if not isinstance(store.get("allow_http", False), bool):
+        raise ValueError(f"{root / CONFIG_FILE}: [store] allow_http must be true or false")
     if not isinstance(store.get("exclude", []), list) or not all(isinstance(item, str) for item in store.get("exclude", [])):
         raise ValueError(f"{root / CONFIG_FILE}: [store] exclude must be a list of glob patterns")
     if isinstance(store.get("interval", 30), bool) or not isinstance(store.get("interval", 30), (int, float)):
@@ -140,7 +129,6 @@ def load_config(project: Path | str | None = None) -> Config:
         outputs_dir=path(data.get("outputs_dir"), "outputs"),
         extra_css=css,
         template_dir=template_dir,
-        hub=dict(hub),
         store=dict(store),
         page=dict(page),
     )

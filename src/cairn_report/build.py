@@ -9,7 +9,7 @@ A report is a folder `reports/<slug>/` with a `report.md` (front matter + Markdo
 The data a report reads is declared in its front matter (`inputs:`), pinned to exact artifact
 versions at build time, and enforced: reading anything else in the project fails the build. Pages
 link to each other with `[text](report:<slug>#anchor)`, checked at build time. The output is
-static: any web server, the project server, or a hub can serve it.
+static: any web server, the project server, or a store server can serve it.
 """
 
 from __future__ import annotations
@@ -293,7 +293,7 @@ def output_dir(key: str) -> Path:
 
 
 def report_href(key: str) -> str:
-    """A report's address relative to the site root, so a site works under any prefix (e.g. a hub)."""
+    """A report's address relative to the site root, so a site works under any prefix (e.g. a store server)."""
     return f"{key}/"
 
 
@@ -493,7 +493,7 @@ class Build:
         if not declared:
             return
         store = artifacts.open_store(CONFIG)
-        self.store_root = store.root
+        self.store_root = getattr(store, "root", None)  # a remote store has no folder
         for name, text in declared.items():
             where = f"{self.markdown}: inputs.{name}"
             if not isinstance(name, str) or not INPUT_NAME.fullmatch(name):

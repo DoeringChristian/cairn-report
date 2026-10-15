@@ -1,4 +1,4 @@
-"""Command line: `cairn-report build | serve | share | publish | push | pull | hub`."""
+"""Command line: `cairn-report build | serve | share | publish | pull | store`."""
 
 from __future__ import annotations
 
@@ -27,17 +27,10 @@ def cmd_share(args) -> None:
     share(load_config(args.project), report=args.report, build=not args.no_build, out=args.out)
 
 
-def cmd_push(args) -> None:
-    from .push import push
-
-    raise SystemExit(push(load_config(args.project), what=args.what, watch=args.watch, interval=args.interval,
-                          command=args.command or None, url=args.url, allow_http=args.allow_http))
-
-
 def cmd_publish(args) -> None:
     from .publish import is_report_folder, parse_meta, publish_folder, publish_mappings, publish_report, watch_folder
 
-    config = load_config(args.project)
+    config = with_options(load_config(args.project), args)
     meta, command = parse_meta(args.meta), args.command or None
     if args.folder is not None and is_report_folder(config, Path(args.folder)):
         if args.name or args.watch or command or args.label or args.alias or meta:
@@ -55,37 +48,64 @@ def cmd_publish(args) -> None:
     publish_folder(config, folder, args.name, args.label, args.alias, meta)
 
 
-def cmd_pull(args) -> None:
+def with_options(config, args):
+    """The config with the command's `--allow-http` applied."""
     from dataclasses import replace
 
-    from .push import connect, project_name, pull
-
-    config = load_config(args.project)
-    hub = connect(config, args.url, args.allow_http)
-    name = args.name or project_name(config)
-    if args.into:  # restore into a separate folder, laid out like a project
-        root = args.into.resolve()
-        config = replace(config, project=root, reports_dir=root / "reports", output_dir=root / "generated" / "reports",
-                         outputs_dir=root / (config.outputs_dir.relative_to(config.project)
-                                             if config.outputs_dir.is_relative_to(config.project) else "outputs"))
-    runs = None if args.runs is None else [run for run in args.runs if run]
-    pull(hub, name, config, version=args.version, runs=runs, with_report=not args.runs_only, force=args.force)
+    return replace(config, store={**config.store, "allow_http": True}) if getattr(args, "allow_http", False) else config
 
 
-def cmd_hub_init(args) -> None:
-    from .hub import init_root
+def cmd_pull(args) -> None:
+    import shutil
 
-    token_file = init_root(args.root)
-    print(f"Hub root: {args.root.resolve()}")
-    print(f"Token: {token_file} (owner-only). Give clients CAIRN_HUB_TOKEN or a copy of this file.")
-    print(f"Serve it with: cairn-report hub serve {args.root}")
+    from . import store
+    from .store.cache import MARKER
+
+    config = with_options(load_config(args.project), args)
+    path = store.pull(args.ref, store=store.open_store(config), record=not args.no_record)
+    if args.into is None:
+        return print(path)
+    target = args.into
+    if path.is_file():
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target / path.name)
+        return print(target / path.name)
+    if target.exists() and any(target.iterdir()):
+        raise SystemExit(f"{target} is not empty")
+    shutil.copytree(path, target, symlinks=True, copy_function=shutil.copyfile, ignore=shutil.ignore_patterns(MARKER), dirs_exist_ok=True)
+    print(target)
 
 
-def cmd_hub_serve(args) -> None:
-    from .hub import serve_hub
+def cmd_store_serve(args) -> None:
+    from .store.server import serve_store
 
-    serve_hub(args.root, host=args.host, port=args.port, token_file=args.token_file,
-              max_blob=int(args.max_blob_gb * 1024**3), secure_cookie=not args.insecure_cookies)
+    serve_store(args.root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3),
+                secure_cookie=not args.insecure_cookies)
+
+
+def cmd_token_create(args) -> None:
+    from .store.tokens import create_token
+
+    token = create_token(args.root, args.project, write=args.write, name=args.name)
+    print(f"Token: {token}")
+    print(f"  {'read and write' if args.write else 'read-only'} access to project {args.project!r}; shown only now, stored hashed.")
+
+
+def cmd_token_list(args) -> None:
+    from .store.tokens import list_tokens
+
+    rows = list_tokens(args.root)
+    for row in rows:
+        print(f"{row['name']}\t{row['project']}\t{'write' if row['write'] else 'read'}\t{row['created'][:19]}")
+    if not rows:
+        print("no scoped tokens")
+
+
+def cmd_token_revoke(args) -> None:
+    from .store.tokens import revoke_token
+
+    revoke_token(args.root, args.name)
+    print(f"revoked {args.name}")
 
 
 def cmd_finalize_study(args) -> None:
@@ -96,7 +116,7 @@ def cmd_finalize_study(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="cairn-report", description="Static reports from Markdown and run outputs, a run logger, and an artifact hub.")
+    parser = argparse.ArgumentParser(prog="cairn-report", description="Static reports from Markdown and run outputs, a run logger, and an artifact store.")
     parser.add_argument("--version", action="version", version=f"cairn-report {__version__}")
     parser.add_argument("--project", type=Path, help="project root (default: nearest folder with cairn-report.toml, pixi.toml, or pyproject.toml)")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -131,49 +151,47 @@ def main(argv: list[str] | None = None) -> None:
     publish.add_argument("--interval", type=float, help=argparse.SUPPRESS)
     publish.set_defaults(run=cmd_publish)
 
-    def hub_client(command):
-        command.add_argument("--url", help="hub URL (default: [hub] url or CAIRN_HUB_URL)")
-        command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local hub (sends the token unencrypted)")
-        return command
-
-    push = hub_client(commands.add_parser("push", help="push the report (a new version) and runs to the hub"))
-    push.add_argument("--watch", action="store_true", help="keep pushing every --interval seconds until stopped")
-    push.add_argument("--interval", type=float, help="seconds between pushes (default: [hub] interval or 30)")
-    push.add_argument("what", nargs="?", choices=("all", "report", "runs"), default="all",
-                      help="push the report and runs (all, the default), or only one of them")
-    push.set_defaults(run=cmd_push)
-    pull = hub_client(commands.add_parser("pull", help="bring the report (and runs) back from the hub"))
-    pull.add_argument("--runs", nargs="*", metavar="RUN", help="also pull runs (all, or these run names / run paths)")
-    pull.add_argument("--runs-only", action="store_true", help="pull runs only, not the report")
-    pull.add_argument("--version", type=int, help="report version to pull (default: the latest)")
-    pull.add_argument("--name", help="project name on the hub (default: [hub] project)")
-    pull.add_argument("--into", type=Path, help="restore into this folder instead of the project")
-    pull.add_argument("--force", action="store_true", help="replace local files that differ from the hub")
+    publish.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
+    pull = commands.add_parser("pull", help="materialize an artifact version locally and print its path")
+    pull.add_argument("ref", help="[project:]name[@vN|@alias|@label][//file], e.g. datasets/crops@v3")
+    pull.add_argument("--into", type=Path, help="copy it into this folder instead of printing the cache path")
+    pull.add_argument("--no-record", action="store_true", help="do not append the version to the inputs file ($CAIRN_INPUTS or .cairn-inputs.jsonl)")
+    pull.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
     pull.set_defaults(run=cmd_pull)
 
-    hub = commands.add_parser("hub", help="run a hub that stores many projects' runs and reports")
-    hub_commands = hub.add_subparsers(dest="hub_command", required=True)
-    hub_init = hub_commands.add_parser("init", help="create a hub data folder with a fresh token")
-    hub_init.add_argument("root", type=Path)
-    hub_init.set_defaults(run=cmd_hub_init)
-    hub_serve = hub_commands.add_parser("serve", help="serve a hub (put an HTTPS reverse proxy in front)")
-    hub_serve.add_argument("root", type=Path)
-    hub_serve.add_argument("--host", default="127.0.0.1")
-    hub_serve.add_argument("--port", type=int, default=8800)
-    hub_serve.add_argument("--token-file", type=Path, help="default: <root>/token (or CAIRN_HUB_TOKEN)")
-    hub_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
-    hub_serve.add_argument("--insecure-cookies", action="store_true", help="browser login over plain HTTP (SSH tunnel)")
-    hub_serve.set_defaults(run=cmd_hub_serve)
+    store = commands.add_parser("store", help="run a store server and manage its tokens")
+    store_commands = store.add_subparsers(dest="store_command", required=True)
+    store_serve = store_commands.add_parser("serve", help="serve a store folder (a new one gets an owner token); put an HTTPS reverse proxy in front")
+    store_serve.add_argument("root", type=Path)
+    store_serve.add_argument("--host", default="127.0.0.1")
+    store_serve.add_argument("--port", type=int, default=8800)
+    store_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
+    store_serve.add_argument("--insecure-cookies", action="store_true", help="browser login over plain HTTP (SSH tunnel)")
+    store_serve.set_defaults(run=cmd_store_serve)
+    token = store_commands.add_parser("token", help="project-scoped tokens").add_subparsers(dest="token_command", required=True)
+    token_create = token.add_parser("create", help="print a new token for one project (shown once, stored hashed)")
+    token_create.add_argument("root", type=Path)
+    token_create.add_argument("--project", required=True)
+    token_create.add_argument("--write", action="store_true", help="allow publishing (default: read-only)")
+    token_create.add_argument("--name", help="a name to list and revoke it by")
+    token_create.set_defaults(run=cmd_token_create)
+    token_list = token.add_parser("list", help="list the scoped tokens (never their values)")
+    token_list.add_argument("root", type=Path)
+    token_list.set_defaults(run=cmd_token_list)
+    token_revoke = token.add_parser("revoke", help="stop a token from working")
+    token_revoke.add_argument("root", type=Path)
+    token_revoke.add_argument("name")
+    token_revoke.set_defaults(run=cmd_token_revoke)
 
     argv = list(sys.argv[1:] if argv is None else argv)
     command = []
-    if "--" in argv:  # `push|publish ... -- <command...>`: everything after -- is the command to run
+    if "--" in argv:  # `publish ... -- <command...>`: everything after -- is the command to run
         cut = argv.index("--")
         argv, command = argv[:cut], argv[cut + 1:]
     args = parser.parse_args(argv)
     args.command = command
-    if command and args.run not in (cmd_push, cmd_publish):
-        parser.error("only `push` and `publish` take a command after --")
+    if command and args.run is not cmd_publish:
+        parser.error("only `publish` takes a command after --")
     args.run(args)
 
 
