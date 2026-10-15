@@ -124,7 +124,7 @@ def test_the_api_needs_the_x_cairn_header(ui):
         assert get(ui, "/ui-api/" + path, cookie, **{"X-Cairn": "0"})[0] == 403
     assert get(ui, "/ui-api/me", {}, **X)[0] == 401  # and the header alone is not a login
     assert get(ui, "/ui-api/nope", cookie, **X)[0] == 404
-    assert data(ui, "me", cookie) == {"scope": "owner" if ui.kind == "folder" else "store", "project": None, "auth": True}
+    assert data(ui, "me", cookie) == {"scope": "owner" if ui.kind == "folder" else "remote", "project": None, "auth": True}
 
 
 def test_the_cookie_is_secure_behind_https_and_plain_on_this_machine(server):
@@ -145,7 +145,7 @@ def test_scoped_token_sees_only_its_project_and_revocation_ends_the_session(ui, 
     token = create_token(ui.server.root, "alpha", name="viewer")
     cookie = login(ui, token)
     me = data(ui, "me", cookie)
-    assert me["scope"] == ("project" if ui.kind == "folder" else "store") and (me["project"] == "alpha" or ui.kind == "server")
+    assert me["scope"] == ("project" if ui.kind == "folder" else "remote") and (me["project"] == "alpha" or ui.kind == "server")
     assert [p["name"] for p in data(ui, "projects", cookie)] == ["alpha"]
     assert data(ui, "projects/alpha", cookie)["project"]["name"] == "alpha"
     assert data(ui, "projects/alpha/artifacts/data", cookie)["name"] == "data"
