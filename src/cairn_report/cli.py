@@ -45,7 +45,8 @@ def cmd_pull(args) -> None:
     if args.into:  # restore into a separate folder, laid out like a project
         root = args.into.resolve()
         config = replace(config, project=root, reports_dir=root / "reports", output_dir=root / "generated" / "reports",
-                         outputs_dir=root / "outputs")
+                         outputs_dir=root / (config.outputs_dir.relative_to(config.project)
+                                             if config.outputs_dir.is_relative_to(config.project) else "outputs"))
     runs = None if args.runs is None else [run for run in args.runs if run]
     pull(hub, name, config, version=args.version, runs=runs, with_report=not args.runs_only, force=args.force)
 

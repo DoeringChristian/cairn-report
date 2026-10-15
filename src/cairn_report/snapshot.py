@@ -94,6 +94,7 @@ DENIED_PARTS = {
     "mlruns",
     "node_modules",
     "outputs",
+    "runs",  # run folders (outputs_dir), which are evidence, not source
     "site-packages",
     "venv",
     ".ssh",

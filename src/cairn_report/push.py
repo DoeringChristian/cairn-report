@@ -335,6 +335,16 @@ class RunPusher:
         return updated, sent
 
 
+def unbuilt_reports(config: Config) -> list[str]:
+    """Reports in the source tree whose pages the last build did not write."""
+    from . import build as builder
+
+    builder.configure(config)
+    return [key for key in builder.discover_reports()
+            if not (builder.output_dir(key) / "index.html").is_file()
+            or not (builder.output_dir(key) / "report-data.json").is_file()]
+
+
 class ReportPusher:
     """Sends the report folder and its built pages as one new version, when anything changed."""
 
@@ -351,6 +361,10 @@ class ReportPusher:
         files.update(scan(site, "site", self.config))
         if not any(key.startswith("source/") for key in files):
             return None, False, 0
+        unbuilt = unbuilt_reports(self.config)
+        if unbuilt:  # a failed or partial build must not become a report version
+            raise HubError("these reports have no built pages: " + ", ".join(key or "/" for key in unbuilt)
+                           + "; run `cairn-report build` (and fix its errors) before pushing")
         entries, sources = entries_for(files, self.cache)
         failed, sent = upload_missing(self.hub, sources, self.cache)
         self.cache.save()
@@ -403,7 +417,8 @@ def push(config: Config, what: str = "all", watch: bool = False, interval: float
             return True
         except (HubError, OSError) as error:
             failures += 1
-            print(f"warning: push failed ({error}); retrying", file=sys.stderr, flush=True)
+            print(f"{'warning: ' if watching else ''}push failed ({error}){'; retrying' if watching else ''}",
+                  file=sys.stderr, flush=True)
             return False
 
     if not watching:

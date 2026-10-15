@@ -244,3 +244,12 @@ def test_serve_creates_a_new_hub_and_prints_its_token(tmp_path, monkeypatch, cap
     hub_module.serve_hub(root, port=0)  # a second launch reuses it and prints the same token
     out = capsys.readouterr().out
     assert f"Token: {token}" in out and "Created hub" not in out
+
+
+def test_push_refuses_a_partial_build(hub, client, capsys):
+    config = load_config(client)
+    build_all(config)
+    shutil.rmtree(client / "generated" / "reports" / "alpha" / "beta")  # as after a build that failed midway
+    assert push(config, what="report") == 1
+    assert "no built pages: alpha/beta" in capsys.readouterr().err
+    assert call(hub, "GET", "/api/v1/projects/study/report")[0] == 404  # no version was created

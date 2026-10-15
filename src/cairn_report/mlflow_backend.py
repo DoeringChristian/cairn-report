@@ -193,7 +193,7 @@ class MLflowBackend:
         experiment_id = _experiment(self.client, self.experiment)
         run_dir = _relative(root, project)
         parts = run_dir.split("/")
-        run_name = parts[1] if len(parts) >= 3 and parts[0] == "outputs" else root.parent.name
+        run_name = parts[1] if len(parts) >= 3 and parts[0] in ("outputs", "runs") else root.parent.name
         existing = self.client.search_runs(
             [experiment_id], filter_string=f"tags.`cairn.run_dir` = '{run_dir}' and attributes.status = 'RUNNING'",
             max_results=1,
