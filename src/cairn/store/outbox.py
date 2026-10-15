@@ -196,14 +196,27 @@ class Outbox:
         if any(not self._stale(path, timeout) for path in others):
             return None
         temporary = scratch(mine)
+        stamp = json.dumps({"time": time.time(), "host": hostname(), "pid": os.getpid()})
         try:
-            temporary.write_text(json.dumps({"time": time.time(), "host": hostname(), "pid": os.getpid()}))
+            temporary.write_text(stamp)
             try:
                 os.link(temporary, mine)  # exclusive: fails if it exists
             except FileExistsError:
                 if not self._stale(mine, timeout):  # this process holds it already (another thread)
                     return None
                 os.replace(temporary, mine)
+            except OSError:  # a filesystem without hard links (SMB, some FUSE): an exclusive create instead
+                if not folder.is_dir():
+                    return None
+                try:
+                    descriptor = os.open(mine, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                except FileExistsError:
+                    if not self._stale(mine, timeout):
+                        return None
+                    os.replace(temporary, mine)
+                else:
+                    with os.fdopen(descriptor, "w") as handle:
+                        handle.write(stamp)
         except OSError:  # the folder left (sent by another sender)
             return None
         finally:

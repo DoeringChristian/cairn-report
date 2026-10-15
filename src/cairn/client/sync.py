@@ -38,7 +38,7 @@ from pathlib import Path
 from ..store import refs
 from ..store.blobs import blob_path, now
 from ..store.digest import manifest_digest
-from ..store.errors import MissingBlobs, NotFound, StoreError, Unreachable
+from ..store.errors import Forbidden, MissingBlobs, NotFound, StoreError, Unauthorized, Unreachable
 from ..store.folders import hostname, update_record
 from ..store.local import read_repo_file, repo_uid, update_repo_file
 from ..store.outbox import Outbox, belongs
@@ -50,6 +50,28 @@ RETRIES = 3  # sends of a version whose blobs the remote's garbage collection re
 class NotRecorded(Unreachable):
     """The remote has a version, but the repo could not record its answer yet: the outbox entry stays and the next sync
     records it (sending again is harmless). Never a reason to reject an entry."""
+
+
+class Waiting(Unreachable):
+    """An entry cannot be sent now for a reason that is not the entry's own (the token is refused, an input of it is still
+    on its way): it stays pending, and the reason is reported. Never a reason to reject an entry."""
+
+
+def _input_uids(record: dict) -> list[str]:
+    found = []
+    for item in record.get("inputs") or []:
+        try:
+            uid = refs.parse(item).uid
+        except ValueError:
+            continue
+        if uid:
+            found.append(uid)
+    return found
+
+
+def _when(record: dict) -> tuple:
+    """Publish order: when the version became final (else when it started), then its uid."""
+    return (record.get("completed") or record.get("created") or "", record["uid"])
 
 
 class Sync:
@@ -112,8 +134,10 @@ class Sync:
 
     @staticmethod
     def ordered(records: list[dict]) -> list[dict]:
-        """Entries in the order they can be sent: oldest first (uid order), but every entry after the pending entries it
-        names as inputs (a draft's uid can be older than the run it is an output of: the run starts when the draft opens)."""
+        """Entries in the order they can be sent: in publish order (when each became final), but every entry after the
+        pending entries it names as inputs (a draft's uid can be older than the run it is an output of: the run starts
+        when the draft opens). A failed run comes after its outputs: they name it while it runs (`_start_inputs`)."""
+        records = sorted(records, key=_when)
         by_uid = {record["uid"]: record for record in records}
         order: list[dict] = []
         state: dict[str, str] = {}
@@ -122,13 +146,10 @@ class Sync:
             if state.get(record["uid"]):
                 return  # done, or on the way (a cycle cannot be sent in any order: the remote decides)
             state[record["uid"]] = "open"
-            for item in record.get("inputs") or []:
-                try:
-                    uid = refs.parse(item).uid
-                except ValueError:
-                    continue
-                if uid in by_uid:
-                    visit(by_uid[uid])
+            for uid in _input_uids(record):
+                other = by_uid.get(uid)
+                if other is not None and not (other.get("kind") == "running" and other.get("status") == "failed"):
+                    visit(other)
             state[record["uid"]] = "done"
             order.append(record)
 
@@ -195,8 +216,9 @@ class Sync:
         remote.create_project(project)
         if record["status"] == "completed":
             record["digest"] = manifest_digest(record["files"])  # the remote recomputes it from the files and refuses a mismatch
-            self._start_inputs(record)
         manifest = {key: record.get(key) for key in ("label", "metadata", "source")}
+        if record["status"] in ("completed", "failed"):
+            self._start_inputs(record)
         if record["kind"] == "publish":
             for attempt in range(RETRIES):
                 self._upload(record["files"])
@@ -232,6 +254,8 @@ class Sync:
                 record["pushed"].update({item["path"]: item.get("sha256") or item.get("link") for item in fresh})
                 self.outbox.save(record)
             if record["status"] == "running":
+                if not fresh:
+                    remote.keep_alive(project, name, record["number"])  # nothing new: still say it is alive
                 return False
             if record["status"] == "completed":
                 remote.complete_version(project, name, record["number"], record["inputs"], digest=record["digest"])
@@ -251,17 +275,19 @@ class Sync:
         return self._done(record)
 
     def _start_inputs(self, record: dict) -> None:
-        """An input that is a running version of this repo (the run an output comes from) must exist on the remote
-        before the output names it: create it there now (idempotent by uid; its owner keeps syncing it)."""
-        for item in record.get("inputs") or []:
-            try:
-                uid = refs.parse(item).uid
-            except ValueError:
-                continue
-            if uid is None:
-                continue
+        """An input that is a running version of this repo (the run an output comes from; also one that failed since
+        and is not sent yet) must exist on the remote before the output names it: create it there now, running
+        (idempotent by uid; its owner, or the next sync, sends the rest). A pending input that is final is sent first."""
+        for uid in _input_uids(record):
             other = self.outbox.load(uid)
-            if other is None or other.get("sync") != "running" or other.get("number") is not None:
+            if other is None or other.get("number") is not None:
+                continue
+            if other.get("kind") != "running":
+                if other.get("sync") == "pending":
+                    self.send(other)  # a pending version the record consumed: it goes first
+                if self.outbox.load(uid) is not None:
+                    raise Waiting(f"{record['project']}:{record['name']}@{record['uid']} waits for its input "
+                                  f"{other['project']}:{other['name']}@{uid}, which is not sent yet")
                 continue
             manifest = {key: other.get(key) for key in ("label", "metadata", "source")}
             self.remote.create_project(other["project"])
@@ -284,6 +310,8 @@ class Sync:
                     manifest = remote.get_version(project, name, record["number"])
                 except NotFound:
                     manifest = None
+        if manifest is not None and manifest.get("uid") != record["uid"]:
+            self._redirect(record, project, name, manifest)
         if manifest is not None:
             try:
                 self.record(project, name, manifest)
@@ -294,6 +322,24 @@ class Sync:
                                   f"the repo could not record it yet ({type(error).__name__}: {error}); the next sync does") from error
         self.outbox.remove(record)
         return True
+
+    def _redirect(self, record: dict, project: str, name: str, manifest: dict) -> None:
+        """The remote kept its own version instead of this entry's (nothing changed since its latest): every other entry
+        that names this entry's uid as an input names the remote's version from now on."""
+        gone, exact = f"{project}:{name}@{record['uid']}", f"{project}:{name}@v{manifest['version']}"
+        for other in self.outbox.records():
+            if gone in (other.get("inputs") or []):
+                other["inputs"] = [exact if item == gone else item for item in other["inputs"]]
+                self.outbox.save(other)
+
+    def _final_there(self, record: dict) -> bool:
+        """Whether the remote has this entry's version final already (sent before, by another sender or a lost answer)."""
+        try:
+            manifest = self.remote.get_version(record["project"], record["name"], record["uid"])
+        except StoreError:
+            return False
+        return manifest.get("status") in ("completed", "failed", "deleted") and \
+            (record["status"] == manifest.get("status") or manifest.get("status") == "deleted")
 
     def send(self, record: dict, claim: bool = True) -> bool:
         """Push one entry; a refusal marks it rejected (and raises), not answering leaves it pending (and raises).
@@ -315,7 +361,12 @@ class Sync:
             return self.push(record, claimed)
         except Unreachable:
             raise
+        except (Unauthorized, Forbidden) as error:  # the token, not the entry: it waits until the token is right
+            raise Waiting(f"the remote refused the token ({error}); {record['project']}:{record['name']}@{record['uid']} "
+                          "waits") from error
         except StoreError as error:
+            if record["status"] != "running" and self._final_there(record):
+                return self._done(record)
             record.update(sync="rejected", error=str(error))
             self.outbox.save(record)
             raise
@@ -346,18 +397,28 @@ class Sync:
                 if why is None:
                     result["waiting"].append(record)  # its own process sends it
                     continue
-                current = self.outbox.load(record["uid"])
-                if current is None or current["sync"] != "running":
+                claimed = self.outbox.claim(record["uid"], self.timeout)  # its owner may be saving it right now
+                if claimed is None:
                     continue
-                record = current
-                record.update(sync="pending", status="failed", error=f"failed by {hostname()}: {why}")
-                self.outbox.save(record)  # a queued failure, so nothing stays running for good
+                try:
+                    current = self.outbox.load(record["uid"])
+                    if current is None or current["sync"] != "running" or self.outbox.dead(current, self.timeout) is None:
+                        continue
+                    record = current
+                    record.update(sync="pending", status="failed", error=f"failed by {hostname()}: {why}", completed=now())
+                    self.outbox.save(record)  # a queued failure, so nothing stays running for good
+                finally:
+                    self.outbox.release(claimed)
                 result["failed"].append(record)
                 say(f"failing {record['project']}:{record['name']}@{record['uid']}: {why}")
             try:
                 sent = self.send(record)
+            except (NotRecorded, Waiting) as error:  # this entry waits; the others need not
+                result["waiting"].append(record)
+                say(f"waiting: {error}")
+                continue
             except Unreachable:
-                result["waiting"].extend(records[index:])
+                result["waiting"].extend(record for record in records[index:] if record not in result["waiting"])
                 break
             except StoreError as error:
                 result["rejected"].append(record)
@@ -385,6 +446,7 @@ class Sync:
                 self.copies.set_meta("remote", uid)
             return 0
         adopted, waiting = [], 0
+        rows = sorted(rows, key=lambda row: (row[2].get("completed") or row[2].get("created") or "", row[2]["version"]))
         for project, name, state in rows:
             if state["status"] == "running":
                 waiting += 1

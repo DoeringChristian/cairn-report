@@ -397,7 +397,9 @@ class StoreApp:
                 if label is not None and not isinstance(label, str):
                     raise ValueError("label must be text")
                 number = store.start_version(project, name, label, payload.get("metadata"), source, uid=self._uid(payload))
-                return _json(201, {"version": number, "uid": store.get_version(project, name, number)["uid"]})
+                uid = store.get_version(project, name, number)["uid"]
+                store.beat(uid)  # a client's running version: alive while it syncs (see reap_schedule)
+                return _json(201, {"version": number, "uid": uid})
             case ["projects", project, "artifacts", name, "versions", number, action] if number.isdigit():
                 allow(principal, project, write=True)
                 number = int(number)
@@ -406,10 +408,12 @@ class StoreApp:
                     missing = store.missing(entries)
                     if missing:
                         return _json(409, {"error": "upload these blobs first", "missing": missing})
-                    store.add_files(project, name, number, entries)
+                    store.add_files(project, name, number, entries)  # no entries: a keep-alive of a running version
+                    store.beat(store.get_version(project, name, number)["uid"])
                     return _json(200, {"files": len(entries)})
                 if action == "metadata":
                     store.set_metadata(project, name, number, payload.get("metadata"))
+                    store.beat(store.get_version(project, name, number)["uid"])
                     return _json(200, {"version": number})
                 if action == "complete":
                     store.complete_version(project, name, number, self._inputs(principal, project, payload.get("inputs")),
@@ -602,6 +606,28 @@ def gc_schedule(app: StoreApp, interval: float, grace: float = GRACE, say=None) 
     return stop
 
 
+REAP_EVERY = 60.0  # seconds between looks for running versions whose clients stopped syncing them
+RUNNING_TIMEOUT = 600.0  # seconds without a sync before the server fails a client's running version
+
+
+def reap_schedule(app: StoreApp, every: float = REAP_EVERY, timeout: float = RUNNING_TIMEOUT, say=None) -> threading.Event:
+    """Every `every` seconds, fail the running versions no client synced for `timeout` seconds (their job died where
+    nothing could tell: a node that went away). Set the returned event to stop it."""
+    stop = threading.Event()
+    say = say or (lambda line: print(line, file=sys.stderr, flush=True))
+
+    def loop():
+        while not stop.wait(every):
+            try:
+                for ref, why in app.store.reap(timeout):
+                    say(f"failed {ref}: {why}")
+            except Exception as error:  # noqa: BLE001 - keep serving; try again next time
+                say(f"reap: failed: {error}")
+
+    threading.Thread(target=loop, name="cairn-reap", daemon=True).start()
+    return stop
+
+
 def default_log(line: str, client) -> None:
     """One line per request on stderr, without the token."""
     address = client[0] if client else "-"
@@ -744,6 +770,7 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         print(f"Token: {server.owner_token}", flush=True)
         print("  clients read it from CAIRN_TOKEN or [repo] token_file, and `cairn ui` logs in with it;"
               " `cairn token create` makes project-scoped tokens", flush=True)
+    reap_schedule(server.app)
     if gc_interval:
         gc_schedule(server.app, gc_interval, gc_grace)
         print(f"Garbage collection every {gc_interval / 3600:g} h (grace {gc_grace / 3600:g} h)", flush=True)

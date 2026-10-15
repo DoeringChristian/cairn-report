@@ -44,7 +44,7 @@ from ..ranges import byte_range
 from ..store import refs
 from ..store.blobs import CHUNK, BlobStore, blob_path, now, resolve_entry
 from ..store.digest import manifest_digest
-from ..store.errors import BadRange, Deleted, MissingBlobs, NotFound, StoreError, Unreachable
+from ..store.errors import BadRange, Deleted, Forbidden, MissingBlobs, NotFound, StoreError, Unauthorized, Unreachable
 from ..store.folders import cached, hostname, inside, materialize_version, pull as pull_local
 from ..store.hashes import HashCache
 from ..store.inputs import drop_inputs, record_input
@@ -56,7 +56,7 @@ from ..store.uids import UID, new_uid
 from ..store.verify import Report, check_blobs, verify_copies, verify_folders, verify_outbox, verify_store, verify_version
 from .http import entries_for, scan
 from .remote import Remote
-from .sync import NotRecorded, Sync
+from .sync import NotRecorded, Sync, Waiting
 
 FINAL = ("completed", "failed", "deleted")
 
@@ -308,6 +308,7 @@ class SyncedRepo(ProjectRepo):
         self.outbox = Outbox(self.root)
         self.engine = Sync(self.outbox, remote, copies, self.root, heartbeat_timeout)
         self._down_until = 0.0  # the remote did not answer: reads and background sends skip it until then
+        self._reached = False  # reach() looked at the remote once (and adopted what the repo numbered itself)
         self.ask = _Guarded(self)
 
     def __repr__(self) -> str:
@@ -749,9 +750,9 @@ class SyncedRepo(ProjectRepo):
         try:
             return self.get_version(project, name, uid)
         except NotFound:  # nothing changed since the latest: the remote kept its own version, not this uid
-            if record.get("number") is None:
-                raise
-            return self.get_version(project, name, record["number"])
+            if record.get("number") is not None:
+                return self.get_version(project, name, record["number"])
+            return self.resolve(Ref(project, name, None), warn=lambda line: None)[2]
 
     def down(self) -> bool:
         """Whether the remote was slow to fail a moment ago (DOWN_FOR seconds): then it is not asked for reads and
@@ -761,16 +762,25 @@ class SyncedRepo(ProjectRepo):
     def reach(self) -> None:
         """Before the first request of this process: a quick look whether the remote answers at all (PROBE seconds), so a
         host that hangs makes one short wait, not one long one per request. Raises Unreachable."""
-        if self.remote._uid is not None:
+        if self._reached:
             return
         if self.down():
             raise Unreachable(f"the remote at {self.url} did not answer a moment ago")
         began = time.monotonic()
         try:
-            self.remote._uid = self.with_timeout(PROBE).remote.uid
+            if self.remote._uid is None:
+                self.remote._uid = self.with_timeout(PROBE).remote.uid
+            self.engine.check_remote()  # this repo's remote, not another one, not the repo itself (StoreError)
+            if self.copies.local_versions():  # versions numbered before the repo had a remote: sent first
+                self._reached = True  # (the flush below asks the remote itself)
+                try:
+                    self.engine.flush()
+                finally:
+                    self._reached = False
         except Unreachable:
             self._failed(began)
             raise
+        self._reached = True
 
     def _failed(self, began: float) -> None:
         """The remote did not answer: if finding that out took long (a host that drops packets), skip it for a while."""
@@ -784,6 +794,12 @@ class SyncedRepo(ProjectRepo):
         try:
             self.reach()
             self.engine.send(record)
+        except Waiting as error:
+            if isinstance(error.__cause__, (Unauthorized, Forbidden)):  # the caller should know at once; it stays pending
+                raise type(error.__cause__)(f"{error.__cause__}; {record['project']}:{record['name']}@{record['uid']} stays "
+                                            "pending in the outbox (`cairn status`) until a token that may write sends it") from None
+            _warn(f"pending {record['project']}:{record['name']}@{record['uid']}: {error}")
+            start_uploader(self)
         except Unreachable as error:
             if not isinstance(error, NotRecorded):
                 self._failed(began)
@@ -798,10 +814,23 @@ class SyncedRepo(ProjectRepo):
                        uid: str | None = None) -> dict:
         """Stage the folder, commit it to the outbox, and send it now if the remote answers (else it is pending)."""
         entries, sources = self.stage(folder, exclude, project_root, link)
+        same = None if aliases else self._unchanged(project, name, entries, metadata, inputs)
+        if same is not None:  # like a repo without a remote: nothing changed since the latest, so no new version
+            return same
         record = self._new_entry("publish", project, name, files=entries, label=label, metadata=metadata, inputs=inputs,
                                  aliases=aliases, source=source, uid=uid)
         self.restage(entries, sources)
         return self._send_now(record)
+
+    def _unchanged(self, project: str, name: str, entries: list[dict], metadata, inputs) -> dict | None:
+        """The latest version (the remote's, else what the repo knows) when it has these files, metadata, and inputs."""
+        try:
+            latest = self.resolve(Ref(project, name, None), warn=lambda line: None)[2]
+        except StoreError:
+            return None
+        same = (latest.get("digest") or manifest_digest(latest.get("files") or [])) == manifest_digest(entries) and \
+            (latest.get("metadata") or {}) == (metadata or {}) and sorted(latest.get("inputs") or []) == sorted(self._uid_inputs(inputs))
+        return latest if same else None
 
     def _running(self, project: str, name: str, uid: str) -> dict:
         """The outbox entry of a running version of this process (refused once a sender failed it: its heartbeat

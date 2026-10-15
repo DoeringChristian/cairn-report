@@ -118,6 +118,11 @@ def prune(root: Path, older_than: float | None = None, max_size: int | None = No
             gained = release([key])
             size, freed, count = size - gained, freed + gained, count + 1
     if not dry_run:
+        outbox = root / "outbox"
+        for folder in sorted(outbox.iterdir()) if outbox.is_dir() else []:  # sent, but its folder was not removed (a crash)
+            record = read_record(folder) if ".tmp-" not in folder.name else None
+            if record is not None and record.get("sync") == "synced":
+                remove(folder)
         for folder in (root / "versions", root / "blobs", root / "outbox"):
             for path in folder.rglob("*.tmp-*") if folder.is_dir() else []:
                 try:

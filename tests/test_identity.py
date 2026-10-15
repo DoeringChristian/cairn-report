@@ -116,7 +116,11 @@ def test_client_supplied_uids_are_idempotent_and_conflicts_refused(tmp_path):
     running = new_uid()
     number = local.start_version("p", "run", label="live", uid=running)
     assert local.start_version("p", "run", label="live", uid=running) == number == 2
-    with pytest.raises(Conflict):
+    # started again with other metadata (its first answer was lost, the metadata changed since): a running version takes it
+    assert local.start_version("p", "run", label="live", metadata={"k": 2}, uid=running) == 2
+    assert local.get_version("p", "run", 2)["metadata"] == {"k": 2}
+    local.fail_version("p", "run", 2)
+    with pytest.raises(Conflict):  # a final one does not
         local.start_version("p", "run", label="other", uid=running)
     with pytest.raises(ValueError):
         local.start_version("p", "run", uid="not-a-uid")

@@ -597,3 +597,135 @@ def test_many_processes_opening_a_new_repo_at_once(tmp_path):
         for start in starts:
             out, err = start.communicate(timeout=120)
             assert start.returncode == 0 and out.strip() == "ok", err
+
+
+# ------------------------------------------------------------------ what a review of the sync found (each fixed)
+
+@pytest.fixture
+def online(server, tmp_path, monkeypatch):
+    """A project in this process whose remote is the server; background uploads off (the tests send by hand)."""
+    import cairn.client.repo as repo_module
+
+    monkeypatch.setattr(repo_module, "start_uploader", lambda *args, **kwargs: None)
+    project = project_at(tmp_path, "study", server.url)
+    monkeypatch.chdir(project)
+    return project
+
+
+def test_a_pending_version_the_remote_finds_unchanged_hands_its_consumers_the_remotes_version(server, online, tmp_path, monkeypatch):
+    server.start()
+    other = project_at(tmp_path, "other", server.url)
+    assert cairn_cli(other, "publish", str(folder(tmp_path, "same", {"x.txt": "same"})), "a").returncode == 0  # a@v1
+    server.stop()
+    repo = cairn.connect()  # this repo never saw a@v1: its publish of the same files is pending
+    pending = repo.project().artifact("a").publish(folder(tmp_path, "same2", {"x.txt": "same"}))
+    consumer = repo.project().artifact("b").publish(folder(tmp_path, "b", {"y.txt": "b"}), inputs=[pending.ref])
+    assert pending.pending and consumer.inputs == [pending.ref]
+    server.start()
+    result = repo.sync()
+    assert not result["rejected"], result["lines"]
+    assert [v["version"] for v in remote_versions(server, "a")] == [1]  # the remote kept its own version
+    [b] = remote_versions(server, "b")
+    assert b["inputs"] == ["study:a@v1"] and outbox(online) == []
+
+
+def test_a_direct_publish_sends_the_pending_versions_it_names_first(server, online, tmp_path):
+    repo = cairn.connect()
+    first = repo.project().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
+    assert first.pending
+    server.start()
+    second = cairn.connect().project().artifact("b").publish(folder(tmp_path, "b", {"y.txt": "b"}), inputs=[first.ref])
+    assert second.number == 1 and second.inputs == ["study:a@v1"]
+    assert [v["uid"] for v in remote_versions(server, "a")] == [first.uid] and outbox(online) == []
+
+
+def test_a_token_that_may_not_write_leaves_versions_pending_not_rejected(server, online, tmp_path, monkeypatch):
+    from cairn.store.tokens import create_token
+
+    server.start()
+    reader = create_token(server.root, "study", write=False, name="reader")
+    monkeypatch.setenv("CAIRN_TOKEN", reader)
+    with pytest.raises(cairn.Forbidden, match="stays pending"):
+        cairn.connect().project().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
+    status = cairn_cli(online, "status")
+    assert status.stdout.startswith("pending\tstudy:a"), status.stdout  # pending, not rejected
+    monkeypatch.setenv("CAIRN_TOKEN", server.token)
+    assert cairn_cli(online, "sync").returncode == 0 and [v["version"] for v in remote_versions(server, "a")] == [1]
+
+
+def test_an_output_of_a_run_that_failed_before_anything_was_sent_is_kept(server, online, tmp_path):
+    made = python(online, """
+        import cairn
+        run = cairn.init(name="train", system=False, code=False)
+        with cairn.draft("checkpoint") as checkpoint:
+            checkpoint.add_json("state", {"step": 1})
+        raise SystemExit(2)                             # the run fails after its output was published
+    """)
+    assert made.returncode == 2
+    server.start()
+    synced = cairn_cli(online, "sync")
+    assert synced.returncode == 0 and "rejected" not in synced.stdout, synced.stdout
+    [run] = remote_versions(server, "runs/train")
+    [checkpoint] = remote_versions(server, "checkpoint")
+    assert run["status"] == "failed" and checkpoint["inputs"] == ["study:runs/train@v1"]
+
+
+def test_a_script_adopts_the_repos_own_versions_before_it_reads(server, tmp_path, monkeypatch):
+    import cairn.client.repo as repo_module
+
+    monkeypatch.setattr(repo_module, "start_uploader", lambda *args, **kwargs: None)
+    project = project_at(tmp_path, "study")
+    monkeypatch.chdir(project)
+    local = cairn.connect().project().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "mine"}))
+    assert local.number == 1
+    with open(project / "cairn.toml", "a") as handle:
+        handle.write(f'remote = "{server.url}"\n')
+    server.start()
+    used = cairn.connect().version("a@latest")  # first contact: the repo's own versions are sent first
+    assert used.uid == local.uid and used.number == 1 and not used.pending
+    assert [v["uid"] for v in remote_versions(server, "a")] == [local.uid]
+
+
+def test_claims_work_where_hard_links_do_not(server, online, tmp_path, monkeypatch):
+    import cairn.store.outbox as outbox_module
+
+    def no_links(*args, **kwargs):
+        raise PermissionError("no hard links here")
+
+    monkeypatch.setattr(outbox_module.os, "link", no_links)
+    server.start()
+    version = cairn.connect().project().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
+    assert version.number == 1 and outbox(online) == []
+
+
+def test_the_remote_fails_a_running_version_no_client_syncs_any_more(server, tmp_path):
+    from cairn.server.app import reap_schedule
+
+    server.start()
+    remote = server.remote()
+    remote.create_project("study")
+    number = remote.start_version("study", "runs/lost", label="x")  # a job that started, then its node went away
+    remote.keep_alive("study", "runs/lost", number)
+    stop = reap_schedule(server.httpd.app, every=0.1, timeout=0.5, say=lambda line: None)
+    try:
+        for _ in range(100):
+            if remote_versions(server, "runs/lost")[0]["status"] == "failed":
+                break
+            time.sleep(0.05)
+    finally:
+        stop.set()
+    [lost] = remote_versions(server, "runs/lost")
+    assert lost["status"] == "failed" and "no heartbeat" in lost["error"]
+
+
+def test_prune_removes_an_outbox_folder_whose_removal_a_crash_interrupted(tmp_path):
+    from cairn.store.local import outbox_blobs
+    from cairn.store.prune import prune
+
+    root = tmp_path / "repo"
+    leftover = root / "outbox" / "0190" / "manifest.json"
+    leftover.parent.mkdir(parents=True)
+    leftover.write_text(json.dumps({"uid": "0190", "sync": "synced", "files": [{"path": "a", "sha256": "f" * 64, "size": 1}]}))
+    assert outbox_blobs(root) == set()  # sent: its blobs are not held for it
+    prune(root, 1e9)
+    assert not leftover.parent.exists()

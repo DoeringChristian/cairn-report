@@ -183,6 +183,10 @@ class Remote:
         for start in range(0, len(entries), BATCH):
             self._call("POST", f"{self._artifact(project, name)}/versions/{version}/files", {"entries": entries[start:start + BATCH]})
 
+    def keep_alive(self, project: str, name: str, version: int) -> None:
+        """Tell the remote a running version is still being synced (an empty file list), so it does not time it out."""
+        self._call("POST", f"{self._artifact(project, name)}/versions/{version}/files", {"entries": []})
+
     def set_metadata(self, project: str, name: str, version: int, metadata: dict) -> None:
         """Replace the metadata of a running version."""
         self._call("POST", f"{self._artifact(project, name)}/versions/{version}/metadata", {"metadata": metadata})
@@ -263,7 +267,7 @@ class Remote:
 def _translate(error: ClientError) -> StoreError:
     """404 is a NotFound, 410 a Deleted; every other server answer is a StoreError with the server's message."""
     text = str(error)
-    if error.unreachable:
+    if error.unreachable or (error.status or 0) >= 500:  # a remote that errors is a remote that does not answer now
         return Unreachable(text)
     if error.status == 404:
         return NotFound(text)

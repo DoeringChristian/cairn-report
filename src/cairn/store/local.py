@@ -175,7 +175,7 @@ def outbox_blobs(root: Path) -> set[str]:
             record = json.loads(Path(entry.path, "manifest.json").read_text())
         except (OSError, ValueError):
             continue
-        if isinstance(record, dict):
+        if isinstance(record, dict) and record.get("sync") != "synced":  # synced: sent, its folder about to go
             found.update(item["sha256"] for item in record.get("files") or [] if isinstance(item, dict) and "sha256" in item)
     return found
 
@@ -657,8 +657,9 @@ class LocalRepo:
 
     def start_version(self, project: str, name: str, label: str | None = None, metadata: dict | None = None,
                       source: dict | None = None, uid: str | None = None) -> int:
-        """Start a running version; returns its number. With `uid` (made by the client), starting the same version
-        again returns its number; a uid this artifact already has for a different label or metadata is a Conflict."""
+        """Start a running version; returns its number. With `uid` (made by the client), starting the same version again
+        returns its number (a running one takes the label and metadata given now: its first answer may have been lost);
+        a uid that names a final version with another label or metadata is a Conflict."""
         with self._write() as connection:
             self._check(connection, project, name)
             if uid is not None:
@@ -668,7 +669,10 @@ class LocalRepo:
                     if state["status"] == "deleted":
                         raise Conflict(f"uid {uid} named {project}:{name}@v{state['version']}, which was deleted: a uid is never used again")
                     if state["label"] != label or state["metadata"] != (metadata or {}):
-                        raise Conflict(f"uid {uid} already names {project}:{name}@v{state['version']} with another label or metadata")
+                        if state["status"] != "running":
+                            raise Conflict(f"uid {uid} already names {project}:{name}@v{state['version']} with another label or metadata")
+                        # started before, and its answer lost; its metadata changed since: a running version may change
+                        self._save(connection, project, name, {**state, "label": label, "metadata": metadata or {}})
                     return state["version"]
             state = self._new(connection, project, name, label, metadata, source, uid)
             self._save(connection, project, name, state, created=True)

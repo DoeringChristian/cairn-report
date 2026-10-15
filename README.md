@@ -793,9 +793,12 @@ the remote's answer (the version, with its number) is written into the repo as a
 aliases are mirrored, and only then is the entry removed. Every request carries the version's uid and
 the remote answers a uid it already has with that version, so a sync killed at any point, or two senders
 on one outbox, never make a second version; senders claim an entry (`.flushing-<host>-<pid>`) to avoid
-double work. The remote turns uid inputs into `@v<n>`. A version the remote refuses for good stays as
-`rejected` with the reason (`cairn status` shows it; delete its folder to drop it); a version the repo
-could not record (a busy database) stays pending and is recorded by the next sync.
+double work. The remote turns uid inputs into `@v<n>`; when it finds a pending version unchanged and keeps
+its own, the entries that consumed the pending one name the remote's version instead. A version the remote
+refuses for good (its own content: an unknown input, a name it does not allow) stays as `rejected` with the
+reason (`cairn status` shows it; delete its folder to drop it). Everything else waits: a remote that is down
+or errors (5xx), a token that may not write (401/403: `publish` says so, the version stays pending), an
+input that is not sent yet, an answer the repo could not record (a busy database).
 
 **Reading** asks the remote and copies what it gets into the repo; an exact reference the repo has
 (`@v<n>` of a copy, `@<uid>`) never asks the remote. While the remote does not answer, the repo answers
@@ -806,7 +809,8 @@ pending one), with a warning naming what it used; `--offline` (`offline=True`) n
 every `[repo] interval` seconds while they run; their owner rewrites `heartbeat` every few seconds. A job
 that dies leaves its version running only until a sync notices: on the same host a dead pid fails it at
 once, and a sync on any host fails it once its heartbeat is older than `[repo] heartbeat_timeout`
-(default 600 seconds). Completion or failure turns it pending like any publish.
+(default 600 seconds). The remote itself fails a running version no client has synced for 10 minutes (a
+job whose node went away with its outbox). Completion or failure turns it pending like any publish.
 
 `cairn status` lists every outbox entry with its host, age, state, heartbeat, and last error; empty means
 the remote has everything. `cairn sync` sends them and mirrors the remote's aliases of every artifact the
