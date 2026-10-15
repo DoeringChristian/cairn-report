@@ -1,5 +1,11 @@
 # Cairn: the product
 
+> **Since 0.14 the storage design is [architecture.md](architecture.md)** (a repo, an optional remote,
+> automatic sync; fixed). Where this plan describes the store folder, the data and cache roots, the
+> replica, or `[store]`, the architecture document and the README win: the repo is `.cairn/` itself, the
+> replica's pending versions became the repo's outbox, its cache became the repo's blobs and copies, and
+> `[repo]` replaced `[store]`.
+
 The artifact store built in [store-plan.md](store-plan.md) becomes the product **Cairn** and will
 most likely replace the earlier Cairn tracker (cairn-track). Decided with the owner on 2026-10-15.
 

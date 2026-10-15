@@ -36,7 +36,7 @@ class Conflict(StoreError):
 
 
 class Unreachable(StoreError, OSError):
-    """The store server did not answer (refused, timed out, or a proxy said 502/503/504)."""
+    """The remote did not answer (refused, timed out, or a proxy said 502/503/504)."""
 
 
 class Deleted(NotFound):
@@ -57,5 +57,5 @@ class MissingBlobs(Conflict):
 
     def __init__(self, missing=(), message: str | None = None):
         self.missing = sorted(missing)
-        super().__init__(message or f"{len(self.missing)} blobs are not in the store (yet), e.g. "
+        super().__init__(message or f"{len(self.missing)} blobs are not in the repo (yet), e.g. "
                          f"{self.missing[0] if self.missing else '?'}: upload them first")

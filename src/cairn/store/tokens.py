@@ -110,7 +110,7 @@ def create_token(root: Path, project: str, write: bool = False, name: str | None
 
     root = Path(root)
     if not (root / "token").is_file():
-        raise SystemExit(f"{root} is not a store root (no token file); `cairn server {root}` creates one")
+        raise SystemExit(f"{root} is not a repo with a token; `cairn server {root}` creates one")
     refs.valid_project(project)
     LocalRepo(root).create_project(project)
     tokens = Tokens(root)

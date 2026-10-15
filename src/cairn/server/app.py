@@ -609,7 +609,7 @@ def default_log(line: str, client) -> None:
 
 
 class StoreServer:
-    """A bound store server, not yet serving: `serve_forever()` runs uvicorn on its socket until `shutdown()`
+    """A bound server, not yet serving: `serve_forever()` runs uvicorn on its socket until `shutdown()`
     (from another thread) or a signal. `server_address` is known as soon as it is made (port 0: any free port).
     `log` is called with one line per request (None: no log); `app` is the ASGI app."""
 
@@ -623,7 +623,7 @@ class StoreServer:
             self.socket.listen(2048)
         except OSError as error:
             self.socket.close()
-            if error.errno == errno.EADDRINUSE:  # clients' [store] url names this port: never move it silently
+            if error.errno == errno.EADDRINUSE:  # clients' [repo] remote names this port: never move it silently
                 raise SystemExit(f"port {port} on {host} is in use (another `cairn server`?); choose one with --port") from None
             raise
         self.server_address = self.socket.getsockname()[:2]
@@ -725,7 +725,7 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     created = None if (root / "token").exists() else init_root(root)
     server = make_server(root, host, port, max_blob=max_blob, no_auth=no_auth, allow_network_fs=allow_network_fs)
     if host not in LOCAL_HOSTS:
-        print("warning: the store serves plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
+        print("warning: the server speaks plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
     if created:
         print(f"Created the repo {root.resolve()} with a new owner token ({created}, owner-only)", flush=True)
     actual = server.server_address[1]
@@ -734,7 +734,7 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     if ui_port is not None:
         child, line = start_ui(host, actual, ui_port, server.owner_token, no_auth)
         if child is None:
-            print("warning: the UI did not start (see above); the store keeps running", file=sys.stderr, flush=True)
+            print("warning: the UI did not start (see above); the server keeps running", file=sys.stderr, flush=True)
         else:
             print(line, flush=True)
             threading.Thread(target=forward, args=(child,), daemon=True).start()

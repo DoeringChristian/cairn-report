@@ -182,7 +182,11 @@ class Draft(Writer):
             from .open import as_repo
 
             arg = self._store_arg
-            self._store = arg if isinstance(arg, Repo) else Repo(as_repo(arg))
+            if isinstance(arg, Repo):
+                self._store = arg
+            else:
+                self._store = Repo(as_repo(arg))
+                self._store.backend.resume()  # what earlier processes left pending goes too
         return self._store
 
     @property

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.14.0: the repo, an optional remote, automatic sync
+
+This release introduces the design in `docs/architecture.md`. It is the new layout: Cairn was not in use
+before it, so there is no migration and no compatibility code, and a project starts a fresh repo.
+
+- **The repo is `.cairn/` itself**: `repo.json`, `metadata.sqlite3`, `blobs/<aa>/<sha256>`, `outbox/<uid>/`,
+  read-only folders under `versions/<uid>/files/`, `drafts/`, `build/`, `share/`, `token`, `server.lock`, `tmp/`.
+  There is no `.cairn/store`, `.cairn/pending`, or `.cairn/cache` any more, and a server's repo has the same
+  layout (`store.json` is now `repo.json`). Every process on the repo's machine opens it directly, also while
+  `cairn server` serves it.
+- **A remote, optionally** (`[repo] remote`): the source of truth for numbers, aliases, and deletions.
+  Every write goes to the repo first and is sent automatically: at the start and end of every command, in the
+  background of a process that left something pending (and once more at exit), live while a run runs, and
+  with `cairn sync` (`--watch` keeps going, for a login node). A version made while the remote does not
+  answer is pending (a uid, no number), usable at once, and gets the remote's number when it is sent; sending
+  is idempotent by uid, in dependency order. Versions used from the remote are copied into the repo, which
+  answers while the remote is away. Aliases and deletions go to the remote and fail clearly offline.
+- **A remote added later:** the versions the repo numbered itself are sent at the first sync, oldest first;
+  the remote numbers them and the repo takes the numbers over (uids, lineage, and reports stay valid).
+- **Network filesystems:** a repo on NFS, Lustre, GPFS, SMB and the like has no database; with a remote, jobs
+  keep an outbox and blobs only (metadata from the remote) and a login node sends what they left; without a
+  remote, Cairn refuses with the cluster setup to use. `[repo] allow_network_fs = true` overrides it.
+- **Configuration:** `[repo]` (remote, project, token_file, allow_http, interval, heartbeat_timeout,
+  allow_network_fs, exclude) replaces `[store]` (now an unknown key); `[store] path` and `publish` mappings are
+  gone (the repo is `[cairn] dir` / `CAIRN_DIR`). `CAIRN_TOKEN` replaces `CAIRN_STORE_TOKEN`; `CAIRN_DATA_DIR`,
+  `CAIRN_CACHE_DIR`, and `--data-dir` are gone.
+- **Commands:** `cairn server [repo]` serves the project's repo by default (a taken port is an error);
+  `cairn ui` opens the project's repo directly (`--remote URL`, `--repo FOLDER`); `cairn status` lists the
+  pending, running, and rejected versions; `cairn verify [REF] [--repo FOLDER] [--repair]`; `cairn prune` trims
+  read-only folders and contents only copies need. `cairn migrate` (the hub importer) is removed.
+- **UI:** pending versions show a `pending` badge and their uid instead of `vN`.
+- **API:** `cairn.connect()` returns a `cairn.Repo` (was `Store`); `LocalRepo` (was `LocalStore`) and
+  `Remote` (was `RemoteStore`) both implement the repo interface (`cairn.store.interface`); `cairn.open_repo`
+  (was `open_store`). The server's `GET /api/v2/store` is `GET /api/v2/repo`.
+- **Layers:** `store/` (the repo core) changes a repo folder and knows nothing of HTTP or configuration;
+  `client/remote.py` is the repo interface over HTTP; `client/sync.py` is the sync engine; `client/open.py`
+  alone decides between no remote, a remote, and a network filesystem. `tests/test_boundaries.py` enforces it.
+
 ## 0.13.1
 
 - `cairn server` with no folder serves the project's store folder (`.cairn/store`), creating it if

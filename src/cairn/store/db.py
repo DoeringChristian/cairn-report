@@ -188,7 +188,7 @@ class ServerLock:
             handle.seek(0)
             holder = handle.read().strip() or "another process"
             handle.close()
-            raise SystemExit(f"{self.path.parent} is already served (by pid {holder}); one server per store root")
+            raise SystemExit(f"{self.path.parent} is already served (by pid {holder}); one server per repo")
         handle.seek(0)
         handle.truncate()
         handle.write(f"{os.getpid()}\n")

@@ -615,7 +615,7 @@ def main(argv: list[str] | None = None) -> None:
     versions.set_defaults(run=cmd_versions)
     show = commands.add_parser("show", help="one version: metadata, files, inputs, consumers")
     show.add_argument("ref", help="[project:]name[@vN|@uid|@alias|@label]")
-    show.add_argument("--offline", action="store_true", help="answer from the cache only")
+    show.add_argument("--offline", action="store_true", help="do not ask the remote: answer from the repo only")
     show.set_defaults(run=cmd_show)
     alias = commands.add_parser("alias", help="point an alias (best, paper, ...) at a completed version; latest moves by itself")
     alias.add_argument("ref", help="[project:]name@vN (or @uid, @label, @another-alias)")

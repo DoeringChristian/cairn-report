@@ -9,7 +9,7 @@ A report is a folder `reports/<slug>/` with a `report.md` (front matter + Markdo
 The data a report reads is declared in its front matter (`inputs:`), pinned to exact artifact
 versions at build time, and enforced: reading anything else in the project fails the build. Pages
 link to each other with `[text](report:<slug>#anchor)`, checked at build time. The output is
-static: any web server, the project server, or a store server can serve it.
+static: any web server, the project server, or `cairn ui` can serve it.
 """
 
 from __future__ import annotations
@@ -293,7 +293,7 @@ def output_dir(key: str) -> Path:
 
 
 def report_href(key: str) -> str:
-    """A report's address relative to the site root, so a site works under any prefix (e.g. a store server)."""
+    """A report's address relative to the site root, so a site works under any prefix (e.g. `cairn ui`)."""
     return f"{key}/"
 
 

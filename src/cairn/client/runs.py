@@ -344,7 +344,7 @@ def input_for(draft: Draft) -> str | None:
     if run is None:
         return os.environ.get(RUN_ENV)
     if not _same_store(run.store, draft.store):
-        print(f"warning: {draft.name}@{draft.uid} goes to another store than the run {run.ref}: it gets no run input",
+        print(f"warning: {draft.name}@{draft.uid} goes to another repo than the run {run.ref}: it gets no run input",
               file=sys.stderr, flush=True)
         return None
     return run.ref

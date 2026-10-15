@@ -1,4 +1,4 @@
-"""The UI as a child process beside the store server: start, forward its output, stop.
+"""The UI as a child process beside the server: start, forward its output, stop.
 
 The server never imports the UI: it runs `python -m cairn ui`, and the child exits when its parent is gone
 (`PARENT_ENV` names the parent's pid; the child watches it).
@@ -12,11 +12,11 @@ import subprocess
 import sys
 
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
-PARENT_ENV = "CAIRN_UI_PARENT"  # set for a UI the store server spawned: the pid it belongs to
+PARENT_ENV = "CAIRN_UI_PARENT"  # set for a UI the server spawned: the pid it belongs to
 
 
 def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool):
-    """`cairn ui` as a child process beside this store (so page work never loads the store server).
+    """`cairn ui` as a child process beside this server (so page work never loads the server).
 
     The child reaches the store at `host:port`; the owner token goes through its environment only (never its
     command line). Returns (process, the line it printed with its address), or (None, None) if it did not start.
@@ -47,7 +47,7 @@ def forward(child) -> None:
         print(line.rstrip(), flush=True)
     code = child.wait()
     if code not in (0, -signal.SIGTERM, -signal.SIGINT):
-        print(f"warning: the UI stopped (exit code {code}); the store keeps running", file=sys.stderr, flush=True)
+        print(f"warning: the UI stopped (exit code {code}); the server keeps running", file=sys.stderr, flush=True)
 
 
 def stop(child) -> None:

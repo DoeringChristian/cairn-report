@@ -184,7 +184,7 @@ def link_files(entries: list[dict], target: Path, blob, digest: str | None = Non
         if sha != entry["sha256"] or size != entry["size"]:
             raise StoreError(f"{label}: {entry['path']} does not match its manifest (expected sha256 {entry['sha256'][:16]}..., "
                              f"{entry['size']} bytes; the stored copy {source} has {sha[:16]}..., {size} bytes): the stored copy is "
-                             "damaged; `cairn verify --cache --repair` removes it so the next pull downloads it again")
+                             "damaged; `cairn verify --repair` removes it so the next pull downloads it again")
         placed.append({"path": entry["path"], "sha256": sha, "size": size})
     if digest is not None and manifest_digest(placed) != digest:
         raise StoreError(f"{label}: the files pulled hash to {manifest_digest(placed)}, not the manifest digest {digest}")

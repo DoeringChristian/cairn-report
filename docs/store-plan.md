@@ -1,4 +1,5 @@
-> **Historical design note, superseded by [cairn-plan.md](cairn-plan.md).** This is the plan the artifact
+> **Historical design note, superseded by [cairn-plan.md](cairn-plan.md) and, for storage, by
+> [architecture.md](architecture.md).** This is the plan the artifact
 > store was first built from, written while the project was still called cairn-report. It is kept for the
 > reasoning behind the design; where it differs from the code or from `cairn-plan.md` and the README, those
 > win. Read `cairn_report` as `cairn`, `cairn-report store serve|token|migrate` as `cairn server|token|migrate`,

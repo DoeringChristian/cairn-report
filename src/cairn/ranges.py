@@ -1,4 +1,4 @@
-"""HTTP byte ranges (RFC 9110), so browsers can seek in videos served by `serve` and the store server."""
+"""HTTP byte ranges (RFC 9110), so browsers can seek in videos served by `serve`, `cairn server`, and `cairn ui`."""
 
 from __future__ import annotations
 

@@ -78,11 +78,16 @@ def __getattr__(name: str):
 
 
 def _store(store) -> "Repo":
-    """The object API's Store for `store=` (None: the configured store; a store; a folder)."""
+    """The object API's Repo for `store=` (None: the project's repo; a repo; a repo folder; a remote). A repo with
+    pending versions starts sending them in the background (every process that touches the repo syncs)."""
     from .client.objects import Repo
     from .client.open import as_repo
 
-    return store if isinstance(store, Repo) else Repo(as_repo(store))
+    if isinstance(store, Repo):
+        return store
+    repo = Repo(as_repo(store))
+    repo.backend.resume()
+    return repo
 
 
 def run() -> "Run | None":
