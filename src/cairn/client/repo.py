@@ -56,7 +56,7 @@ from ..store.uids import UID, new_uid
 from ..store.verify import Report, check_blobs, verify_copies, verify_folders, verify_outbox, verify_store, verify_version
 from .http import entries_for, scan
 from .remote import Remote
-from .sync import Sync
+from .sync import NotRecorded, Sync
 
 FINAL = ("completed", "failed", "deleted")
 
@@ -306,6 +306,8 @@ class SyncedRepo(ProjectRepo):
         self.heartbeat_timeout = heartbeat_timeout
         self.outbox = Outbox(self.root)
         self.engine = Sync(self.outbox, remote, copies, self.root, heartbeat_timeout)
+        self._down_until = 0.0  # the remote did not answer: reads and background sends skip it until then
+        self.ask = _Guarded(self)
 
     def __repr__(self) -> str:
         return f"<cairn.SyncedRepo {self.root} remote {self.url}>"
@@ -393,13 +395,13 @@ class SyncedRepo(ProjectRepo):
             return local()
 
     def projects(self) -> list[dict]:
-        return self._fallback(self.remote.projects, self.copies.projects)
+        return self._fallback(self.ask.projects, self.copies.projects)
 
     def overviews(self) -> list[dict]:
-        return self._fallback(self.remote.overviews, self.copies.overviews)
+        return self._fallback(self.ask.overviews, self.copies.overviews)
 
     def get_project(self, name: str) -> dict:
-        return self._fallback(lambda: self.remote.get_project(name), lambda: self.copies.get_project(name))
+        return self._fallback(lambda: self.ask.get_project(name), lambda: self.copies.get_project(name))
 
     def create_project(self, name: str, title: str | None = None, description: str = "") -> dict:
         return self._changes(lambda: self.remote.create_project(name, title, description), f"creating the project {name}")
@@ -418,7 +420,7 @@ class SyncedRepo(ProjectRepo):
             except NotFound:
                 return []
 
-        found = list(self._fallback(lambda: self.remote.summaries(project), local))
+        found = list(self._fallback(lambda: self.ask.summaries(project), local))
         known = {item["name"] for item in found}
         waiting: dict[str, list[dict]] = {}
         for record in self.records():
@@ -428,7 +430,7 @@ class SyncedRepo(ProjectRepo):
 
     def summary(self, project: str, name: str) -> dict:
         try:
-            return self._fallback(lambda: self.remote.summary(project, name), lambda: self.copies.summary(project, name))
+            return self._fallback(lambda: self.ask.summary(project, name), lambda: self.copies.summary(project, name))
         except NotFound:
             records = self._pending_of(project, name)
             if not records:
@@ -443,7 +445,7 @@ class SyncedRepo(ProjectRepo):
         pending ones (number None)."""
         down = None
         try:
-            found = self.remote.versions(project, name)
+            found = self.ask.versions(project, name)
         except NotFound:
             found = []
         except Unreachable:
@@ -475,7 +477,7 @@ class SyncedRepo(ProjectRepo):
         if local is not None and (local.get("status") in FINAL or local.get("pending")):
             return local
         try:
-            manifest = self.remote.get_version(project, name, version)
+            manifest = self.ask.get_version(project, name, version)
         except Unreachable:
             if local is not None:
                 return local
@@ -485,7 +487,7 @@ class SyncedRepo(ProjectRepo):
 
     def aliases(self, project: str, name: str) -> dict[str, int]:
         try:
-            found = self.remote.aliases(project, name)
+            found = self.ask.aliases(project, name)
         except NotFound:
             return {}
         except Unreachable:
@@ -535,7 +537,7 @@ class SyncedRepo(ProjectRepo):
         pending = None if ref.exact else self._pending_match(project, ref.name, selector)
         if not offline:
             try:
-                project, name, version = self.remote.resolve(Ref(project, ref.name, ref.selector))
+                project, name, version = self.ask.resolve(Ref(project, ref.name, ref.selector))
             except Unreachable:
                 if ref.exact:
                     raise Unreachable(f"the remote at {self.url} does not answer and the repo does not have {key}") from None
@@ -586,7 +588,7 @@ class SyncedRepo(ProjectRepo):
         if record is not None and record.get("number") is None:  # the remote does not know it yet
             return own()
         try:
-            return self.remote.lineage(Ref(project, ref.name, ref.selector), marks=marks)
+            return self.ask.lineage(Ref(project, ref.name, ref.selector), marks=marks)
         except (Unreachable, NotFound):
             if record is not None:
                 return own()
@@ -623,7 +625,7 @@ class SyncedRepo(ProjectRepo):
                 return FileRead(total, first, last, entry["sha256"], immutable, _chunks(blob, first, last))
             if manifest.get("pending"):
                 raise NotFound(f"{project}:{name}@{selector} has no file {path} in the repo")
-        return self.remote.read_file(project, name, selector, path, range_header)
+        return self.ask.read_file(project, name, selector, path, range_header)
 
     def blob_file(self, project: str, name: str, version: int | None, entry: dict, root) -> Path:
         """The entry's contents in the repo's blobs: already there (a pending version's always are), else downloaded."""
@@ -632,7 +634,7 @@ class SyncedRepo(ProjectRepo):
             return target
         if version is None:
             raise StoreError(f"{project}:{name}: the contents of {entry['path']} ({entry['sha256'][:12]}) left the repo {root}")
-        return self.remote.blob_file(project, name, version, entry, root)
+        return self.ask.blob_file(project, name, version, entry, root)
 
     def pull(self, ref: str, record: bool = True, offline: bool = False) -> Path:
         """A read-only local copy (or of the file after `//`), its exact version recorded as an input."""
@@ -750,12 +752,40 @@ class SyncedRepo(ProjectRepo):
                 raise
             return self.get_version(project, name, record["number"])
 
+    def down(self) -> bool:
+        """Whether the remote was slow to fail a moment ago (DOWN_FOR seconds): then it is not asked for reads and
+        background sends (a refused connection fails at once and is always tried again)."""
+        return time.monotonic() < self._down_until
+
+    def reach(self) -> None:
+        """Before the first request of this process: a quick look whether the remote answers at all (PROBE seconds), so a
+        host that hangs makes one short wait, not one long one per request. Raises Unreachable."""
+        if self.remote._uid is not None:
+            return
+        if self.down():
+            raise Unreachable(f"the remote at {self.url} did not answer a moment ago")
+        began = time.monotonic()
+        try:
+            self.remote._uid = self.with_timeout(PROBE).remote.uid
+        except Unreachable:
+            self._failed(began)
+            raise
+
+    def _failed(self, began: float) -> None:
+        """The remote did not answer: if finding that out took long (a host that drops packets), skip it for a while."""
+        if time.monotonic() - began >= SLOW:
+            self._down_until = time.monotonic() + DOWN_FOR
+
     def _send_now(self, record: dict) -> dict:
         """Send an entry that is final now; when the remote does not answer it stays pending (a warning says so, and a
         background uploader keeps trying). Returns the version's manifest."""
+        began = time.monotonic()
         try:
+            self.reach()
             self.engine.send(record)
         except Unreachable as error:
+            if not isinstance(error, NotRecorded):
+                self._failed(began)
             what = "failed" if record["status"] == "failed" else "pending"
             _warn(f"{what} {record['project']}:{record['name']}@{record['uid']}: the remote does not answer ({error}); it is "
                   "usable here now and sent when the remote answers (`cairn status` lists it, `cairn sync` sends it now)")
@@ -785,10 +815,14 @@ class SyncedRepo(ProjectRepo):
 
     def _try(self, record: dict) -> None:
         """Send what is new of a running entry now; while the remote does not answer, it waits in the outbox."""
+        began = time.monotonic()
         try:
+            self.reach()
             self.engine.send(record, claim=False)
-        except Unreachable:
+        except NotRecorded:
             pass
+        except Unreachable:
+            self._failed(began)
 
     def start_version(self, project: str, name: str, label: str | None = None, metadata: dict | None = None,
                       source: dict | None = None, uid: str | None = None) -> dict:
@@ -883,6 +917,36 @@ class SyncedRepo(ProjectRepo):
 
     def prune(self, older_than: float | None = None, max_size: int | None = None, dry_run: bool = False) -> dict:
         return prune_folders(self.root, older_than, max_size, dry_run, keep=self._keep())
+
+
+DOWN_FOR = 30.0  # seconds a remote that was slow to fail is not asked again for reads and background sends
+SLOW = 2.0  # seconds: a failure that took this long counts as slow (a refused connection takes milliseconds)
+PROBE = 10.0  # seconds the first look at the remote may take
+
+
+class _Guarded:
+    """The remote as reads use it: after it was slow to fail, it is not asked again for DOWN_FOR seconds (the repo answers
+    at once instead of every read waiting for the remote to time out). Explicit syncs and changes ask it anyway."""
+
+    def __init__(self, repo: "SyncedRepo"):
+        self._repo = repo
+
+    def __getattr__(self, name: str):
+        target = getattr(self._repo.remote, name)
+
+        def call(*args, **kwargs):
+            repo = self._repo
+            repo.reach()
+            if repo.down():
+                raise Unreachable(f"the remote at {repo.url} did not answer a moment ago")
+            began = time.monotonic()
+            try:
+                return target(*args, **kwargs)
+            except Unreachable:
+                repo._failed(began)
+                raise
+
+        return call
 
 
 def _chunks(blob: Path, first: int, last: int):

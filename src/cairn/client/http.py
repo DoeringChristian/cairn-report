@@ -24,6 +24,7 @@ SKIP_NAMES = {"__pycache__", ".DS_Store"}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 BATCH = 5_000
 BLOCK = 1 << 20  # uploads are sent in 1 MB blocks (http.client's default is 8 KB)
+CONNECT_TIMEOUT = 10.0  # seconds to reach the remote at all: a host that does not answer fails fast
 
 
 class _Body:
@@ -109,14 +110,28 @@ class Client:
         self.url, self.parsed, self.token, self.timeout = url.rstrip("/"), parsed, token, timeout
 
     def _connection(self):
+        """A connection, connected within CONNECT_TIMEOUT (or the timeout, if shorter); each later read or write may
+        then take `timeout`. Raises OSError (or an HTTPException) when the remote cannot be reached."""
+        reach = min(CONNECT_TIMEOUT, self.timeout)
         if self.parsed.scheme == "https":
-            return http.client.HTTPSConnection(self.parsed.hostname, self.parsed.port, timeout=self.timeout,
-                                               context=ssl.create_default_context(), blocksize=BLOCK)
-        return http.client.HTTPConnection(self.parsed.hostname, self.parsed.port, timeout=self.timeout, blocksize=BLOCK)
+            connection = http.client.HTTPSConnection(self.parsed.hostname, self.parsed.port, timeout=reach,
+                                                     context=ssl.create_default_context(), blocksize=BLOCK)
+        else:
+            connection = http.client.HTTPConnection(self.parsed.hostname, self.parsed.port, timeout=reach, blocksize=BLOCK)
+        try:
+            connection.connect()
+            connection.sock.settimeout(self.timeout)
+        except BaseException:
+            connection.close()
+            raise
+        return connection
 
     def request(self, method: str, path: str, body=None, headers: dict | None = None,
                 expect=(200,), stream_to: Path | None = None):
-        connection = self._connection()
+        try:
+            connection = self._connection()
+        except (OSError, http.client.HTTPException) as error:
+            raise _no_answer(method, path, self.url, error) from error
         try:
             connection.request(method, path, body=body, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})
             response = connection.getresponse()
@@ -143,7 +158,10 @@ class Client:
 
     def stream(self, path: str, headers: dict | None = None, expect=(200, 206)):
         """GET as (status, response headers, chunks); the connection closes when the chunks end or are closed."""
-        connection = self._connection()
+        try:
+            connection = self._connection()
+        except (OSError, http.client.HTTPException) as error:
+            raise _no_answer("GET", path, self.url, error) from error
         try:
             try:
                 connection.request("GET", path, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})

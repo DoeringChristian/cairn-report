@@ -544,3 +544,44 @@ def test_changes_to_the_source_of_truth_fail_clearly_offline(server, tmp_path, m
     assert LocalRepo(project / ".cairn").aliases("study", "data")["best"] == 1  # set there, then mirrored here
     assert cairn_cli(project, "delete", "data@v1", "--force", "--reason", "test").returncode == 0
     assert LocalRepo(project / ".cairn").get_version("study", "data", 1)["status"] == "deleted"  # the tombstone, mirrored
+
+
+def test_a_remote_that_drops_packets_does_not_hold_up_reads_or_publishes(tmp_path, monkeypatch):
+    """A remote host that never answers (connected, then silent, like a hung server or dropped packets): the first look
+    gives up after a few seconds, and the repo then stops asking it for a while, so reads answer from the repo and
+    publishes are pending at once."""
+    import socket
+
+    import cairn.client.http as http_module
+    import cairn.client.repo as repo_module
+
+    listener = socket.socket()  # accepts no connection: its backlog is full, so connecting hangs like a dropped packet
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(0)
+    fillers = []
+    for _ in range(8):
+        filler = socket.socket()
+        filler.setblocking(False)
+        filler.connect_ex(listener.getsockname())
+        fillers.append(filler)
+    monkeypatch.setattr(http_module, "CONNECT_TIMEOUT", 2.5)
+    monkeypatch.setattr(repo_module, "PROBE", 2.5)
+    monkeypatch.setattr(repo_module, "start_uploader", lambda *args, **kwargs: None)
+    monkeypatch.setenv("CAIRN_TOKEN", "t" * 40)
+    project = project_at(tmp_path, "study", f"http://127.0.0.1:{listener.getsockname()[1]}")
+    monkeypatch.chdir(project)
+    try:
+        repo = cairn.connect()
+        began = time.monotonic()
+        first = repo.project().artifact("data").publish(folder(tmp_path, "d1", {"a.txt": "1"}))
+        assert first.pending and time.monotonic() - began < 10
+        began = time.monotonic()
+        second = repo.project().artifact("data").publish(folder(tmp_path, "d2", {"a.txt": "2"}))
+        assert second.pending and time.monotonic() - began < 2  # not asked again: pending at once
+        began = time.monotonic()
+        assert [v.uid for v in repo.project().artifact("data").versions()] == [first.uid, second.uid]
+        assert time.monotonic() - began < 2
+    finally:
+        for filler in fillers:
+            filler.close()
+        listener.close()
