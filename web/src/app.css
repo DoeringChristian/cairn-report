@@ -119,3 +119,6 @@ video.preview-media { background: #111; }
 .run-log { margin: 0 0 12px; }
 .run-log-title { margin: 0 0 4px; font-size: 13px; }
 .run-log pre { max-height: 22rem; overflow: auto; }
+
+/* App pages start at the top: the report layout centres <main> in the grid row, which only suits pages taller than the window. */
+body > #root main, #root main { margin: 0 auto; align-self: start; }
