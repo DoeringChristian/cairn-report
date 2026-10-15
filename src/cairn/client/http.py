@@ -72,10 +72,9 @@ class Limited:
 def _message(method: str, path: str, status: int, data: bytes) -> str:
     """The server's own error text if it sent one (`{"error": ...}`), else the start of the body."""
     try:
-        text = json.loads(data)["error"]
+        return str(json.loads(data)["error"])  # the store explains itself; the request is on the error (CAIRN_DEBUG=1)
     except (ValueError, KeyError, TypeError):
-        text = data[:300].decode(errors="replace")
-    return f"{method} {path}: HTTP {status} {text}"
+        return f"{method} {path}: HTTP {status} {data[:300].decode(errors='replace')}"
 
 
 class Client:

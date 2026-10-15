@@ -158,7 +158,7 @@ def test_scoped_tokens(server, env):
     # a write token publishes to its own project only
     other = folder(server.root.parent, "more", {"z.txt": "more"})
     assert store.publish("alpha:data", other, store=remote(server, write_token), config=SimpleNamespace(project=other, store={})) == 2
-    with pytest.raises(StoreError, match="HTTP 403"):
+    with pytest.raises(StoreError, match="cannot"):  # the store says the token cannot write there
         store.publish("beta:data", other, store=remote(server, write_token, "beta"), config=SimpleNamespace(project=other, store={}))
     assert call(server, "POST", "/api/v2/projects/beta/artifacts/data/publish", {"entries": [entry]}, token=write_token)[0] == 403
     # ... and cannot register inputs from another project (that would write into its lineage)

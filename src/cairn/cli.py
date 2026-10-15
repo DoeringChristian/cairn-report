@@ -8,6 +8,8 @@ replica knows about aliases."""
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -644,7 +646,22 @@ def main(argv: list[str] | None = None) -> None:
     cache.use_data_dir(getattr(args, "data_dir", None))
     if args.run in (cmd_publish, cmd_pull, cmd_project, cmd_artifacts, cmd_versions, cmd_show, cmd_status, cmd_build):
         flush_first(args)
-    args.run(args)
+    try:
+        args.run(args)
+    except Exception as error:  # an expected failure is one line; CAIRN_DEBUG=1 shows the traceback
+        if os.environ.get("CAIRN_DEBUG") or not _expected(error):
+            raise
+        raise SystemExit(f"cairn: {error}") from None
+
+
+def _expected(error: BaseException) -> bool:
+    """Store, client, and report-build errors are messages for the user, not crashes."""
+    from .store.errors import StoreError
+
+    if isinstance(error, (StoreError, OSError)):
+        return True
+    module = type(error).__module__
+    return module.startswith(("cairn.client", "cairn.reports")) and type(error).__name__.endswith("Error")
 
 
 if __name__ == "__main__":
