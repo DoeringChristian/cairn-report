@@ -261,15 +261,40 @@ async function prefetchReport(href) {
 function reportLink(report) {
   const link = el("a", "report-list-link");
   link.append(el("span", null, report.title));
-  link.href = siteHref(report.href);
+  link.href = report.href.startsWith("/") ? report.href : siteHref(report.href);  // the store UI's site.json gives absolute paths
   link.title = report.subtitle || report.title;
-  if (report.key === reportKey) link.setAttribute("aria-current", "page");
-  else if (!BUNDLE) { link.addEventListener("pointerenter", () => prefetchReport(link.href), {once: true}); link.addEventListener("focus", () => prefetchReport(link.href), {once: true}); }
+  if (report.current || (report.key !== undefined && report.key === reportKey)) link.setAttribute("aria-current", "page");
+  else if (!BUNDLE && !report.plain) { link.addEventListener("pointerenter", () => prefetchReport(link.href), {once: true}); link.addEventListener("focus", () => prefetchReport(link.href), {once: true}); }
   return link;
 }
+/* Served by the store UI (/p/<project>/r/...): a small button back to the page the reader came from (an app page of the
+   same site, by the referrer) or else to the project page. Locally built and shared sites have no such prefix: no button. */
+function addBackLink(projectTitle) {
+  const served = /^\/p\/[^/]+\/r\//.exec(location.pathname);
+  if (BUNDLE || !served || $("#back-link")) return;
+  let target = served[0].replace(/r\/$/, ""), label = `← ${projectTitle || "Project"}`;
+  try {
+    const from = new URL(document.referrer);
+    if (from.origin === location.origin && (from.pathname === "/" || /^\/p\/[^/]+\/(?!r\/)/.test(from.pathname)) && from.href !== location.href) { target = from.pathname + from.search; label = "← Back"; }
+  } catch (_) {}
+  const link = el("a", "back-link", label); link.id = "back-link"; link.href = target; link.title = `Back to ${target}`;
+  document.body.append(link);
+}
 async function loadReportList(data) {
-  const {reports = [], title} = await siteData;
-  if (title) $("#site-title").textContent = title;
+  const {reports = [], title, brand, mark, groups} = await siteData;
+  if (brand || title) $("#site-title").textContent = brand || title;
+  if (mark) $(".brand span").textContent = mark;
+  addBackLink(title);
+  if (groups) {  // the store UI sends the sections of its own rail: Projects, Reports, Artifacts, Runs
+    const note = $(".rail-note");
+    groups.forEach(group => {
+      const section = el("section", "report-list"), label = el("p", "rail-label", `${group.label} · ${group.items.length}`), nav = el("nav");
+      nav.setAttribute("aria-label", group.label);
+      group.items.forEach(item => nav.append(reportLink(item)));
+      section.append(label, nav); note.before(section);
+    });
+    return;
+  }
   const list = $("#report-list"); list.replaceChildren();
   if (reports.length < 2) return;
   [...reports].sort((a, b) => a.title.localeCompare(b.title)).forEach(report => list.append(reportLink(report)));

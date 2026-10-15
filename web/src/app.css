@@ -1,37 +1,12 @@
-/* Only what report.css and report-extra.css have no class for: built from their variables.
-   The reports' stylesheets define the light tokens only; the dark ones are set here. */
-:root { --column: 66rem; --accent-hover: color-mix(in srgb, var(--accent) 85%, black); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --paper: #141917; --ink: #e6ebe7; --muted: #9aa59e; --line: #2c3430; --card: #1b211e;
-    --accent: #5fb8a3; --accent-soft: #1f3a33; --warn: #e09a6b; --shadow: 0 18px 60px #0008; color-scheme: dark;
-  }
-  .rail { background: #101512; }
-  .status { border-color: #3d6a5e; }
-  .report-prose .pill.tentative { background: #3a2a1f; }
-  .report-prose .out, .admonition { color: var(--ink); }
-  .report-prose pre { background: #0d1210; border: 1px solid var(--line); }
-  .brand span { color: #0d1210; }
-  kbd { background: var(--card); border-color: var(--line); }
-}
+/* Only what report.css and report-extra.css have no class for, built from their variables alone:
+   no tokens, no dark mode, no sizes of their own for chrome, headings, cards, tables or pills. */
 #root { display: contents; }
-.brand { font-size: 17px; }
-.rail { min-height: 0; }
-.rail-scroll { flex: 1; min-height: 0; overflow-y: auto; margin-top: 30px; }
-.rail-scroll .report-list:first-child { margin-top: 0; }
-.rail .report-list a.active-project { background: var(--card); color: var(--accent); font-weight: 700; }
-.rail-note a { color: var(--accent); }
-.rail-note { padding-top: 14px; }
-main h2 { font-size: 26px; margin: 0; }
-.app-hero { padding-bottom: 28px; }
-.app-hero h1 { font-size: clamp(32px, 4.5vw, 52px); margin: 8px 0 12px; overflow-wrap: anywhere; }
-.app-hero .subtitle { margin: 0 0 8px; }
 .eyebrow a { color: inherit; text-decoration: none; }
 .eyebrow a:hover { text-decoration: underline; }
 .alias-line { margin: 8px 0 0; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .open-report { display: inline-block; margin-top: 8px; color: white; background: var(--accent); border-color: var(--accent); text-decoration: none; }
-.open-report:hover { color: white; background: var(--accent-hover); }
-a { color: var(--accent); }
+.open-report:hover { color: white; background: var(--accent); filter: brightness(.9); }
+main a, .rail-note a { color: var(--accent); }
 .muted { color: var(--muted); }
 .mono { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .nowrap { white-space: nowrap; }
@@ -52,8 +27,6 @@ a { color: var(--accent); }
 .report-prose .pill.alias { background: transparent; border: 1px solid var(--line); color: var(--muted); margin-right: 4px; }
 .pill.alias { display: inline-block; padding: 1px 8px; border-radius: 99px; background: transparent; border: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 700; }
 .app-metrics { margin: 24px 0 0; }
-.app-metrics .metric strong { font-size: 28px; }
-.app-metrics .small-value { font-size: 18px; margin: 14px 0 9px; white-space: nowrap; }
 .toolbar { display: flex; gap: 10px; margin: 24px 0 0; flex-wrap: wrap; }
 input[type="search"], select, .login-form input { font: inherit; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
 input[type="search"] { flex: 1; min-width: 14rem; }
@@ -111,21 +84,11 @@ video.preview-media { background: #111; }
 .form-actions button { font: inherit; }
 .form-actions .primary:disabled { opacity: .6; }
 @media (max-width: 760px) {
-  .rail { padding: 18px 20px; }
-  .rail-scroll { margin-top: 14px; overflow: visible; }
-  .rail-scroll .report-list nav { display: flex; flex-wrap: wrap; }
-  .rail-project { display: none; }
-  .rail-note { display: block; margin-top: 10px; }
-  .app-hero { display: block; }
   .app-metrics { grid-template-columns: 1fr; }
   .section-head { flex-wrap: wrap; }
   .row-actions { flex-wrap: wrap; }
 }
-main { margin-block: 0; align-self: start; }
-/* The rail is pinned to the top-left at the window's full height whatever the page's length: it must not
-   be stretched or centred by the body grid (the sticky box is one window tall, its row is the page). */
-.rail { align-self: start; position: sticky; top: 0; height: 100vh; height: 100dvh; }
-@media (max-width: 760px) { .rail { position: relative; height: auto; } }
+.hero h1 { overflow-wrap: anywhere; }
 /* deleted versions: tombstones stay in the tables and the graph, greyed */
 .pill.deleted, .report-prose .pill.deleted { display: inline-block; padding: 1px 8px; border-radius: 99px; background: transparent; border: 1px dashed var(--muted); color: var(--muted); font-size: 12px; font-weight: 700; }
 .table-card tr.tombstone td { color: var(--muted); }

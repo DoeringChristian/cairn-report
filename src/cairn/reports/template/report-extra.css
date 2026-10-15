@@ -241,3 +241,9 @@ main { width: min(100%, calc(var(--column) + 2 * clamp(24px, 5vw, 74px))); }
 .data-row .image-copy:hover { background: var(--accent-soft); }
 .data-row .image-copy[data-tooltip].show-tip::after { right: 0; }
 @media (max-width: 760px) { .data-row { grid-template-columns: minmax(0, 1fr) auto; } .data-version { grid-column: 1; } .data-files { grid-column: 1; } .data-row .image-copy { grid-column: 2; grid-row: 1 / span 3; } }
+
+/* Served by the store UI: the button back to the project or the page the reader came from. */
+.back-link { position: fixed; z-index: 15; top: 14px; left: 256px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 99px; background: var(--card); color: var(--muted); font-size: 13px; font-weight: 700; text-decoration: none; box-shadow: 0 2px 8px #0002; }
+.back-link:hover, .back-link:focus-visible { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 760px) { .back-link { top: auto; bottom: 14px; left: 14px; } }
+@media print { .back-link { display: none; } }

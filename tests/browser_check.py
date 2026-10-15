@@ -237,6 +237,23 @@ def run(keep: bool) -> int:
         page.locator("#title").wait_for()
         page.wait_for_function("document.querySelector('#title').textContent.length > 0")
         shot("11-report")
+        back = page.locator("#back-link")  # came from the report artifact's page: back goes there
+        back.wait_for()
+        assert back.inner_text() == "← Back" and back.get_attribute("href") == "/p/study/a/reports/summary", back.get_attribute("href")
+        labels = page.locator(".rail section:not([hidden]) .rail-label").all_inner_texts()  # the rail lists the app's own sections
+        assert [x.split(" · ")[0].title() for x in labels] == ["Projects", "Reports", "Artifacts", "Runs"], labels
+        assert page.locator(".rail a[aria-current=page]").all_inner_texts() == ["study", "Toy fit summary"]
+        page.keyboard.press("Tab")
+        back.focus()
+        page.keyboard.press("Enter")
+        page.wait_for_url("**/p/study/a/reports/summary")
+        page.goto(ui + "/p/study/r/summary/")  # opened directly: back goes to the project page
+        page.locator("#back-link").wait_for()
+        assert page.locator("#back-link").inner_text() == "← study" and page.locator("#back-link").get_attribute("href") == "/p/study/"
+        page.goto(ui + "/p/study/a/reports/summary")
+        page.get_by_role("link", name="Open report v").click()
+        page.wait_for_url("**/p/study/r/summary@v*/")
+        page.locator("#title").wait_for()
         page.locator(".data-version").first.click()
         page.wait_for_url("**/p/study/a/**")
         page.go_back()
