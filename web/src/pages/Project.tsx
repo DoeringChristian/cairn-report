@@ -1,6 +1,6 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { paths, useApi, type Project, type Summary } from "../api";
-import { ErrorNote, Hero, Loading, Table } from "../components";
+import { ErrorNote, Hero, Loading, Select, Table } from "../components";
 import { artifactHref, isReport, isRunName, reportHref, when } from "../util";
 
 const matches = (a: Summary, query: string) =>
@@ -32,9 +32,8 @@ export function ProjectPage() {
           <Hero eyebrow={<><Link to="/">Projects</Link> / {project}</>} title={data.project.title || project} subtitle={data.project.description} status={`${all.length} artifact${all.length === 1 ? "" : "s"}`} />
           <div className="toolbar">
             <input type="search" placeholder="Search names, titles, status, aliases" aria-label="Search" value={query} onChange={e => set("q", e.target.value)} />
-            <select aria-label="Sort" value={sort} onChange={e => set("sort", e.target.value === "updated" ? "" : e.target.value)}>
-              <option value="updated">Sort: updated</option><option value="name">Sort: name</option>
-            </select>
+            <Select label="Sort" value={sort} onChange={v => set("sort", v === "updated" ? "" : v)}
+              choices={[{ value: "updated", label: "Sort: updated" }, { value: "name", label: "Sort: name" }]} />
           </div>
           <div className="tabs" role="tablist">
             <button role="tab" aria-selected={tab === "reports"} onClick={() => set("tab", "")}>Reports <span>{reports.length}</span></button>

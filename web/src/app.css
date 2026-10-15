@@ -28,19 +28,24 @@ main a, .rail-note a { color: var(--accent); }
 .pill.alias { display: inline-block; padding: 1px 8px; border-radius: 99px; background: transparent; border: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 700; }
 .app-metrics { margin: 24px 0 0; }
 .toolbar { display: flex; gap: 10px; margin: 24px 0 0; flex-wrap: wrap; }
-input[type="search"], select, .login-form input { box-sizing: border-box; height: 42px; font: inherit; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--card); color: var(--ink); }
+input[type="search"], .login-form input { box-sizing: border-box; height: 42px; font: inherit; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--card); color: var(--ink); }
 input[type="search"] { flex: 1; min-width: 14rem; -webkit-appearance: none; appearance: none; }
 input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
-input[type="search"]:hover, select:hover:not(:disabled), .login-form input:hover { border-color: var(--accent); }
-input[type="search"]:focus, select:focus, .login-form input:focus { border-color: var(--accent); }
-/* Selects in the report theme: no system look, a chevron of our own; the native picker and keyboard stay. */
-select { -webkit-appearance: none; appearance: none; padding-right: 36px; cursor: pointer; text-overflow: ellipsis;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%237a8580' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right 13px center; background-size: 12px 8px; }
-select:hover:not(:disabled), select:focus { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23176b5b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5'/%3E%3C/svg%3E"); }
-select:disabled, input:disabled { opacity: .5; cursor: default; }
-select option { color: var(--ink); background: var(--card); }
-input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type="search"]:hover, .login-form input:hover { border-color: var(--accent); }
+input[type="search"]:focus, .login-form input:focus { border-color: var(--accent); }
+/* Selects in the report theme: a button and a list of our own (components.tsx Select), not the system menu. */
+.select { position: relative; display: inline-block; min-width: 0; }
+.select-button { box-sizing: border-box; display: flex; align-items: center; width: 100%; height: 42px; padding: 0 36px 0 12px; font: inherit; color: var(--ink); text-align: left; border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+  background: var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%237a8580' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5'/%3E%3C/svg%3E") no-repeat right 13px center / 12px 8px; }
+.select-button:hover, .select-button[aria-expanded="true"] { border-color: var(--accent); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23176b5b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5'/%3E%3C/svg%3E"); }
+.select-value { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.select-list { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; min-width: 100%; max-height: min(20rem, 60vh); overflow-y: auto; margin: 0; padding: 6px; list-style: none;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.select-list li { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; padding: 8px 10px; border-radius: 6px; white-space: nowrap; cursor: pointer; font-size: 14px; }
+.select-list li.active { background: var(--paper); }
+.select-list li[aria-selected="true"] { color: var(--accent); font-weight: 700; }
+.select-list li small { color: var(--muted); font-size: 12px; font-weight: 400; }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tabs { display: flex; gap: 4px; margin: 20px 0 6px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tabs button { flex: none; white-space: nowrap; font: inherit; font-weight: 700; padding: 10px 14px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); cursor: pointer; }
@@ -102,7 +107,7 @@ video.preview-media { background: #111; }
   .row-actions { flex-wrap: nowrap; }
   .toolbar { gap: 8px; }
   .toolbar input[type="search"] { flex: 1 1 100%; min-width: 0; }
-  .toolbar select { flex: 1 1 100%; }
+  .toolbar .select { flex: 1 1 100%; }
   .tabs button { min-height: 44px; padding: 10px 16px; }
   .action-button, .graph-toggle button, .form-actions button { min-height: 40px; }
   .action-button.small { padding: 8px 12px; }
@@ -114,7 +119,7 @@ video.preview-media { background: #111; }
   .table-card table { min-width: 34rem; }
   .table-card pre, .app-panel pre, .run-log pre { max-width: 100%; overflow: auto; }
   .login-form { max-width: none; }
-  .login-form input, input[type="search"], select { font-size: 16px; } /* no iOS zoom on focus */
+  .login-form input, input[type="search"] { font-size: 16px; } /* no iOS zoom on focus */
   .app-figures { grid-template-columns: 1fr; }
 }
 .hero h1 { overflow-wrap: anywhere; }

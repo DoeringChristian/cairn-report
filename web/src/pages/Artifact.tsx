@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { paths, useApi, type Entry, type Manifest, type Summary, type VersionRow } from "../api";
-import { CopyButton, ErrorNote, Hero, Loading, Pill, Table } from "../components";
+import { CopyButton, ErrorNote, Hero, Loading, Pill, Select, Table } from "../components";
 import { artifactHref, bytes, exact, fileHref, isReport, parseRef, previewKind, reportHref, when, zipHref } from "../util";
 import { Graph } from "./Graph";
 import { RunPanel } from "./Run";
@@ -204,9 +204,8 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
 
           <section className="app-section">
             <div className="section-head"><h2>Versions</h2>
-              <select aria-label="Version" value={number} onChange={e => { location.assign(artifactHref(project, name, Number(e.target.value))); }}>
-                {[...art.data.versions].reverse().map(v => <option key={v.version} value={v.version}>v{v.version}{v.label ? ` (${v.label})` : ""} {v.status !== "completed" ? v.status : ""}</option>)}
-              </select>
+              <Select label="Version" value={String(number)} onChange={v => location.assign(artifactHref(project, name, Number(v)))}
+                choices={[...art.data.versions].reverse().map(v => ({ value: String(v.version), label: `v${v.version}${v.label ? ` (${v.label})` : ""}`, note: v.status !== "completed" ? v.status : undefined }))} />
             </div>
             <Table head={["Version", "Label", "Status", "Created", "Aliases", "Source host"]}>
               {[...art.data.versions].reverse().map(v => (

@@ -289,16 +289,29 @@ def run(keep: bool) -> int:
         page.get_by_role("link", name="train").first.wait_for()
         shot("18-runs-tab")
 
-        # desktop: the styled selects next to the search box
+        # desktop: the selects are our own listbox, not the system menu; mouse and keyboard both choose
         page.goto(ui + "/p/study/")
-        page.get_by_label("Sort").wait_for()
-        assert page.get_by_label("Sort").evaluate("e => getComputedStyle(e).appearance") == "none", "selects are styled, not native"
-        assert page.get_by_label("Sort").evaluate("e => e.offsetHeight") == page.get_by_label("Search").evaluate("e => e.offsetHeight"), "select and search are the same height"
-        page.get_by_label("Sort").focus()
-        page.wait_for_timeout(200)
+        sort = page.get_by_role("button", name="Sort")
+        sort.wait_for()
+        assert page.locator("main select").count() == 0, "no native selects"
+        assert sort.evaluate("e => e.offsetHeight") == page.get_by_label("Search").evaluate("e => e.offsetHeight"), "select and search are the same height"
+        sort.click()
+        page.get_by_role("listbox", name="Sort").wait_for()
         shot("22-desktop-selects")
+        page.get_by_role("option", name="Sort: name").click()
+        page.wait_for_url("**sort=name**")
+        assert sort.inner_text() == "Sort: name" and page.get_by_role("listbox").count() == 0
+        sort.focus(); page.keyboard.press("ArrowDown"); page.keyboard.press("Home"); page.keyboard.press("Enter")
+        page.wait_for_function("!location.search.includes('sort=name')")
+        sort.click(); page.keyboard.press("Escape")
+        assert page.get_by_role("listbox").count() == 0, "Escape closes the list"
+        sort.click(); page.mouse.click(5, 5)
+        assert page.get_by_role("listbox").count() == 0, "an outside click closes the list"
         page.goto(ui + "/p/study/a/toy-fit")
-        page.get_by_label("Version", exact=True).wait_for()
+        version = page.get_by_role("button", name="Version", exact=True)
+        version.wait_for()
+        version.click()
+        page.get_by_role("listbox", name="Version").wait_for()
         shot("23-desktop-version-select")
 
         # phone (390x844) and tablet (820x1180): every page, no sideways page scroll, tap targets, collapsed rail
@@ -317,7 +330,7 @@ def run(keep: bool) -> int:
                 wide = page.evaluate("""() => [...document.querySelectorAll('main *')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1
                     && !e.closest('.table-wrap, .graph-scroll, .tabs, pre, .raw-html, .math, svg, table, .plotly-card'); }).map(e => e.tagName + '.' + e.className).slice(0, 5)""")
                 assert not wide, f"{tag} {name}: elements stick out of the window: {wide}"
-                small = page.evaluate("""() => [...document.querySelectorAll('.tabs button, .action-button, select, input, .rail-toggle, .back-link, .image-copy, .graph-toggle button, .report-list a')]
+                small = page.evaluate("""() => [...document.querySelectorAll('.tabs button, .action-button, .select-button, input, .rail-toggle, .back-link, .image-copy, .graph-toggle button, .report-list a')]
                     .filter(e => e.offsetParent !== null || getComputedStyle(e).position === 'fixed')
                     .map(e => [e.tagName + '.' + e.className, e.getBoundingClientRect()]).filter(([, r]) => r.height > 0 && r.height < 39.5).map(([n, r]) => n + ' ' + Math.round(r.height)).slice(0, 5)""")
                 if width < 600:
