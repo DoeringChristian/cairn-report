@@ -21,14 +21,16 @@ def is_report_folder(config: Config, folder: Path) -> bool:
     return (folder / "report.md").is_file() and folder.parent == config.reports_dir.resolve()
 
 
-def publish_report(config: Config, folder: Path) -> None:
+def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int | None:
     """Build a report and store it as the next version of `reports/<slug>`.
 
     The version holds `source/` (the report folder), `site/<slug>/` (its built page) and `site/_static/`
     (the shared page files it needs), so it can be viewed on its own. Its inputs are the exact versions
     the report read. A report whose source, inputs, and metadata match the latest version creates none
-    (the built pages carry build times, so the source is what is compared).
+    (the built pages carry build times, so the source is what is compared). Returns the version number
+    (the existing one when unchanged), or None when the version is queued for an unreachable server.
     """
+    say = (lambda *_args, **_kwargs: None) if quiet else print
     from . import build as builder
 
     folder = folder.resolve()
@@ -50,14 +52,16 @@ def publish_report(config: Config, folder: Path) -> None:
                 shutil.copy2(builder.OUTPUT_ROOT / builder.STATIC / file, static / file)
         before = max((v["version"] for v in versions_of(store, name)), default=0) if _exists(store, name) else 0
         if before and _same_source(store, name, stage / "source", config, inputs, metadata):
-            print(f"{name}@v{before} unchanged", flush=True)
-            return
+            say(f"{name}@v{before} unchanged", flush=True)
+            return before
         number = publish(name, stage, metadata=metadata, inputs=inputs, label=time.strftime("%Y-%m-%d_%H-%M-%S"),
                                    store=store, config=config)
     if number is None:
-        return print(f"pending {name}: the store does not answer; `cairn status` lists it, `cairn sync` sends it", flush=True)
+        say(f"pending {name}: the store does not answer; `cairn status` lists it, `cairn sync` sends it", flush=True)
+        return None
     state = store.resolve(refs.exact(store.project, name, number))[2]
-    print(f"published {name}@v{number} ({describe(state)}; inputs: {', '.join(inputs) or 'none'})", flush=True)
+    say(f"published {name}@v{number} ({describe(state)}; inputs: {', '.join(inputs) or 'none'})", flush=True)
+    return number
 
 
 def _exists(store, name: str) -> bool:
