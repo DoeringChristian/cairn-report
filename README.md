@@ -114,6 +114,11 @@ browser only, per report. **Copy** puts them on the clipboard as JSON (with the
 report's source path and URL, after an optional `[page] copy_preamble`), and
 **Clear** removes them from the browser.
 
+Next to each comment button (on a text selection, a figure, the lightbox), a
+copy button puts a one-line location marker on the clipboard, to paste into a
+chat with an LLM: `reports/a/report.md:42 "the selected text"`, or for a figure
+`reports/a/report.md:42 figure #fig-psnr "PSNR per method" (source: <file>)`.
+
 ### Loading and caching
 
 The page files and Plotly are shared in `generated/reports/_static/`, named by

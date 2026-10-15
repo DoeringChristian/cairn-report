@@ -226,3 +226,15 @@ main { width: min(100%, calc(var(--column) + 2 * clamp(24px, 5vw, 74px))); }
 }
 #report-prose .figure-card video { background: #111; }
 #report-prose .figure-card img.is-pixelated, .stage img.is-pixelated { image-rendering: pixelated; }
+
+/* Copy-location buttons sit beside the comment buttons: the same size, quieter. */
+.image-copy { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 2px solid var(--card); border-radius: 50%; background: var(--card); color: var(--accent); box-shadow: 0 2px 8px #0003; cursor: pointer; }
+.image-copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.image-copy:hover { color: var(--ink); }
+.figure-card > .image-copy, .report-prose .image-copy { position: absolute; z-index: 5; top: 8px; right: 46px; }
+#selection-copy { position: fixed; z-index: 20; }
+#selection-copy[hidden] { display: none; }
+#lightbox-copy { position: absolute; z-index: 5; left: 62px; bottom: 20px; border-color: #ffffff55; background: #ffffff20; color: white; }
+.image-copy[data-tooltip].show-tip::after { content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); right: 0; padding: 4px 8px; border-radius: 6px; background: var(--ink); color: var(--paper); font: 600 11px/1.4 system-ui; white-space: nowrap; pointer-events: none; }
+#lightbox-copy[data-tooltip].show-tip::after { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
+.plotly-card > .image-copy { right: 84px; }

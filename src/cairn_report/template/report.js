@@ -39,6 +39,27 @@ function bundleTarget(href) {
 const COMMENT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-5 3v-3H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/></svg>';
 const isFigureTarget = target => target.startsWith("figure:");
 function commentFor(target) { return [...comments].reverse().find(row => row.target === target); }
+/* The copy button next to each comment button copies a location marker: one line an LLM can act on
+   (report file and line, with the quoted text or the figure's id, title, and source file). */
+const COPY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></svg>';
+async function locationMarker({line = "", quote = "", figure = null}) {
+  const data = await reportData, source = data.source || `${reportKey || ""}/report.md`.replace(/^\//, "");
+  const place = line && line !== "unknown" ? `${source}:${line}` : source;
+  if (figure) {
+    const file = figure.trace?.label || figure.source, from = file ? ` (source: ${file})` : "";
+    return `${place} figure #${figure.id} "${figure.title}"${from}`;
+  }
+  return quote ? `${place} "${quote.replace(/\s+/g, " ").trim()}"` : place;
+}
+async function copyMarker(button, spec) {
+  const copied = await copyText(await locationMarker(spec));
+  flashTip(button, copied ? "Location copied" : "Copy failed");
+}
+function copyIcon(spec) {
+  const button = el("button", "image-copy"); button.type = "button"; button.title = "Copy location"; button.setAttribute("aria-label", "Copy location"); button.dataset.tooltip = "Copy location"; button.innerHTML = COPY_ICON;
+  button.onclick = event => { event.preventDefault(); event.stopPropagation(); copyMarker(button, typeof spec === "function" ? spec() : spec); };
+  return button;
+}
 function commentIcon(target, line = "") { const button = el("button", "image-comment"); button.type = "button"; button.title = "Comment on image"; button.setAttribute("aria-label", "Comment on image"); button.innerHTML = COMMENT_ICON; button.onclick = event => { event.preventDefault(); event.stopPropagation(); openComment(target, line, "", button.getBoundingClientRect(), commentFor(target)); }; return button; }
 async function plotSpec(figure) { if (!figure._spec && BUNDLE) figure._spec = BUNDLE.reports[reportKey].files?.[figure.src]; if (!figure._spec) { const response = await fetch(figure.src); if (!response.ok) throw new Error(`Could not load ${figure.src}`); figure._spec = await response.json(); } return figure._spec; }
 /* Plotly is large: fetch it only when the first interactive figure comes near the screen. */
@@ -63,15 +84,15 @@ async function renderPlot(node, figure, full = false) { const [spec] = await Pro
 
 // The builder renders every card from report.md; the page only adds behavior to them.
 function hydrateFigure(card) {
-  const item = {trace: JSON.parse(card.dataset.trace || "{}"), id: card.dataset.figureId, type: card.dataset.figureType, src: card.dataset.src, fps: Number(card.querySelector("video")?.dataset.fps) || 0, title: card.querySelector("h3")?.textContent || "", caption: card.querySelector(".figure-copy p")?.textContent || "", line: card.dataset.line || ""};
+  const item = {trace: JSON.parse(card.dataset.trace || "{}"), id: card.dataset.figureId, type: card.dataset.figureType, src: card.dataset.src, fps: Number(card.querySelector("video")?.dataset.fps) || 0, source: (card.querySelector(".figure-source")?.textContent || "").replace(/^Source\s*·\s*/, ""), title: card.querySelector("h3")?.textContent || "", caption: card.querySelector(".figure-copy p")?.textContent || "", line: card.dataset.line || ""};
   const index = figures.push(item) - 1, target = `figure:${item.id}`;
   card.classList.add("comment-anchor");
   if (item.type === "plotly") {
     const expand = el("button", "figure-expand", "⛶"); expand.type = "button"; expand.title = "Open interactive figure"; expand.setAttribute("aria-label", "Open interactive figure"); expand.onclick = event => { event.stopPropagation(); openFigure(index); };
-    card.append(expand, commentIcon(target, item.line)); whenNear(card, () => renderPlot(card.querySelector(".plotly-preview"), item).catch(() => card.classList.add("is-failed")));
+    card.append(expand, copyIcon({line: item.line, figure: item}), commentIcon(target, item.line)); whenNear(card, () => renderPlot(card.querySelector(".plotly-preview"), item).catch(() => card.classList.add("is-failed")));
   } else {
     card.tabIndex = 0; card.setAttribute("role", "button"); card.onclick = () => openFigure(index); card.onkeydown = event => { if (event.key === "Enter" || event.key === " ") openFigure(index); };
-    card.append(commentIcon(target, item.line));
+    card.append(copyIcon({line: item.line, figure: item}), commentIcon(target, item.line));
     const video = card.querySelector("video");
     if (video) hydrateVideoCard(card, video);
     const image = card.querySelector("img");
@@ -316,6 +337,8 @@ function imageCenter() { const media = viewMedia, parent = media.offsetParent; i
 function setZoom(value, point = null) { const next = Math.max(.5, Math.min(4, value)); if (next <= 1) { panX = 0; panY = 0; } else if (point) { const center = imageCenter(), ratio = next / zoom; panX = point.x - center.x - ratio * (point.x - center.x - panX); panY = point.y - center.y - ratio * (point.y - center.y - panY); } else { const ratio = next / zoom; panX *= ratio; panY *= ratio; } zoom = next; applyView(); }
 function resetView() { zoom = 1; panX = 0; panY = 0; applyView(); }
 lightbox.querySelector(".close").onclick = () => lightbox.close(); lightbox.querySelector(".previous").onclick = () => showFigure(active - 1); lightbox.querySelector(".next").onclick = () => showFigure(active + 1);
+$("#lightbox-copy").innerHTML = COPY_ICON;
+$("#lightbox-copy").onclick = event => { const figure = figures[active]; copyMarker(event.currentTarget, {line: figure.line, figure}); };
 $("#lightbox-comment").onclick = event => { const figure = figures[active]; const anchor = event.currentTarget.getBoundingClientRect(); lightbox.close(); openComment(`figure:${figure.id}`, figure.line || "", "", anchor, commentFor(`figure:${figure.id}`)); };
 lightbox.querySelector(".zoom").onclick = event => { const action = event.target.dataset.zoom; if (action === "in") setZoom(zoom + .25); if (action === "out") setZoom(zoom - .25); if (action === "reset") resetView(); };
 for (const media of [lightboxImage, lightboxVideo]) {
@@ -381,7 +404,7 @@ function bindFiguresInDocumentOrder() {
     const image = node, line = image.closest("[data-source-line]")?.dataset.sourceLine || "unknown";
     const id = `markdown-line-${line}-${offset++}`;
     const index = figures.push({id, line, src: image.src, title: image.alt || `Figure from Markdown line ${line}`, caption: `Generated from report.md line ${line}`}) - 1;
-    image.tabIndex = 0; image.setAttribute("role", "button"); image.onclick = () => openFigure(index); image.onkeydown = event => { if (event.key === "Enter" || event.key === " ") openFigure(index); }; const anchor = image.closest("[data-source-line]") || image.parentElement; anchor.classList.add("comment-anchor"); anchor.dataset.commentTarget = `figure:${id}`; anchor.append(commentIcon(`figure:${id}`, line));
+    image.tabIndex = 0; image.setAttribute("role", "button"); image.onclick = () => openFigure(index); image.onkeydown = event => { if (event.key === "Enter" || event.key === " ") openFigure(index); }; const anchor = image.closest("[data-source-line]") || image.parentElement; anchor.classList.add("comment-anchor"); anchor.dataset.commentTarget = `figure:${id}`; anchor.append(copyIcon({line, figure: figures[index]}), commentIcon(`figure:${id}`, line));
   });
 }
 
@@ -389,13 +412,16 @@ const commentPopover = $("#comment-popover"), commentForm = $("#comment-form");
 function placeCommentPopover(rect) { const width = 360, gap = 8; const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect?.left ?? (window.innerWidth - width) / 2)); const top = Math.max(12, Math.min(window.innerHeight - 230, (rect?.bottom ?? window.innerHeight / 2) + gap)); commentPopover.style.left = `${left}px`; commentPopover.style.top = `${top}px`; }
 function closeComment() { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; queueSave(); } commentPopover.hidden = true; }
 function openComment(target, line = "", quote = "", anchor = null, existing = null) { clearTimeout(saveTimer); if (!existing && isFigureTarget(target)) existing = commentFor(target); if (existing) { line = existing.line || line; quote = existing.quote || quote; } currentSession = {id: existing?.id || ""}; commentForm.elements.id.value = currentSession.id; commentForm.elements.target.value = target; commentForm.elements.line.value = line; commentForm.elements.quote.value = quote; commentForm.elements.text.value = existing?.text || ""; $("#comment-target").textContent = line ? `report.md line ${line}` : target; $("#comment-quote").textContent = quote; $("#comment-quote").hidden = !quote; $("#comment-message").textContent = existing ? "Saved" : "Autosaves while you type"; placeCommentPopover(anchor); commentPopover.hidden = false; commentForm.elements.text.focus(); }
+const selectionCopy = $("#selection-copy");
+selectionCopy.onmousedown = event => event.preventDefault();  // keep the selection while clicking
+selectionCopy.onclick = () => { if (pendingSelection) copyMarker(selectionCopy, pendingSelection); };
 function bindSelectionComments() {
   const report = $("main"), button = $("#selection-comment");
-  const inspect = () => { const selection = window.getSelection(); if (!selection?.rangeCount || !selection.toString().trim() || commentPopover.contains(selection.anchorNode)) { button.hidden = true; return; } const range = selection.getRangeAt(0); const start = range.startContainer; const node = start.nodeType === Node.TEXT_NODE ? start.parentElement : start; if (!node || !report.contains(node)) { button.hidden = true; return; } const card = node.closest(".figure-card"); const block = node.closest("[data-source-line]"); const context = block || node.closest("[data-comment-target]") || node.closest("section") || node.closest("header, footer") || report; const line = card?.dataset.line || block?.dataset.sourceLine || ""; const target = card ? card.dataset.commentTarget : line ? `markdown:line:${line}` : context.dataset.commentTarget || (context.id ? `section:${context.id}` : "section:report"); const rect = range.getBoundingClientRect(); pendingSelection = {line, target, quote: selectionQuote(range).slice(0, 1000), rect}; button.style.left = `${Math.max(8, Math.min(window.innerWidth - 40, rect.right + 6))}px`; button.style.top = `${Math.max(8, Math.min(window.innerHeight - 40, rect.bottom + 6))}px`; button.hidden = false; };
+  const inspect = () => { const selection = window.getSelection(); if (!selection?.rangeCount || !selection.toString().trim() || commentPopover.contains(selection.anchorNode)) { button.hidden = selectionCopy.hidden = true; return; } const range = selection.getRangeAt(0); const start = range.startContainer; const node = start.nodeType === Node.TEXT_NODE ? start.parentElement : start; if (!node || !report.contains(node)) { button.hidden = selectionCopy.hidden = true; return; } const card = node.closest(".figure-card"); const block = node.closest("[data-source-line]"); const context = block || node.closest("[data-comment-target]") || node.closest("section") || node.closest("header, footer") || report; const line = card?.dataset.line || block?.dataset.sourceLine || ""; const target = card ? card.dataset.commentTarget : line ? `markdown:line:${line}` : context.dataset.commentTarget || (context.id ? `section:${context.id}` : "section:report"); const rect = range.getBoundingClientRect(); pendingSelection = {line, target, quote: selectionQuote(range).slice(0, 1000), rect}; const left = Math.max(8, Math.min(window.innerWidth - 78, rect.right + 6)), top = Math.max(8, Math.min(window.innerHeight - 40, rect.bottom + 6)); button.style.left = `${left}px`; button.style.top = `${top}px`; button.hidden = false; selectionCopy.style.left = `${left + 38}px`; selectionCopy.style.top = `${top}px`; selectionCopy.hidden = false; };
   report.addEventListener("mouseup", () => setTimeout(inspect));
   report.addEventListener("touchend", () => setTimeout(inspect));
   report.addEventListener("keyup", event => { if (event.shiftKey) setTimeout(inspect); });
-  button.onclick = () => { button.hidden = true; openComment(pendingSelection.target, pendingSelection.line, pendingSelection.quote, pendingSelection.rect); };
+  button.onclick = () => { button.hidden = selectionCopy.hidden = true; openComment(pendingSelection.target, pendingSelection.line, pendingSelection.quote, pendingSelection.rect); };
 }
 
 function localComments() { try { return JSON.parse(localStorage.getItem(commentsStorageKey()) || "[]"); } catch (_) { return []; } }
