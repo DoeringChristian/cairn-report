@@ -1,4 +1,13 @@
-"""The parts of the package may import only the parts they are allowed to: parse every module's imports with `ast`."""
+"""The layers of the package may import only the layers they are allowed to: parse every module's imports with `ast`.
+
+    store/            the repo core: the only code that changes a repo folder; no HTTP, no remote, no configuration
+    client/http.py    HTTP and folder scanning; client/remote.py the repo interface over HTTP
+    client/sync.py    the sync engine: outbox -> remote -> the repo; pure mechanism (no configuration, no printing)
+    client/repo.py    the two compositions (without and with a remote) behind one interface
+    client/open.py    the source-of-truth policy: the only place that reads [repo] remote / allow_network_fs and the
+                      filesystem type, and composes the layers below
+    the rest          the object API, publishing, drafts, runs, CLI, UI, reports: through what open.py composes
+"""
 
 import ast
 from pathlib import Path
@@ -10,13 +19,12 @@ import cairn
 PACKAGE = Path(cairn.__file__).parent
 LEAVES = {"config", "ranges", "formats", "_version"}  # import nothing from cairn
 ALLOWED = {
-    "store": {"store"} | LEAVES,
+    "store": {"store", "ranges", "formats"},  # the repo core: no configuration, no client
     "client": {"client", "store", "config", "ranges", "formats", "_version"},  # formats: the run logger writes what it reads
     "server": {"server", "store", "config", "ranges", "_version"},
     "ui": {"ui", "store", "client", "config", "ranges", "_version"},
     "reports": {"reports", "store", "client", "config", "ranges", "formats", "_version"},
     "runs": {"runs", "store", "client", "config", "formats", "_version"},
-    "migrate": {"migrate", "store", "formats", "_version"},  # the one-off hub conversion; knows the old report layout
     "__init__": {"store", "client", "_version"},  # the API (client lazily)
     "cli": set(),  # argument parsing: anything, lazily; checked separately
 }
@@ -92,3 +100,135 @@ def targets_of(node):
     elif isinstance(node, ast.ImportFrom) and node.level:
         out.update((alias.name, node.lineno) for alias in node.names)
     return out
+
+
+# ------------------------------------------------------------------ the layers inside client/
+
+CLIENT = PACKAGE / "client"
+CLIENT_LAYERS = {  # module -> the cairn modules it may import (anything in store/ is `store`)
+    "http": set(),
+    "remote": {"store", "client.http"},
+    "sync": {"store"},
+    "repo": {"store", "ranges", "client.http", "client.remote", "client.sync"},
+    "open": {"config", "store", "client.http", "client.remote", "client.repo"},
+}
+
+
+def module_targets(path: Path) -> set[str]:
+    """The cairn modules a module imports anywhere in it: `store` for anything in store/, `client.<name>` inside client/."""
+    found = set()
+    for node in ast.walk(ast.parse(path.read_text(), str(path))):
+        if isinstance(node, ast.ImportFrom) and node.level:
+            parts = (["client"] if node.level == 1 else []) + (node.module.split(".") if node.module else [])
+            if not node.module:
+                found.update(f"client.{alias.name}" for alias in node.names)
+                continue
+        elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("cairn."):
+            parts = node.module.split(".")[1:]
+        else:
+            continue
+        if parts[0] == "store":
+            found.add("store")
+        elif parts[0] == "client" and len(parts) > 1:
+            found.add(f"client.{parts[1]}")
+        else:
+            found.add(parts[0])
+    return found
+
+
+@pytest.mark.parametrize("name", sorted(CLIENT_LAYERS))
+def test_the_layers_below_the_policy_import_only_what_they_build_on(name):
+    imported = module_targets(CLIENT / f"{name}.py")
+    assert imported <= CLIENT_LAYERS[name], f"client/{name}.py imports {sorted(imported - CLIENT_LAYERS[name])}"
+
+
+def test_the_sync_engine_is_pure_mechanism():
+    tree = ast.parse((CLIENT / "sync.py").read_text())
+    calls = {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    imports = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    assert "print" not in calls and "input" not in calls  # what happened comes back as a report
+    assert not imports & {"threading", "atexit", "sys", "argparse", "tomllib"}  # no threads, no CLI, no configuration
+
+
+def _code(path: Path) -> str:
+    """A module's source without its docstrings and comments (what it does, not what it says)."""
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(body, list) and body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant) \
+                and isinstance(body[0].value.value, str):
+            body[0] = ast.Pass()
+    return ast.unparse(tree)
+
+
+POLICY = {"client/open.py"}
+NETWORK_FS = POLICY | {"store/fs.py", "store/local.py"}  # the core defines the check and refuses a database there
+
+
+def test_only_the_policy_module_decides_on_the_remote_and_the_filesystem():
+    import re
+
+    for path in MODULES:
+        name = str(path.relative_to(PACKAGE))
+        code = _code(path)
+        if name not in NETWORK_FS:
+            assert "network_filesystem" not in code, f"{name} looks at the filesystem type"
+        if name not in POLICY:
+            assert not re.search(r"""repo(\.get\(|\[)\s*['"](remote|allow_network_fs)['"]""", code), f"{name} reads [repo] remote or allow_network_fs"
+        if name not in POLICY | {"client/repo.py", "client/__init__.py"}:
+            for word in ("SyncedRepo", "StandaloneRepo", "NoCopies"):
+                assert word not in code, f"{name} knows the composition {word} (only client/open.py picks it)"
+
+
+def _graph() -> dict[str, set[str]]:
+    """Module-level imports between cairn modules (dotted names), as an adjacency map."""
+    names = {".".join(path.relative_to(PACKAGE.parent).with_suffix("").parts).removesuffix(".__init__"): path for path in MODULES}
+    graph = {}
+    for name, path in names.items():
+        package = name if path.name == "__init__.py" else name.rsplit(".", 1)[0]
+        edges = set()
+        for node in ast.parse(path.read_text()).body:  # module level only: function-level imports run later
+            if isinstance(node, ast.ImportFrom):
+                if node.level:
+                    base = package.split(".")[: len(package.split(".")) - (node.level - 1)]
+                    target = ".".join([*base, *(node.module.split(".") if node.module else [])])
+                elif node.module and node.module.startswith("cairn"):
+                    target = node.module
+                else:
+                    continue
+                candidates = [f"{target}.{alias.name}" for alias in node.names] if True else []
+                edges.update(item for item in candidates if item in names)
+                if target in names:
+                    edges.add(target)
+            elif isinstance(node, ast.Import):
+                edges.update(alias.name for alias in node.names if alias.name in names)
+        graph[name] = {edge for edge in edges if edge != name and not package.startswith(edge)}  # a parent package is loaded first anyway
+    return graph
+
+
+def test_no_import_cycles():
+    graph, state, cycle = _graph(), {}, []
+
+    def visit(node, trail):
+        state[node] = "open"
+        for edge in sorted(graph.get(node, ())):
+            if state.get(edge) == "open":
+                cycle.append(trail[trail.index(edge):] + [edge])
+            elif edge not in state:
+                visit(edge, trail + [edge])
+        state[node] = "done"
+
+    for node in sorted(graph):
+        if node not in state:
+            visit(node, [node])
+    assert not cycle, cycle[0]
+
+
+def test_local_repo_and_remote_implement_the_repo_interface():
+    from cairn.client.remote import Remote
+    from cairn.store.interface import METHODS
+    from cairn.store.local import LocalRepo
+
+    for cls in (LocalRepo, Remote):
+        missing = [name for name in METHODS if name != "uid" and not callable(getattr(cls, name, None))]
+        assert not missing, f"{cls.__name__} lacks {missing}"
