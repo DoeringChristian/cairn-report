@@ -1,9 +1,9 @@
 """Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | alias | delete | retention |
-gc | sync | status | prune | verify | server | ui | token | migrate | export-metadata | finalize-study | drafts`.
+gc | sync | status | prune | verify | server | ui | token | export-metadata | finalize-study | drafts`.
 
-Every command that talks to the store first tries to send this machine's pending versions for it (quietly,
-and only when something is pending); `sync` does that by hand, says what happened, and refreshes what the
-replica knows about aliases."""
+Every command that uses the repo first tries to send what waits for its remote, and once more at its end (quietly,
+and only when something is pending; nothing without a remote); `sync` does that by hand, says what happened, and
+mirrors the remote's aliases (`--watch` keeps going, for a login node)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from ._version import __version__
-from .config import load_config, protect
+from .config import load_config
 
 def cmd_build(args) -> None:
     from .reports.build import build_all
@@ -35,7 +35,7 @@ def cmd_share(args) -> None:
 
 
 def cmd_publish(args) -> None:
-    from .client.publishing import parse_meta, publish_folder, publish_mappings, watch_folder
+    from .client.publishing import parse_meta, publish_folder, watch_folder
     from .reports.publishing import is_report_folder, publish_report
     from .store import IncompleteRun
 
@@ -45,12 +45,8 @@ def cmd_publish(args) -> None:
         if args.name or args.watch or command or args.label or args.alias or meta:
             raise SystemExit("a report folder publishes as reports/<slug> on its own: no NAME, --label, --alias, --meta, or --watch")
         return publish_report(config, Path(args.folder))
-    if (args.folder is None) != (args.name is None):
-        raise SystemExit("publish takes FOLDER NAME together, or neither to use [store] publish")
-    if args.folder is None:
-        if args.watch or command:
-            raise SystemExit("--watch and -- command need FOLDER NAME")
-        return publish_mappings(config, args.label, args.alias, meta, args.allow_incomplete)
+    if args.folder is None or args.name is None:
+        raise SystemExit("publish takes FOLDER NAME (or a report folder reports/<slug>)")
     folder = Path(args.folder)
     if args.watch or command:
         raise SystemExit(watch_folder(config, folder, args.name, args.label, args.alias, meta, command, args.interval))
@@ -64,17 +60,16 @@ def with_options(config, args):
     """The config with the command's `--allow-http` applied."""
     from dataclasses import replace
 
-    return replace(config, store={**config.store, "allow_http": True}) if getattr(args, "allow_http", False) else config
+    return replace(config, repo={**config.repo, "allow_http": True}) if getattr(args, "allow_http", False) else config
 
 
 def cmd_pull(args) -> None:
     import shutil
 
-    from .client.offline import pull
     from .client.open import open_repo
 
     config = with_options(load_config(args.project), args)
-    path = pull(open_repo(config), args.ref, record=not args.no_record, offline=args.offline)
+    path = open_repo(config).pull(args.ref, record=not args.no_record, offline=args.offline)
     if args.into is None:
         return print(path)
     target = args.into
@@ -89,7 +84,7 @@ def cmd_pull(args) -> None:
 
 
 def open_objects(args):
-    """The object API's Store for the configured store (no background uploader: commands flush synchronously)."""
+    """The object API's Repo for the project's repo (no background uploader: commands send at their start and end)."""
     from .client.objects import Repo
     from .client.open import open_repo
 
@@ -100,15 +95,15 @@ def report(line: str) -> None:
     print(f"cairn: {line}", file=sys.stderr, flush=True)
 
 
-def flush_first(args) -> None:
-    """Try to send this machine's pending versions for the configured store server first (see the module doc)."""
-    from .client.sync import flush_configured
+def sync_quietly(args) -> None:
+    """Try to send what waits for the repo's remote (see the module doc); never fails the command."""
+    from .client.open import sync_now
 
     try:
         config = with_options(load_config(args.project), args)
     except (SystemExit, ValueError):
         return
-    flush_configured(config, report)
+    sync_now(config, report)
 
 
 def cmd_project(args) -> None:
@@ -160,7 +155,7 @@ def cmd_versions(args) -> None:
     store = open_objects(args)
     versions = store.artifact(args.name).versions()
     for version in versions:
-        number = f"v{version.number}" if version.number is not None else "-"
+        number = f"v{version.number}" if version.number is not None else "pending"
         print(f"{number}\t{version.status}\t{version.label or ''}\t{(version.created or '')[:19]}\t{version.uid}\t{_size(version.files)}")
     if not versions:
         print(f"no versions of {args.name}")
@@ -249,13 +244,13 @@ def cmd_drafts(args) -> None:
     if version is None:
         print(f"the draft {draft.uid} waits for its inputs")
     elif version.number is None:
-        print(f"pending {version.ref}: the store does not answer; `cairn status` lists it, `cairn sync` sends it")
+        print(f"pending {version.ref}: the remote does not answer; `cairn status` lists it, `cairn sync` sends it")
     else:
         print(f"published {version.ref} ({_size(version.files)})")
 
 
 def _store_errors(action):
-    """Run `action`; a refusal from the store ends the command with its message instead of a traceback."""
+    """Run `action`; a refusal from the repo ends the command with its message instead of a traceback."""
     from .store import StoreError
 
     try:
@@ -325,8 +320,8 @@ def cmd_gc(args) -> None:
     except ValueError as error:
         raise SystemExit(str(error)) from None
     if args.root is not None:
-        if not (args.root / "store.json").is_file():
-            raise SystemExit(f"{args.root} is not a store root (no store.json)")
+        if not (args.root / "repo.json").is_file():
+            raise SystemExit(f"{args.root} is not a repo (no repo.json)")
         backend = LocalRepo(args.root)
         result = _store_errors(lambda: backend.gc(dry_run=args.dry_run, grace=grace))
     else:
@@ -343,20 +338,27 @@ def cmd_gc(args) -> None:
 
 
 def cmd_sync(args) -> None:
+    import time
+
     store = open_objects(args)
-    if not store.remote:
-        return print("a local store needs no sync: publishing writes it directly")
-    result = store.sync(report=lambda line: print(line, flush=True))
-    waiting = [record for record in result["waiting"] if record["sync"] != "running"]
-    running = [record for record in result["waiting"] if record["sync"] == "running"]
+    config = load_config(args.project)
+    while True:
+        result = store.sync(report=lambda line: print(line, flush=True))
+        if result["remote"] is None:
+            return print("this repo has no remote ([repo] remote): there is nothing to sync")
+        waiting = [record for record in result["waiting"] if record["sync"] != "running"]
+        running = [record for record in result["waiting"] if record["sync"] == "running"]
+        if not args.watch:
+            break
+        time.sleep(float(config.repo.get("interval", 30)))
     if not (result["sent"] or result["rejected"] or result["waiting"]):
-        print("nothing to sync")
+        print("nothing to sync: the remote has every version of this repo")
     if waiting:
-        print(f"{len(waiting)} versions still pending: the store at {store.backend.url} does not answer", file=sys.stderr)
+        print(f"{len(waiting)} versions still pending: the remote at {result['remote']} does not answer", file=sys.stderr)
     if running:
-        print(f"{len(running)} running versions are sent by the jobs that run them", flush=True)
+        print(f"{len(running)} running versions are sent by the processes that run them", flush=True)
     if result.get("refreshed"):
-        print(f"refreshed the aliases of {result['refreshed']} artifacts", flush=True)
+        print(f"mirrored the aliases of {result['refreshed']} artifacts", flush=True)
     if waiting or result["rejected"]:
         raise SystemExit(1)
 
@@ -371,46 +373,33 @@ def _age(seconds: float) -> str:
 def cmd_status(args) -> None:
     import time
 
-    from .client import replica
+    from .store.outbox import epoch
 
-    config = load_config(args.project)
-    url = (config.store.get("url") or "").rstrip("/")
-    if not url:
-        from .client.open import open_repo
-
-        for ref, why in open_repo(config).reaped:  # opening the store fails the versions whose process died
-            print(f"failed {ref}: {why}")
-    if not url and not args.all:
-        print("the configured store is a local folder: nothing is ever pending (--all shows every server's versions)")
+    store = open_objects(args)
+    status = store.backend.status()
+    for ref, why in status["reaped"]:  # opening the repo fails the versions whose process died
+        print(f"failed {ref}: {why}")
+    if status["remote"] is None:
+        print("this repo has no remote: it is the source of truth, and nothing waits")
         return
-    uid = replica.known_uid(url) if url else None
-    rows = replica.records() + (replica.synced_records() if args.all else [])
-    rows = [row for row in rows if args.all or replica.belongs(row, url, uid)]
     now = time.time()
-    for row in sorted(rows, key=lambda row: row["uid"]):
-        if row["sync"] == "synced":
-            manifest = row.get("manifest") or {}
-            number, status, files = row.get("version"), manifest.get("status", "completed"), manifest.get("files", [])
-            host, age = "", now - (row.get("accessed_at") or replica.epoch(row.get("accessed")))
-        else:
-            number, status, files = row.get("number"), row["status"], row.get("files", [])
-            host, age = (row.get("owner") or {}).get("host", ""), now - replica.epoch(row.get("created"))
+    for row in status["entries"]:
+        files = row.get("files", [])
         size = sum(item.get("size", 0) for item in files)
-        line = (f"{row['sync']}\t{row['project']}:{row['name']}\t{f'v{number}' if number else '-'}\t{row['uid']}\t{status}\t"
-                f"{host}\t{_age(age)}\t{len(files)} files, {size / 1e6:.1f} MB")
-        if row["sync"] == "running":
-            line += f"\theartbeat {_age(now - replica.last_beat(row))} ago"
-        if args.all:
-            line += f"\t{row.get('url') or row.get('store') or ''}"
+        number = row.get("number")
+        line = (f"{row['sync']}\t{row['project']}:{row['name']}\t{f'v{number}' if number else '-'}\t{row['uid']}\t{row['status']}\t"
+                f"{(row.get('owner') or {}).get('host', '')}\t{_age(now - epoch(row.get('created')))}\t{len(files)} files, {size / 1e6:.1f} MB")
+        if row["sync"] == "running" and row.get("heartbeat") is not None:
+            line += f"\theartbeat {_age(now - row['heartbeat'])} ago"
         if row.get("error"):
             line += f"\t{row['error']}"
         print(line)
-    if not rows:
-        print("nothing pending: the server has every version of this machine")
+    if not status["entries"]:
+        print(f"nothing pending: the remote {status['remote']} has every version of this repo")
 
 
 def cmd_prune(args) -> None:
-    from .client.prune import describe_size, parse_age, parse_size, prune
+    from .store.prune import describe_size, parse_age, parse_size
 
     try:
         older = parse_age(args.older_than) if args.older_than else None
@@ -419,26 +408,26 @@ def cmd_prune(args) -> None:
         raise SystemExit(str(error)) from None
     if older is None and size is None:
         older = parse_age("30d")
-    result = prune(older, size, dry_run=args.dry_run)
+    result = open_objects(args).backend.prune(older, size, dry_run=args.dry_run)
     verb = "would remove" if args.dry_run else "removed"
-    print(f"{verb} {len(result['versions'])} versions and {result['blobs']} blobs ({describe_size(result['freed'])}); "
-          f"the cache holds {describe_size(result['size'])}")
+    print(f"{verb} {len(result['versions'])} read-only folders and {result['blobs']} blobs ({describe_size(result['freed'])}); "
+          f"the repo holds {describe_size(result['size'])}")
 
 
 def cmd_verify(args) -> None:
-    from .store import LocalRepo, StoreError
+    from .store import StoreError
 
-    if sum(bool(item) for item in (args.ref, args.cache, args.store is not None, args.all)) > 1:
-        raise SystemExit("verify takes one of REF, --cache, --store, --all")
-    if args.repair and (args.store is not None or args.ref):
-        raise SystemExit("--repair only repairs the cache (--cache or --all)")
+    if args.ref and args.repo is not None:
+        raise SystemExit("verify takes a REF or --repo FOLDER, not both")
     try:
-        if args.store:  # a store root given: no configuration needed
-            if not (args.store / "store.json").is_file():
-                raise SystemExit(f"{args.store} is not a store root (no store.json)")
-            report = LocalRepo(args.store, allow_network_fs=True).verify()  # only reads
+        if args.repo is not None:  # a repo folder on this machine (a server's): no configuration needed
+            if not (args.repo / "repo.json").is_file():
+                raise SystemExit(f"{args.repo} is not a repo (no repo.json)")
+            from .client.open import open_folder
+
+            report = open_folder(args.repo).verify(None, repair=args.repair)
         else:
-            report = open_objects(args).verify(args.ref, cache=args.cache, store=args.store is not None, all=args.all, repair=args.repair)
+            report = open_objects(args).verify(args.ref, repair=args.repair)
     except (StoreError, ValueError) as error:
         raise SystemExit(f"error: {error}") from None
     for line in report.lines():
@@ -460,12 +449,10 @@ def cmd_server(args) -> None:
     if interval is not None and interval <= 0:
         raise SystemExit("--gc-interval must be longer than 0")
     root = args.root
-    if root is None:  # the project's own store folder (.cairn/store by default)
-        config = load_config(args.project)
-        if config.store.get("url"):
-            raise SystemExit(f"this project's store is the server {config.store['url']}; to serve a folder: cairn server <folder>")
-        protect(config.cairn_dir, config.store_path)
-        root = config.store_path
+    if root is None:  # the project's own repo (.cairn by default)
+        from .client.open import served_root
+
+        root = served_root(load_config(args.project))
     serve_store(root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3), no_auth=args.no_auth,
                 ui_port=None if args.no_ui else args.ui_port if args.ui_port is not None else args.port + 1 if args.port else 0,
                 allow_network_fs=args.allow_network_fs, gc_interval=interval, gc_grace=grace)
@@ -474,49 +461,34 @@ def cmd_server(args) -> None:
 def cmd_ui(args) -> None:
     from .ui import open_backend, serve_ui
 
+    if args.remote and args.repo:
+        raise SystemExit("ui takes --remote URL or --repo FOLDER, not both")
     config = None
     try:
         config = with_options(load_config(args.project), args)
     except (SystemExit, ValueError):
-        if args.store is None:
+        if not (args.remote or args.repo):
             raise
-    from .client.http import connect
-    from .store.tokens import init_root
+    backend = open_backend(args.remote, args.repo, config, no_auth=args.no_auth, allow_http=args.allow_http)
+    login = getattr(backend, "owner", "")  # the token the one-time login link logs in with
+    if not login and not args.no_auth:
+        from .client.open import client
 
-    login = ""  # the token the one-time login link logs in with
-    if args.store is None and not config.store.get("url"):  # the project's own store folder (.cairn/store), opened directly
-        root = config.store_path
-        protect(config.cairn_dir, root)
-        if not args.no_auth and not (root / "token").is_file():
-            print(f"Created store {root} with a new owner token ({init_root(root)}, owner-only)", flush=True)
-        backend = open_backend(None, config, no_auth=args.no_auth, allow_http=args.allow_http)
-        login = getattr(backend, "owner", "")
-    else:
-        backend = open_backend(args.store, config, no_auth=args.no_auth, allow_http=args.allow_http)
-        login = getattr(backend, "owner", "")
-        if not login and not args.no_auth:
-            try:
-                login = connect(config, args.store, args.allow_http).token  # CAIRN_STORE_TOKEN or [store] token_file
-            except SystemExit:
-                login = ""
+        try:
+            login = client(config, args.remote, allow_http=args.allow_http).token  # CAIRN_TOKEN or [repo] token_file
+        except SystemExit:
+            login = ""
     serve_ui(backend, host=args.host, port=args.port, no_auth=args.no_auth, secure_cookie=not args.insecure_cookies,
              login_token=login, open_browser=not args.no_browser)
-
-
-def cmd_migrate(args) -> None:
-    from .migrate import migrate
-
-    for line in migrate(args.old_root, args.new_root):
-        print(line)
 
 
 def cmd_export_metadata(args) -> None:
     from .store import LocalRepo
 
     root = args.root
-    if not (root / "store.json").is_file():
-        raise SystemExit(f"{root} is not a store root (no store.json)")
-    counts = LocalRepo(root).export_metadata(args.folder)
+    if not (root / "repo.json").is_file():
+        raise SystemExit(f"{root} is not a repo (no repo.json)")
+    counts = LocalRepo(root, allow_network_fs=True).export_metadata(args.folder)  # only reads
     for file, count in counts.items():
         print(f"{args.folder / file}  {count} rows")
 
@@ -556,7 +528,7 @@ def cmd_finalize_study(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="cairn", description="Cairn: an artifact store for research, with a server and a UI: runs and their results as versioned artifacts, and reports built from pinned artifacts.")
+    parser = argparse.ArgumentParser(prog="cairn", description="Cairn: a repo of versioned artifacts for research (runs, their results, reports built from pinned artifacts), with an optional remote, a server, and a UI.")
     parser.add_argument("--version", action="version", version=f"cairn {__version__}")
     parser.add_argument("--project", type=Path, help="project root (default: nearest folder with cairn.toml, pixi.toml, or pyproject.toml)")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -606,16 +578,16 @@ def main(argv: list[str] | None = None) -> None:
     publish.add_argument("--interval", type=float, help=argparse.SUPPRESS)
     publish.set_defaults(run=cmd_publish)
 
-    publish.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
+    publish.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
     pull = commands.add_parser("pull", help="materialize an artifact version locally and print its path")
     pull.add_argument("ref", help="[project:]name[@vN|@alias|@label][//file], e.g. datasets/crops@v3")
     pull.add_argument("--into", type=Path, help="copy it into this folder instead of printing the read-only path")
     pull.add_argument("--no-record", action="store_true", help="do not append the version to the inputs file ($CAIRN_INPUTS or .cairn-inputs.jsonl)")
-    pull.add_argument("--offline", action="store_true", help="do not ask the store server: pending versions of this machine, exact versions from the cache, aliases by their last known resolution")
-    pull.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
+    pull.add_argument("--offline", action="store_true", help="do not ask the remote: the repo's pending versions, its copies, and its mirrored aliases")
+    pull.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
     pull.set_defaults(run=cmd_pull)
 
-    project = commands.add_parser("project", help="list, create, show, or edit the store's projects")
+    project = commands.add_parser("project", help="list, create, show, or edit the repo's projects")
     project_commands = project.add_subparsers(dest="project_command", required=True)
     project_commands.add_parser("list", help="every project with its artifact count").set_defaults(run=cmd_project)
     for verb, text in (("create", "create a project (an existing one is left as is)"), ("show", "a project and its artifacts"),
@@ -636,7 +608,7 @@ def main(argv: list[str] | None = None) -> None:
 
     artifacts = commands.add_parser("artifacts", help="the artifacts of a project (latest version, versions, aliases)")
     artifacts.add_argument("--prefix", help="only names starting with this, e.g. reports/")
-    artifacts.add_argument("--project", dest="store_project", help="the store project (default: [store] project)")
+    artifacts.add_argument("--project", dest="store_project", help="the project (default: [repo] project)")
     artifacts.set_defaults(run=cmd_artifacts)
     versions = commands.add_parser("versions", help="every version of an artifact: number, status, label, created, uid, size")
     versions.add_argument("name", help="[project:]name")
@@ -660,7 +632,7 @@ def main(argv: list[str] | None = None) -> None:
     retention_commands = retention.add_subparsers(dest="retention_command", required=True)
     for verb, text in (("show", "a project's rules"), ("set", "add or replace the rule for a prefix"), ("clear", "remove the rule for a prefix")):
         command = retention_commands.add_parser(verb, help=text)
-        command.add_argument("store_project", metavar="project", help="the store project")
+        command.add_argument("store_project", metavar="project", help="the project")
         if verb != "show":
             command.add_argument("--prefix", default="", help="artifact names starting with this, e.g. runs/ (default: every artifact)")
         if verb == "set":
@@ -670,55 +642,45 @@ def main(argv: list[str] | None = None) -> None:
                                  help="aliased versions take a --keep-last place like any other (they are still never deleted)")
         command.add_argument("--allow-http", action="store_true", help=argparse.SUPPRESS)
         command.set_defaults(run=cmd_retention)
-    gc = commands.add_parser("gc", help="apply the retention rules and remove blobs no version names (a store root, or the configured store)")
-    gc.add_argument("root", nargs="?", type=Path, help="a store root on this machine (default: the configured store; a server needs the owner token)")
+    gc = commands.add_parser("gc", help="apply the retention rules and remove blobs no version names (the project's repo, its remote, or a repo folder)")
+    gc.add_argument("root", nargs="?", type=Path, help="a repo folder on this machine (default: the project's repo, or its remote: the owner token)")
     gc.add_argument("--dry-run", action="store_true", help="only say what would be deleted and freed")
     gc.add_argument("--grace", default="24h", help="keep unreferenced blobs younger than this, e.g. 24h, 30m (default: 24h)")
     gc.set_defaults(run=cmd_gc)
-    sync = commands.add_parser("sync", help="send this machine's pending versions to the store server now, and refresh known aliases")
+    sync = commands.add_parser("sync", help="send the repo's pending versions to its remote now, and mirror the remote's aliases")
+    sync.add_argument("--watch", action="store_true", help="keep going every [repo] interval seconds (a login node's sender)")
     sync.set_defaults(run=cmd_sync)
-    status = commands.add_parser("status", help="this machine's versions the store server does not have yet: pending, running, rejected")
-    status.add_argument("--all", action="store_true", help="every version in the replica (synced ones in the cache too), of every server")
+    status = commands.add_parser("status", help="the repo's versions its remote does not have yet: pending, running, rejected")
     status.set_defaults(run=cmd_status)
-    prune = commands.add_parser("prune", help="trim the cache root by last access (pending and running versions are never touched)")
-    prune.add_argument("--older-than", help="remove synced versions not pulled for this long, e.g. 30d, 12h (default: 30d)")
-    prune.add_argument("--max-size", help="then remove the least recently pulled until the cache is under this, e.g. 20G")
+    prune = commands.add_parser("prune", help="trim the repo's read-only folders, and contents only copies of the remote's versions need, by last access")
+    prune.add_argument("--older-than", help="remove folders not pulled for this long, e.g. 30d, 12h (default: 30d)")
+    prune.add_argument("--max-size", help="then remove the least recently pulled until the repo is under this, e.g. 20G")
     prune.add_argument("--dry-run", action="store_true", help="only say what would be removed")
     prune.set_defaults(run=cmd_prune)
-    for command in (sync, status):
-        command.add_argument("--data-dir", type=Path, help="the data root to use (default: $CAIRN_DATA_DIR, else <project>/.cairn/pending, else ~/.local/share/cairn): "
-                             "send the pending versions kept there")
-    for command in (artifacts, versions, show, sync, status, delete, gc):
-        command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
+    for command in (artifacts, versions, show, sync, status, delete, gc, prune):
+        command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
 
-    verify = commands.add_parser("verify", help="re-hash cached and pending versions, or a local store's blobs and versions; exit 1 on any problem")
+    verify = commands.add_parser("verify", help="re-hash what the repo holds (blobs, versions, read-only folders, the outbox); exit 1 on any problem")
     verify.add_argument("ref", nargs="?", help="[project:]name[@vN|@uid|@alias|@label]: one version")
-    verify.add_argument("--cache", action="store_true", help="the pull cache and the pending versions (the default)")
-    verify.add_argument("--store", nargs="?", const="", default=None, type=Path,
-                        help="a local store: its blobs and versions (give the store root, or none for the configured local store)")
-    verify.add_argument("--all", action="store_true", help="the cache, the pending versions, and the configured local store")
-    verify.add_argument("--repair", action="store_true", help="cache only: remove broken cached versions and blobs, so the next pull downloads them again")
-    verify.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
+    verify.add_argument("--repo", type=Path, help="a repo folder on this machine instead of the project's (a server's)")
+    verify.add_argument("--repair", action="store_true", help="remove what can be made again (broken read-only folders; broken contents of a remote's versions), never the only copy")
+    verify.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
     verify.set_defaults(run=cmd_verify)
 
-    store_serve = commands.add_parser("server", help="serve a store folder (a new one gets an owner token); put an HTTPS reverse proxy in front")
-    store_serve.add_argument("root", type=Path, nargs="?", help="the store folder (default: the project's, .cairn/store; created if new)")
+    store_serve = commands.add_parser("server", help="serve a repo to other machines (a new one gets an owner token); put an HTTPS reverse proxy in front")
+    store_serve.add_argument("root", type=Path, nargs="?", help="the repo folder (default: the project's, .cairn; created if new)")
     store_serve.add_argument("--host", default="127.0.0.1")
-    store_serve.add_argument("--port", type=int, default=8800)
+    store_serve.add_argument("--port", type=int, default=8800, help="the port; a taken port is an error (clients' [repo] remote names it)")
     store_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
     store_serve.add_argument("--no-auth", action="store_true", help="no token, everyone acts as the owner (local testing; loopback hosts only)")
-    store_serve.add_argument("--ui-port", type=int, help="port of the UI started beside the store (default: --port + 1)")
-    store_serve.add_argument("--no-ui", action="store_true", help="do not start `cairn ui` beside the store")
+    store_serve.add_argument("--ui-port", type=int, help="port of the UI started beside the server (default: --port + 1)")
+    store_serve.add_argument("--no-ui", action="store_true", help="do not start `cairn ui` beside the server")
     store_serve.add_argument("--allow-network-fs", action="store_true",
-                             help="serve a root on a network filesystem (NFS, Lustre, GPFS, SMB, ...): only if this server is its only writer")
+                             help="serve a repo on a network filesystem (NFS, Lustre, GPFS, SMB, ...): only if this server is its only writer")
     store_serve.add_argument("--gc-interval", help="collect garbage this often, e.g. 24h (retention rules, then unreferenced blobs; default: never)")
     store_serve.add_argument("--grace", default="24h", help="with --gc-interval: keep unreferenced blobs younger than this (default: 24h)")
     store_serve.set_defaults(run=cmd_server)
-    migrate = commands.add_parser("migrate", help="copy an old hub root into a store (the old root is not modified)")
-    migrate.add_argument("old_root", type=Path)
-    migrate.add_argument("new_root", type=Path, help="a new folder or an existing store")
-    migrate.set_defaults(run=cmd_migrate)
-    export_metadata = commands.add_parser("export-metadata", help="write a store root's metadata as readable JSON Lines "
+    export_metadata = commands.add_parser("export-metadata", help="write a repo's metadata as readable JSON Lines "
                                           "(projects, versions, the alias log, consumers), for backups and inspection")
     export_metadata.add_argument("root", type=Path)
     export_metadata.add_argument("folder", type=Path)
@@ -738,12 +700,13 @@ def main(argv: list[str] | None = None) -> None:
     token_revoke.add_argument("name")
     token_revoke.set_defaults(run=cmd_token_revoke)
 
-    ui = commands.add_parser("ui", help="explore a store in a browser: its projects, reports, artifacts, versions, and lineage")
-    ui.add_argument("--store", help="a store server URL or a store folder (default: [store] url or path in cairn.toml)")
+    ui = commands.add_parser("ui", help="explore the repo in a browser: its projects, reports, artifacts, versions (pending ones too), and lineage")
+    ui.add_argument("--remote", help="a remote's URL instead of the project's repo (e.g. from a laptop)")
+    ui.add_argument("--repo", type=Path, help="a repo folder on this machine instead of the project's (a server's)")
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8801)
-    ui.add_argument("--no-auth", action="store_true", help="no login: use CAIRN_STORE_TOKEN / [store] token_file (loopback hosts only)")
-    ui.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
+    ui.add_argument("--no-auth", action="store_true", help="no login: use CAIRN_TOKEN / [repo] token_file for a remote (loopback hosts only)")
+    ui.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
     ui.add_argument("--insecure-cookies", action="store_true", help="login over plain HTTP (SSH tunnel): the session cookie loses its Secure flag")
     ui.add_argument("--no-browser", action="store_true", help="do not open the one-time login link in a browser")
     ui.set_defaults(run=cmd_ui)
@@ -757,21 +720,26 @@ def main(argv: list[str] | None = None) -> None:
     args.command = command
     if command and args.run is not cmd_publish:
         parser.error("only `publish` takes a command after --")
-    from .store import cache
-
-    cache.use_data_dir(getattr(args, "data_dir", None))
-    if args.run in (cmd_publish, cmd_pull, cmd_project, cmd_artifacts, cmd_versions, cmd_show, cmd_status, cmd_build, cmd_drafts):
-        flush_first(args)
+    syncing = args.run in REPO_COMMANDS and not getattr(args, "offline", False)  # --offline: never ask the remote
+    if syncing:
+        sync_quietly(args)
     try:
         args.run(args)
     except Exception as error:  # an expected failure is one line; CAIRN_DEBUG=1 shows the traceback
         if os.environ.get("CAIRN_DEBUG") or not _expected(error):
             raise
         raise SystemExit(f"cairn: {error}") from None
+    finally:
+        if syncing:
+            sync_quietly(args)
+
+
+REPO_COMMANDS = {cmd_publish, cmd_pull, cmd_project, cmd_project_delete, cmd_artifacts, cmd_versions, cmd_show, cmd_alias, cmd_delete,
+                 cmd_retention, cmd_gc, cmd_status, cmd_prune, cmd_verify, cmd_build, cmd_drafts, cmd_finalize_study}
 
 
 def _expected(error: BaseException) -> bool:
-    """Store, client, and report-build errors are messages for the user, not crashes."""
+    """Repo, client, and report-build errors are messages for the user, not crashes."""
     from .store.errors import StoreError
 
     if isinstance(error, (StoreError, OSError)):

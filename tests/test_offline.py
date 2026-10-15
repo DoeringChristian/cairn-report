@@ -1,5 +1,5 @@
-"""Working while the store server is down: pending versions in the replica, `cairn sync` and `cairn status`, `--watch`,
-and offline pulls."""
+"""Working while the remote is down: pending versions in the repo's outbox, `cairn sync` and `cairn status`, `--watch`,
+and pulls answered by the repo."""
 
 import json
 import shutil
@@ -20,13 +20,13 @@ from test_store import env, folder  # noqa: F401
 
 @pytest.fixture
 def down(env, tmp_path, monkeypatch):
-    """A configured store server that is not running yet (start it with `down.start()`)."""
+    """A configured remote that is not running yet (start it with `down.start()`)."""
     server = Server(tmp_path / "store-root")
-    monkeypatch.setenv("CAIRN_STORE_TOKEN", server.token)
-    (env / "cairn.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\n')
-    import cairn.client.sync as sync
+    monkeypatch.setenv("CAIRN_TOKEN", server.token)
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "study"\n')
+    import cairn.client.repo as repo
 
-    monkeypatch.setattr(sync, "start_uploader", lambda *args, **kwargs: None)  # tests flush by hand
+    monkeypatch.setattr(repo, "start_uploader", lambda *args, **kwargs: None)  # tests sync by hand
     yield server
     server.stop()
 
@@ -43,8 +43,8 @@ def run(capsys, *argv, code=None):
 
 
 def record_file(env, uid):
-    """A pending version's record in the data root."""
-    return env.parent / "data" / "versions" / uid / "manifest.json"
+    """A pending version's outbox entry in the repo."""
+    return env / ".cairn" / "outbox" / uid / "manifest.json"
 
 
 # ---------------------------------------------------------- pending versions
@@ -85,8 +85,8 @@ def test_resending_a_record_creates_no_second_version(down, env, capsys):
     saved = file.read_text()
     down.start()
     assert [record["uid"] for record in store.sync()["sent"]] == [version.uid]
-    assert not [blob for blob in (env.parent / "data" / "blobs").rglob("*") if blob.is_file()]  # staged blobs left
-    assert not file.parent.exists()  # promoted into the cache
+    assert not file.parent.exists()  # sent: the entry left the outbox, the repo has the copy with its number
+    assert store.backend.copies.get_version("study", "data", version.uid)["version"] == 1
     file.parent.mkdir(parents=True)
     file.write_text(saved)
     assert len(store.sync()["sent"]) == 1
@@ -104,8 +104,8 @@ def test_any_cli_command_sends_pending_versions_first(down, env, capsys):
 
 def test_background_uploader_sends_when_the_server_answers(env, tmp_path, monkeypatch, capsys):
     server = Server(tmp_path / "store-root")
-    monkeypatch.setenv("CAIRN_STORE_TOKEN", server.token)
-    (env / "cairn.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\n')
+    monkeypatch.setenv("CAIRN_TOKEN", server.token)
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "study"\n')
     version = cairn.connect().artifact("data").publish(folder(env, "d", {"a.txt": "1"}))
     assert version.number is None
     server.start()
@@ -171,13 +171,10 @@ def test_watch_failure_while_down_is_queued_as_failed(down, env, capsys):
 
 
 def test_a_dead_watch_job_is_failed_not_left_running(down, env, capsys):
-    from cairn.client.sync import Replica
-
     store = cairn.connect()
-    replica = Replica(store.backend)
-    record = replica.add("running", "study", "sweep", label="job")
+    record = store.backend._new_entry("running", "study", "sweep", label="job")
     record["owner"]["pid"] = 2**22 + 12345  # a process that no longer exists
-    replica.save(record)
+    store.backend.outbox.save(record)
     down.start()
     out = run(capsys, "sync")[0]
     assert "failing study:sweep@" in out and "is gone" in out
@@ -195,7 +192,7 @@ def test_offline_pulls_of_exact_and_alias_refs(down, env, capsys, monkeypatch):
     assert (cairn.pull("data@best//a.txt", record=False)).read_text() == "one"
     before = len(down.requests)
     assert (cairn.pull("data@v1", record=False) / "a.txt").read_text() == "one"
-    assert len(down.requests) == before  # an exact version in the cache needs no server
+    assert len(down.requests) == before  # an exact version the repo has needs no remote
     down.stop()
 
     inputs = env / "inputs.jsonl"
@@ -203,7 +200,7 @@ def test_offline_pulls_of_exact_and_alias_refs(down, env, capsys, monkeypatch):
     assert (cairn.pull(f"data@{v1.uid}//a.txt")).read_text() == "one"
     assert (cairn.pull("data@best") / "a.txt").read_text() == "one"
     err = capsys.readouterr().err
-    assert "does not answer" in err and "last known resolution of study:data@best: study:data@v1" in err
+    assert "does not answer" in err and f"using the repo's study:data@v1 (uid {v1.uid}) for study:data@best" in err
     assert [json.loads(line)["ref"] for line in inputs.read_text().splitlines()] == ["study:data@v1", "study:data@v1"]
     with pytest.raises(cairn.Unreachable):
         cairn.pull("data@v9")
@@ -211,15 +208,14 @@ def test_offline_pulls_of_exact_and_alias_refs(down, env, capsys, monkeypatch):
         cairn.pull("data@never-pulled")
 
     down.start()  # --offline: the fallback even though the server answers
-    with monkeypatch.context() as other:  # another machine (its own replica) moves best
-        other.setenv("CAIRN_DATA_DIR", str(env.parent / "other-data"))
-        other.setenv("CAIRN_CACHE_DIR", str(env.parent / "other-cache"))
+    with monkeypatch.context() as other:  # another machine (its own repo) moves best
+        other.setenv("CAIRN_DIR", str(env.parent / "other-repo"))
         cairn.connect(down.url, token=down.token, project="study").artifact("data").publish(
             folder(env, "d2", {"a.txt": "two"}), aliases=["best"])
     capsys.readouterr()
     before = len(down.requests)
     out, err = run(capsys, "--project", str(env), "pull", "data@best", "--offline", "--no-record")
-    assert (Path(out.strip()) / "a.txt").read_text() == "one" and "offline; using the last known resolution" in err
+    assert (Path(out.strip()) / "a.txt").read_text() == "one" and "offline; using the repo's study:data@v1" in err
     assert len(down.requests) == before
     assert (cairn.pull("data@best//a.txt", record=False)).read_text() == "two"  # online, it asks again
 
@@ -238,7 +234,7 @@ def test_report_inputs_fall_back_while_down(down, env, capsys):
     down.stop()
     capsys.readouterr()
     build_all(load_config(env))
-    assert "last known resolution of study:data@best: study:data@v1" in capsys.readouterr().err
+    assert "using the repo's study:data@v1" in capsys.readouterr().err
     narrative = (env / ".cairn" / "build" / "r" / "narrative.html").read_text()
     assert "42" in narrative
     shutil.rmtree(env / ".cairn" / "build")

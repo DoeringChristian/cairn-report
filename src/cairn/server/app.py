@@ -1,9 +1,10 @@
-"""The store server: a LocalRepo root shared over HTTP, behind tokens. Only an artifact store: a JSON API and
-file downloads, no pages (`cairn ui` explores a store in a browser, locally or against this server).
+"""`cairn server`: a repo (a LocalRepo folder) shared over HTTP, behind tokens: the remote of other machines' repos.
+Only a JSON API and file downloads, no pages (`cairn ui` explores a repo in a browser, locally or against this server).
 
-    cairn server <root> [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth] [--gc-interval 24h]
+    cairn server [repo] [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth] [--gc-interval 24h]
 
-A new root gets a fresh owner token on first launch; every launch prints `Store: <url>` and
+Processes on the server's machine keep opening the repo directly, whether the server runs or not; the server is one
+more such process. A new repo gets a fresh owner token on first launch; every launch prints `Repo: <url>` and
 `Token: <owner token>` to the terminal (never into a URL). Scoped tokens (one project, read or
 write) are made with `cairn token create` (see tokens.py). Bind localhost, and put an
 HTTPS reverse proxy in front of anything else: the server speaks plain HTTP.
@@ -11,7 +12,7 @@ HTTPS reverse proxy in front of anything else: the server speaks plain HTTP.
 Artifact names are slash paths (`datasets/crops`), so every route says where the name ends:
 
     API (JSON, `Authorization: Bearer <token>`; a name is ONE percent-encoded path segment, `datasets%2Fcrops`)
-      GET  /api/v2/store                                         {uid, version}: the store's uid and the server's version
+      GET  /api/v2/repo                                          {uid, version}: the repo's uid and the server's version
       GET  /api/v2/projects                                      [{..., artifacts, updated}]   POST {name, title?, description?}
       GET  /api/v2/projects/<p>                                  PATCH {title?, description?}
       GET  /api/v2/projects/<p>/artifacts                        [{name, latest, versions, aliases, updated, metadata}]
@@ -41,7 +42,7 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
 
 References in the API are `project:name[@selector]` (the project is required: the server has no default).
 A client may supply a version's `uid` (UUIDv7) when it creates it: sending the same version again is
-answered with the version it made (a client's local replica can retry safely), and a known uid with different content
+answered with the version it made (a repo sending its outbox can retry safely), and a known uid with different content
 is refused with 409.
 
 Tokens are bearer tokens only: there are no cookies and no pages. A version never changes once final, except to
@@ -79,7 +80,6 @@ from ..store.gc import GRACE, describe_bytes, parse_duration
 from ..store.blobs import SHA256, clean_entries
 from ..store.db import ServerLock
 from ..store.digest import PREFIX as DIGEST_PREFIX
-from ..store.fs import network_filesystem
 from ..store.tokens import OWNER, Principal, Tokens, init_root, read_token
 from ..store.uids import UID, valid_uid
 from .auth import Auth, HttpError, allow
@@ -310,7 +310,7 @@ class StoreApp:
             raise HttpError(404, "the API lives under /api/v2/")
         store = self.store
         match segments[3:]:
-            case ["store"]:
+            case ["repo"]:
                 return _json(200, {"uid": store.uid, "version": __version__})
             case ["projects"]:
                 return _json(200, [item for item in store.overviews() if principal.can(item["name"])])
@@ -683,35 +683,24 @@ class StoreServer:
             self.lock.release()
 
 
-def _network_root(root: Path, allowed: bool) -> bool:
-    """True if `root` lies on a network filesystem and that is allowed; SystemExit if it is not allowed."""
-    fstype = network_filesystem(root)
-    if fstype and not allowed:
-        raise SystemExit(f"{root} is on a network filesystem ({fstype}): appends, locks, and file timestamps there are not "
-                         "safe between hosts, so a store root must live on a local disk of the machine running "
-                         "`cairn server`. If this server is the only process that ever writes the root, pass "
-                         "--allow-network-fs.")
-    return bool(fstype)
-
-
 def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
                 no_auth: bool = False, allow_network_fs: bool = False) -> StoreServer:
-    """A bound store server (not yet serving) for a root that has its owner token. With no_auth every
-    request acts as the owner, so it is refused on any address but this machine's loopback. A root on a
-    network filesystem is refused unless `allow_network_fs` (this server is then its only writer; see store/fs.py)."""
+    """A bound server (not yet serving) for a repo that has its owner token. With no_auth every request acts as the
+    owner, so it is refused on any address but this machine's loopback. A repo on a network filesystem is refused
+    (by LocalRepo) unless `allow_network_fs` (this server is then its only writer; see store/fs.py)."""
     _require_extra()
     if no_auth and host not in LOCAL_HOSTS:
         raise SystemExit("--no-auth serves every project to anyone who can connect: only with a loopback --host")
     root = root.resolve()
     if not (root / "token").is_file():
-        raise SystemExit(f"{root} is not a store root; `cairn server {root}` creates it")
-    if _network_root(root, allow_network_fs):
-        print(f"warning: {root} is on a network filesystem ({network_filesystem(root)}); this server must be the only "
-              "process writing it", file=sys.stderr, flush=True)
+        raise SystemExit(f"{root} is not a repo with a token; `cairn server {root}` creates it")
     lock = ServerLock(root)
     lock.acquire()  # one server per root, and other processes leave its metadata alone (store/db.py)
     try:
-        store = LocalRepo(root, allow_network_fs=True)  # checked above
+        try:
+            store = LocalRepo(root, allow_network_fs=allow_network_fs)
+        except StoreError as error:
+            raise SystemExit(f"cairn: {error}") from None
         app = StoreApp(store, Auth(read_token(root / "token"), Tokens(root), no_auth), max_blob)
         server = StoreServer(app, host, port, app.auth.owner_token)
     except BaseException:
@@ -729,15 +718,18 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     port), `cairn ui` runs as a child process beside the store and stops with it. With `gc_interval` (seconds),
     garbage collection (retention rules, then blobs older than `gc_grace`) runs that often."""
     _require_extra()
-    _network_root(root, allow_network_fs)  # refused before anything is created
+    try:
+        LocalRepo(root, allow_network_fs=allow_network_fs)  # refused on a network filesystem before anything is written
+    except StoreError as error:
+        raise SystemExit(f"cairn: {error}") from None
     created = None if (root / "token").exists() else init_root(root)
     server = make_server(root, host, port, max_blob=max_blob, no_auth=no_auth, allow_network_fs=allow_network_fs)
     if host not in LOCAL_HOSTS:
         print("warning: the store serves plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
     if created:
-        print(f"Created store {root.resolve()} with a new owner token ({created}, owner-only)", flush=True)
+        print(f"Created the repo {root.resolve()} with a new owner token ({created}, owner-only)", flush=True)
     actual = server.server_address[1]
-    print(f"Store: http://{host}:{actual}/ (data in {root.resolve()})", flush=True)
+    print(f"Repo: http://{host}:{actual}/ (the repo {root.resolve()})", flush=True)
     child = None
     if ui_port is not None:
         child, line = start_ui(host, actual, ui_port, server.owner_token, no_auth)
@@ -750,7 +742,7 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         print("Authentication is off (--no-auth): every request acts as the owner; for local testing only", flush=True)
     else:
         print(f"Token: {server.owner_token}", flush=True)
-        print("  clients read it from CAIRN_STORE_TOKEN or a token_file, and `cairn ui` logs in with it;"
+        print("  clients read it from CAIRN_TOKEN or [repo] token_file, and `cairn ui` logs in with it;"
               " `cairn token create` makes project-scoped tokens", flush=True)
     if gc_interval:
         gc_schedule(server.app, gc_interval, gc_grace)

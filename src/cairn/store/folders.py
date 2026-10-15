@@ -1,23 +1,19 @@
-"""The local replica's two roots, and the cache half of it: read-only copies of versions, keyed by version uid.
+"""The read-only folders of versions that `pull` returns, in a repo, keyed by version uid.
 
-    <cache>/versions/<uid>/manifest.json   the record: {"uid", "sync": "synced", "store", "project", "name",
-                                           "version", "manifest", "accessed"}
-    <cache>/versions/<uid>/files/          the version's files, read-only: what `pull` returns
-    <cache>/blobs/<aa>/<sha256>            file contents downloaded from a store server
-    <data>/...                             versions not on the server yet (cairn.client.replica)
+    <repo>/versions/<uid>/manifest.json   the record: {"uid", "sync": "synced", "repo" (the uid of the repo or remote
+                                          the version is from), "project", "name", "version", "manifest",
+                                          "accessed", "accessed_at"}
+    <repo>/versions/<uid>/files/          the version's files, read-only: what `pull` returns
+    <repo>/blobs/<aa>/<sha256>            the contents they are made from (blobs.py)
 
-`<cache>` is throwaway: `$CAIRN_CACHE_DIR`, else `<base>/cache` (the project's `.cairn/`, see config.py),
-else `$XDG_CACHE_HOME/cairn` outside a project; on a cluster it may be node-local scratch, and `cairn
-prune` trims it. `<data>` is durable (the data root): `--data-dir`, else `$CAIRN_DATA_DIR`, else
-`<base>/pending`, else `$XDG_DATA_HOME/cairn` (`~/.local/share/cairn`) outside a project. It holds what only
-this machine has (pending versions and their blobs; real data, not a cache) and must sit on persistent
-storage with room for it. A version's folder is named by its uid, never by project, name, and number, so
-two stores never collide.
+A version folder is named by its uid, never by project, name, and number, so versions from several projects never collide. The folders are
+derived from the blobs: deleting one loses nothing (the next pull makes it again), and `cairn prune` trims them.
 
-Either root may sit on NFS and be filled by many jobs at once, so nothing locks: a folder, a blob, or a
-record is written under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place in
-one step. If a version folder appeared meanwhile, another process won the race and its copy is used;
-ours is discarded. Only renamed folders are ever visible, so a reader never sees a half-written version.
+The repo may sit on a network filesystem (a cluster's shared project space, with an outbox and no database) and be
+filled by many jobs at once, so nothing here locks: a folder, a blob, or a record is written under a scratch name
+(`<target>.tmp-<host>-<pid>-<random>`) and renamed into place in one step. If a version folder appeared meanwhile,
+another process won the race and its copy is used; ours is discarded. Only renamed folders are ever visible, so a
+reader never sees a half-written version.
 """
 
 from __future__ import annotations
@@ -28,10 +24,8 @@ import secrets
 import shutil
 import socket
 import time
-from contextlib import contextmanager
 from pathlib import Path
 
-from ..config import cairn_base, protect
 from . import refs
 from .blobs import now
 from .digest import manifest_digest, sha256_file
@@ -39,58 +33,9 @@ from .errors import NotFound, StoreError
 from .fs import clone
 from .inputs import record_input
 
-CACHE_ENV = "CAIRN_CACHE_DIR"
-DATA_ENV = "CAIRN_DATA_DIR"
 RECORD = "manifest.json"  # a version folder's record; the folder counts only once it exists
 FILES = "files"
 ACCESS_EVERY = 60.0  # seconds: how stale `accessed` may get before a pull rewrites it
-
-_override: dict[str, Path | None] = {"data": None}
-
-
-def use_data_dir(path: Path | str | None) -> None:
-    """Use this folder as the data root, whatever the environment says (`cairn sync --data-dir`); None resets."""
-    _override["data"] = Path(path).expanduser().resolve() if path else None
-
-
-@contextmanager
-def data_root_at(path: Path | str):
-    """Use `path` as the data root inside the block (to look at a second root)."""
-    before = _override["data"]
-    use_data_dir(path)
-    try:
-        yield
-    finally:
-        _override["data"] = before
-
-
-def cache_root() -> Path:
-    """`$CAIRN_CACHE_DIR`, else `<base>/cache`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`."""
-    if os.environ.get(CACHE_ENV):
-        return Path(os.environ[CACHE_ENV]).expanduser()
-    base = cairn_base()
-    if base:
-        protect(base)
-        return base / "cache"
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "cairn"
-
-
-def global_data_root() -> Path:
-    """`$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`: the data root outside a project."""
-    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "cairn"
-
-
-def data_root() -> Path:
-    """`--data-dir`, else `$CAIRN_DATA_DIR`, else `<base>/pending`, else `$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`."""
-    if _override["data"] is not None:
-        return _override["data"]
-    if os.environ.get(DATA_ENV):
-        return Path(os.environ[DATA_ENV]).expanduser()
-    base = cairn_base()
-    if base:
-        protect(base)
-        return base / "pending"
-    return global_data_root()
 
 
 def hostname() -> str:
@@ -112,10 +57,6 @@ def scratch(target: Path) -> Path:
     """A private name beside `target` to build it under: host, pid, and a random suffix (unique on NFS too)."""
     host = "".join(char if char.isalnum() or char in "-_" else "_" for char in hostname())[:40] or "host"
     return target.with_name(f"{target.name}.tmp-{host}-{os.getpid()}-{secrets.token_hex(4)}")
-
-
-def blob_cache(root: Path | str, sha: str) -> Path:
-    return Path(root) / "blobs" / sha[:2] / sha
 
 
 def place(temporary: Path, target: Path) -> bool:
@@ -163,17 +104,31 @@ def read_record(folder: Path) -> dict | None:
     return record if isinstance(record, dict) and record.get("uid") else None
 
 
-def cached(uid: str | None) -> dict | None:
-    """The record of a synced version in the cache (with `manifest`), or None."""
+def update_record(root: Path | str, manifest: dict, repo: str | None = None) -> None:
+    """The version a folder was made from got its final manifest (the remote numbered it): the folder's record says so
+    from now on. Never raises (the record only describes the folder)."""
+    folder = version_folder(root, manifest["uid"])
+    record = read_record(folder)
+    if record is None or record.get("manifest") == manifest:
+        return
+    try:
+        write_json(folder / RECORD, {**record, "version": manifest.get("version"), "manifest": manifest,
+                                     **({"repo": repo} if repo else {})})
+    except OSError:
+        pass
+
+
+def cached(root: Path | str, uid: str | None) -> dict | None:
+    """The record of a version folder `pull` made in the repo `root` (with `manifest`), or None."""
     if not uid:
         return None
-    folder = version_folder(cache_root(), uid)
+    folder = version_folder(root, uid)
     record = read_record(folder)
     return record if record and record.get("sync") == "synced" and (folder / FILES).is_dir() else None
 
 
 def touch(folder: Path, record: dict | None = None) -> None:
-    """Note that a cached version was used now (`accessed`, what `cairn prune` goes by); throttled, never fails."""
+    """Note that a version folder was used now (`accessed`, what `cairn prune` goes by); throttled, never fails."""
     record = record or read_record(folder)
     if not record or record.get("sync") != "synced":
         return
@@ -251,18 +206,18 @@ def install(build: Path, folder: Path) -> None:
             raise
 
 
-def materialize_version(store, project: str, name: str, version: dict, cache_root: Path | str) -> Path:
-    """Write a resolved version's files into the cache (once) and return its `files/` folder.
+def materialize_version(store, project: str, name: str, version: dict, root: Path | str) -> Path:
+    """Write a resolved version's files into the repo `root` (once) and return its `files/` folder.
 
-    Files are cloned (copy-on-write) from the store's blobs (a remote store keeps them in the blob cache),
-    else hard-linked when both are on one filesystem, else copied, and always made read-only (see `place_file`:
-    a hard link shares its blob). Each file and the manifest digest are verified (`link_files`); a mismatch fails
-    the pull and removes the partial folder. The folder is built under a scratch name and renamed into place (see the module doc).
+    Files are cloned (copy-on-write) from the repo's blobs (`store.blob_file` downloads a remote's into them
+    first), else hard-linked, else copied, and always made read-only (see `place_file`: a hard link shares its
+    blob). Each file and the manifest digest are verified (`link_files`); a mismatch fails the pull and removes
+    the partial folder. The folder is built under a scratch name and renamed into place (see the module doc).
     """
     uid = version.get("uid")
     if not uid:
-        raise StoreError(f"{project}:{name}@v{version['version']} has no uid: the store server is older than this client")
-    folder = version_folder(cache_root, uid)
+        raise StoreError(f"{project}:{name}@v{version['version']} has no uid")
+    folder = version_folder(root, uid)
     record = read_record(folder)
     if record and (folder / FILES).is_dir():
         touch(folder, record)
@@ -271,9 +226,10 @@ def materialize_version(store, project: str, name: str, version: dict, cache_roo
     build = scratch(folder)
     try:
         build.mkdir()
-        link_files(version["files"], build / FILES, lambda entry: store.blob_file(project, name, version["version"], entry, cache_root),
-                   version.get("digest"), refs.exact(project, name, version["version"]))
-        write_json(build / RECORD, {"uid": uid, "sync": "synced", "store": getattr(store, "uid", None), "project": project,
+        label = refs.exact(project, name, version["version"]) if version.get("version") is not None else f"{project}:{name}@{uid}"
+        link_files(version["files"], build / FILES, lambda entry: store.blob_file(project, name, version["version"], entry, root),
+                   version.get("digest"), label)
+        write_json(build / RECORD, {"uid": uid, "sync": "synced", "repo": getattr(store, "uid", None), "project": project,
                                     "name": name, "version": version["version"], "manifest": version, "accessed": now(),
                                     "accessed_at": time.time()})
         install(build, folder)
@@ -297,23 +253,23 @@ def inside(folder: Path, ref: refs.Ref, label: str) -> Path:
     return target
 
 
-def materialize(store, ref, cache_root: Path | str) -> Path:
-    """Resolve `ref`, materialize its version, and return the `files/` folder (or the file after `//`)."""
+def materialize(store, ref, root: Path | str) -> Path:
+    """Resolve `ref`, materialize its version in the repo `root`, and return the `files/` folder (or the file after `//`)."""
     ref = refs.parse(ref) if isinstance(ref, str) else ref
     project, name, version = store.resolve(ref)
-    folder = materialize_version(store, project, name, version, cache_root)
+    folder = materialize_version(store, project, name, version, root)
     return inside(folder, ref, refs.exact(project, name, version["version"]))
 
 
 def pull(store, ref: str, record: bool = True) -> Path:
-    """A read-only local copy of an artifact version (or of the file after `//`) from an open store.
+    """A read-only local copy of an artifact version (or of the file after `//`) from an open repo (LocalRepo).
 
     `record=False` leaves the inputs file alone: the report builder records a report's inputs in the
-    report's own manifest instead. (`cairn.pull` adds the replica's pending versions and offline fallbacks.)
+    report's own manifest instead. (`cairn.pull` adds the outbox's pending versions and the remote.)
     """
     parsed = refs.parse(ref)
     project, name, version = store.resolve(parsed)
-    folder = materialize_version(store, project, name, version, cache_root())
+    folder = materialize_version(store, project, name, version, store.root)
     path = inside(folder, parsed, refs.exact(project, name, version["version"]))
     if record:
         record_input(refs.exact(project, name, version["version"]))

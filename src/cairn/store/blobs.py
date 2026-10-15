@@ -1,8 +1,9 @@
 """Content-addressed blobs and the entry format every version manifest uses.
 
-    <root>/blobs/<aa>/<sha256-rest>     file contents, written once and verified; removed only by `gc` (gc.py)
-    <root>/projects/                    one folder per project (see local.py)
-    <root>/tmp/                         uploads in progress
+    <repo>/blobs/<aa>/<sha256>     file contents, written once (a temporary file renamed into place) and verified;
+                                   shared by every version, the outbox, and the read-only folders `pull` makes;
+                                   removed only by `gc` (gc.py) and `cairn prune` (client/prune.py)
+    <repo>/tmp/                    uploads in progress
 """
 
 from __future__ import annotations
@@ -184,18 +185,23 @@ class BlobWriter:
             self.temporary = None
 
 
+def blob_path(root: Path | str, sha: str) -> Path:
+    """`<root>/blobs/<aa>/<sha256>`: where a repo keeps the contents with this hash."""
+    return Path(root) / "blobs" / sha[:2] / sha
+
+
 class BlobStore:
-    """The blob folder of a store root; safe for concurrent requests."""
+    """The blob folder of a repo; safe for concurrent requests and processes."""
 
     def __init__(self, root: Path):
         self.root = root
-        self.blobs, self.projects, self.tmp = root / "blobs", root / "projects", root / "tmp"
-        for folder in (self.blobs, self.projects, self.tmp):
+        self.blobs, self.tmp = root / "blobs", root / "tmp"
+        for folder in (self.blobs, self.tmp):
             folder.mkdir(parents=True, exist_ok=True)
         self.blobs_name, self.tmp_name = os.fspath(self.blobs), os.fspath(self.tmp)
 
     def blob_name(self, sha: str) -> str:
-        return f"{self.blobs_name}/{sha[:2]}/{sha[2:]}"
+        return f"{self.blobs_name}/{sha[:2]}/{sha}"
 
     def blob_path(self, sha: str) -> Path:
         return Path(self.blob_name(sha))
@@ -250,6 +256,39 @@ class BlobStore:
         finally:
             temporary.unlink(missing_ok=True)
 
+    def stage_file(self, entry: dict, source: Path, link: bool = False) -> bool:
+        """Keep the contents of a file about to be published as a blob, for the manifest entry `entry` ({path, sha256,
+        size} as hashed a moment ago): a copy-on-write clone where the filesystem allows, else a copy (`link`: a hard
+        link, for a source deleted right after: a published draft). The copy is hashed again; when the file changed in
+        between, `entry` is updated to what was kept (the version has what was staged). Blobs are read-only. Returns
+        False when the file is gone. Safe on a network filesystem: written under a temporary name, renamed into place."""
+        target = self.blob_path(entry["sha256"])
+        if target.is_file():
+            return True
+        temporary = self.tmp / f"{entry['sha256']}.{secrets.token_hex(6)}"
+        try:
+            if not (link and _hard_link(source, temporary)):
+                clone_or_copy(source, temporary)
+            os.utime(temporary)  # a clone keeps the source's times; the blob's age (gc.py's grace period) starts now
+            digest, size = hashlib.sha256(), 0
+            with open(temporary, "rb", buffering=0) as handle:
+                while chunk := handle.read(CHUNK):
+                    digest.update(chunk)
+                    size += len(chunk)
+                os.fsync(handle.fileno())
+            if digest.hexdigest() != entry["sha256"]:  # changed since it was hashed: publish what was kept
+                entry.update(sha256=digest.hexdigest(), size=size)
+                target = self.blob_path(entry["sha256"])
+            os.chmod(temporary, 0o444)
+            if not target.is_file():
+                target.parent.mkdir(exist_ok=True)
+                os.replace(temporary, target)
+            return True
+        except FileNotFoundError:  # removed since it was hashed
+            return False
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def missing_hashes(self, hashes) -> list[str]:
         """The hashes (sorted, unique) that are not stored, in one call. A batch dense enough (many hashes per
         blob folder) lists each folder it touches once instead of checking every blob on its own."""
@@ -261,7 +300,7 @@ class BlobStore:
         for prefix in prefixes:
             try:
                 with os.scandir(self.blobs / prefix) as entries:
-                    present.update(prefix + entry.name for entry in entries)
+                    present.update(entry.name for entry in entries)
             except FileNotFoundError:
                 continue
         return sorted(wanted - present)

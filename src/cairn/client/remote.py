@@ -1,12 +1,11 @@
-"""Remote: the LocalRepo interface over HTTP, against `cairn server`.
+"""Remote: the LocalRepo interface over HTTP, against a `cairn server` (a repo's remote).
 
-It offers what `cairn` and `Publication` use: projects, blob upload, versions, aliases,
-`resolve`, `lineage`, and `blob_file` for the pull cache. HTTP, the token, and the HTTPS rule are
-`http.Client`'s. Artifact names travel percent-encoded in API paths (`datasets%2Fcrops`).
+It offers what the repo (client/repo.py), sync (client/sync.py), and the UI use: projects, blob upload, versions,
+aliases, `resolve`, `lineage`, and `blob_file`, which downloads a blob into a repo. HTTP, the token, and the HTTPS
+rule are `http.Client`'s. Artifact names travel percent-encoded in API paths (`datasets%2Fcrops`).
 
-A server that does not answer raises `Unreachable` (a StoreError), which publishing (the replica's
-pending versions) and offline pulls catch. `uid` is the server's store uid (`GET /api/v2/store`),
-remembered in the replica's data root so it is known offline too.
+A remote that does not answer raises `Unreachable` (a StoreError), which the repo catches: versions wait in the
+outbox, and reads fall back to the repo. `uid` is the remote's repo uid (`GET /api/v2/repo`).
 """
 
 from __future__ import annotations
@@ -17,12 +16,12 @@ from pathlib import Path
 from urllib.parse import quote
 
 from ..store import refs
-from ..store.cache import blob_cache, place, scratch
+from ..store.blobs import blob_path
+from ..store.folders import place, scratch
 from ..store.errors import BadRange, Conflict, Deleted, Forbidden, MissingBlobs, NotFound, Protected, StoreError, Unauthorized, Unreachable
 from ..store.local import FileRead
 from ..store.refs import Ref
 from ..store.uids import UID
-from . import replica
 from .http import BATCH, Client, ClientError, upload_missing
 
 
@@ -38,20 +37,11 @@ class Remote:
         self._uid: str | None = None
 
     @property
-    def uid(self) -> str | None:
-        """The server's store uid; while it does not answer, the one remembered from last time (or None)."""
+    def uid(self) -> str:
+        """The remote's repo uid (asked once; Unreachable while it does not answer)."""
         if self._uid is None:
-            try:
-                self._uid = self._call("GET", "/api/v2/store")["uid"]
-                replica.remember_uid(self.url, self._uid)
-            except Unreachable:
-                return replica.known_uid(self.url)
+            self._uid = self._call("GET", "/api/v2/repo")["uid"]
         return self._uid
-
-    @property
-    def key(self) -> str:
-        """The name of this server's store file in the replica: its uid if ever learned, else one made from its URL."""
-        return self._uid or replica.known_uid(self.url) or replica.store_key(self.url)
 
     def _call(self, method: str, path: str, value=None, expect=(200,)):
         try:
@@ -94,19 +84,21 @@ class Remote:
             raise _translate(error) from error
         return status == 201
 
-    def blob_file(self, project: str, name: str, version: int, entry: dict, cache_root) -> Path:
-        """The entry's contents in the blob cache under `cache_root`, downloaded (and verified) once.
+    def blob_file(self, project: str, name: str, version: int | str, entry: dict, root) -> Path:
+        """The entry's contents in the blobs of the repo `root`, downloaded (and verified) once; `version` is the
+        number (or uid) of a version that has the file.
 
-        The download goes to a scratch name and is renamed into place, so concurrent jobs sharing the cache
+        The download goes to a scratch name and is renamed into place, so concurrent jobs sharing the repo
         (on NFS too) never see a partial blob; when two download the same blob, the second rename is skipped."""
         sha = entry["sha256"]
-        target = blob_cache(cache_root, sha)
+        target = blob_path(root, sha)
         if target.is_file():
             return target
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = scratch(target)
         try:
-            where = f"/files/{q(project)}/{quote(name)}@v{version}//{quote(entry['path'])}"
+            selector = f"v{version}" if isinstance(version, int) else version
+            where = f"/files/{q(project)}/{quote(name)}@{selector}//{quote(entry['path'])}"
             try:
                 self.client.request("GET", where, stream_to=temporary)
             except ClientError as error:

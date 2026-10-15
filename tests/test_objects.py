@@ -17,19 +17,19 @@ from test_store import env, folder  # noqa: F401
 def configured(request, env, tmp_path, monkeypatch):
     """cairn.toml pointing at a local store folder or at a running store server."""
     if request.param == "local":
-        (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+        (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
         yield None
         return
     server = Server(tmp_path / "store-root").start()
-    monkeypatch.setenv("CAIRN_STORE_TOKEN", server.token)
-    (env / "cairn.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\n')
+    monkeypatch.setenv("CAIRN_TOKEN", server.token)
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "study"\n')
     yield server
     server.stop()
 
 
 def test_object_api_end_to_end(configured, env, monkeypatch):
     store = cairn.connect()
-    assert store.remote == (configured is not None) and UID.fullmatch(store.uid)
+    assert bool(store.remote) == (configured is not None) and UID.fullmatch(store.uid)
     project = store.project()
     crops = project.artifact("datasets/crops")
     data = folder(env, "crops", {"a.txt": "one", "sub/b.txt": "two"})
@@ -145,6 +145,6 @@ def test_cli_projects_artifacts_versions_show(configured, env, capsys):
     assert "consumers    study:models/fit@v1" in out and "aliases      latest, paper" in out and "  b.txt\t2" in out
     assert "inputs       study:datasets/crops@v1" in run(capsys, "show", "models/fit")
     status = run(capsys, "status")
-    assert ("nothing pending" if configured else "local folder") in status
+    assert ("nothing pending" if configured else "has no remote") in status
     sync = run(capsys, "sync")
-    assert ("nothing to sync" if configured else "needs no sync") in sync
+    assert ("nothing to sync" if configured else "nothing to sync") in sync

@@ -24,7 +24,7 @@ def blob(root, text: str) -> dict:
     data = text.encode()
     sha = hashlib.sha256(data).hexdigest()
     (root / "blobs" / sha[:2]).mkdir(parents=True, exist_ok=True)
-    (root / "blobs" / sha[:2] / sha[2:]).write_bytes(data)
+    (root / "blobs" / sha[:2] / sha).write_bytes(data)
     return {"path": f"{text}.txt", "sha256": sha, "size": len(data), "mtime": None}
 
 
@@ -115,7 +115,7 @@ def test_processes_on_the_host_write_a_served_root_directly(tmp_path, capsys):
         with pytest.raises(SystemExit, match="already served"):
             make_server(root, port=0)  # one server per root
         init_root(tmp_path / "other")
-        with pytest.raises(SystemExit, match="in use"):  # a taken port is an error: clients' [store] url names it
+        with pytest.raises(SystemExit, match="in use"):  # a taken port is an error: clients' [repo] url names it
             make_server(tmp_path / "other", port=server.server_address[1])
         client = Client(f"http://127.0.0.1:{server.server_address[1]}", read_token(root / "token"))
         assert [p["name"] for p in Remote(client).projects()] == ["p"]  # the server sees the direct write

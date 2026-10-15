@@ -70,16 +70,12 @@ def make_run(project: Path, status: str = "completed") -> Path:
 
 @pytest.fixture(autouse=True)
 def isolated_roots(tmp_path, monkeypatch):
-    """Every test gets its own replica data root and cache (and no inherited root overrides)."""
-    from cairn.store import cache
-
+    """Every test starts outside any project, with no inherited repo or token settings."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path / "data"))  # tests that check the default delete this
-    cache.use_data_dir(None)
-    monkeypatch.delenv("CAIRN_CACHE_DIR", raising=False)
     monkeypatch.delenv("CAIRN_DIR", raising=False)
+    monkeypatch.delenv("CAIRN_TOKEN", raising=False)
     monkeypatch.chdir(tmp_path)  # no project root above it: tests that need one make it (the `project` fixture)
     monkeypatch.delenv("CAIRN_RUN", raising=False)
     from cairn.client import drafts, runs
@@ -97,7 +93,7 @@ def isolated_roots(tmp_path, monkeypatch):
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    """A project with a local store holding `descent`, two reports, and a run under outputs/."""
+    """A project whose repo (no remote) holds `descent`, two reports, and a run under outputs/."""
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
     folder = tmp_path / "study"
     folder.mkdir()

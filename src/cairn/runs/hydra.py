@@ -413,7 +413,7 @@ def _finalize_run_sweep(reserved, study: Path) -> bool:
     not end well, or still run), the jobs submitit recorded, and the trials.jsonl lines."""
     import yaml
 
-    from ..store.cache import read_json
+    from ..store.folders import read_json
 
     present = set(_numbered(study))
     submitted = {p.name.rsplit("_", 1)[1] for p in (study / ".submitit").glob("*_*") if p.name.rsplit("_", 1)[1].isdigit()}

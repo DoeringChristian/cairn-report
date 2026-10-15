@@ -2,11 +2,11 @@
 
 A small, complete Cairn project: a dataset artifact, an experiment that uses it, and a report that
 reads the experiment's result and its loss curve, each published as an artifact with its lineage
-recorded. No server is needed; everything lives in a local store under `.cairn/`.
+recorded. No server is needed; everything lives in the project's repo, `.cairn/`.
 
 ```text
 descent/
-├── cairn.toml                     the project ([store] project; a local store by default)
+├── cairn.toml                     the project ([repo] project; a repo without a remote)
 ├── data/quadratic/problem.json    the dataset (a matrix and a start point)
 ├── descent.py                     the experiment: a run of runs/descent that publishes the result `descent`
 ├── reports/descent-study/report.md   the report: declares its inputs, reads only them
@@ -70,6 +70,9 @@ Things to try:
   traceback in `logs/error.txt`), and its folder stays for inspection (`cairn drafts`).
 - **Strictness.** Add `open("data/quadratic/problem.json")` to a `python exec` block of the report:
   the build fails, because the report did not declare that file as an input.
-- **A server.** `cairn server ~/cairn-store` in another terminal (it prints a token and starts the
-  UI), then add `url = "http://127.0.0.1:8800"` under `[store]` here and run again: the run is synced
-  while it runs, so the UI shows it live.
+- **A remote.** `cairn server ~/cairn-remote` in another terminal (it prints a token and starts the
+  UI), then add `remote = "http://127.0.0.1:8800"` under `[repo]` here, `export CAIRN_TOKEN=<token>`, and
+  run again: the versions this repo numbered itself are sent first (the remote numbers them), and the run is
+  synced while it runs, so the remote's UI shows it live. Stop the server and run again: everything still
+  works, the new versions wait as pending (`cairn status`) and are sent by the next command once the server
+  is back.

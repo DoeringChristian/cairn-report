@@ -12,8 +12,8 @@ import pytest
 
 import cairn as store
 from cairn import LocalRepo, StoreError
-from cairn.store import cache as cache_module
-from cairn.store.cache import cache_root
+from cairn.store import folders as cache_module
+from cairn.store.blobs import blob_path
 from cairn.store.digest import canonical, manifest_digest
 from cairn.store.errors import Conflict
 from cairn.store.fs import clone
@@ -225,17 +225,17 @@ def test_a_damaged_blob_fails_the_pull_and_leaves_no_partial_folder(env):
     blob.write_text("HELLO")
     with pytest.raises(StoreError, match=r"a\.txt does not match its manifest"):
         version.pull()
-    assert not (cache_root() / "versions").exists() or not [p for p in (cache_root() / "versions").iterdir()]
+    assert not (backend.root / "versions").exists() or not [p for p in (backend.root / "versions").iterdir()]
 
 
 def test_a_wrong_manifest_digest_fails_the_pull(env):
     backend, version = local_pull(env)
     state = backend.get_version("study", "data", 1)
-    from cairn.store.cache import materialize_version
+    from cairn.store.folders import materialize_version
 
     with pytest.raises(StoreError, match="manifest digest"):
-        materialize_version(backend, "study", "data", {**state, "digest": "sha256:" + "1" * 64, "uid": "0190" + state["uid"][4:]}, cache_root())
-    assert not [p for p in (cache_root() / "versions").iterdir()]
+        materialize_version(backend, "study", "data", {**state, "digest": "sha256:" + "1" * 64, "uid": "0190" + state["uid"][4:]}, backend.root)
+    assert not [p for p in (backend.root / "versions").iterdir()]
 
 
 # ----------------------------------------------------------------------- cairn verify
@@ -245,23 +245,23 @@ def test_tampered_cache_blob_fails_the_pull_and_verify_repairs_it(server, env, c
     r = use_remote(env, server)
     store.publish("data", folder(env, "d", {"a.txt": "shared", "b.txt": "other"}), store=r)
     path = store.pull("data@v1", store=r)
-    run(capsys, "verify", "--cache")  # clean (exit 0)
+    run(capsys, "verify")  # clean (exit 0)
     uid = r.get_version("study", "data", 1)["uid"]
-    blob = cache_module.blob_cache(cache_root(), sha("shared"))
+    blob = blob_path(env / ".cairn", sha("shared"))
     assert blob.is_file()
     os.chmod(blob, 0o644)
     blob.write_text("tampered")
-    out, err = run(capsys, "verify", "--cache", code=1)
+    out, err = run(capsys, "verify", code=1)
     assert str(blob) in out and "problems" in err
     # the pull of an unmaterialized version names the file
-    cache_module.remove(cache_module.version_folder(cache_root(), uid))
+    cache_module.remove(cache_module.version_folder(env / ".cairn", uid))
     with pytest.raises(StoreError, match=r"a\.txt does not match its manifest"):
         store.pull("data@v1", store=r)
-    assert not cache_module.version_folder(cache_root(), uid).exists()
-    out, err = run(capsys, "verify", "--cache", "--repair")  # repaired problems exit 0
+    assert not cache_module.version_folder(env / ".cairn", uid).exists()
+    out, err = run(capsys, "verify", "--repair")  # repaired problems exit 0
     assert str(blob) in out and "(removed)" in out and not blob.exists()
     assert (store.pull("data@v1", store=r) / "a.txt").read_text() == "shared"  # downloaded again
-    run(capsys, "verify", "--cache")
+    run(capsys, "verify")
 
 
 def test_verify_finds_a_tampered_materialized_file_and_repair_drops_the_version(server, env, capsys, monkeypatch):
@@ -272,9 +272,9 @@ def test_verify_finds_a_tampered_materialized_file_and_repair_drops_the_version(
     os.chmod(path / "a.txt", 0o644)
     (path / "a.txt").write_text("edited")
     (path / "extra.txt").write_text("not in the manifest")
-    out, _ = run(capsys, "verify", "--cache", code=1)
+    out, _ = run(capsys, "verify", code=1)
     assert "a.txt" in out and "extra.txt" in out
-    run(capsys, "verify", "--cache", "--repair")
+    run(capsys, "verify", "--repair")
     assert not path.exists()
     assert (store.pull("data@v1", store=r) / "a.txt").read_text() == "one"
 
@@ -295,12 +295,18 @@ def test_verify_pending_versions(down, env, capsys):
     version = store.connect().artifact("data").publish(folder(env, "d", {"a.txt": "one"}))
     path = store.pull(f"data@{version.uid}")
     assert (path / "a.txt").read_text() == "one"
-    out, _ = run(capsys, "verify", "--cache")
+    out, _ = run(capsys, "verify")
     assert "no problems" in out
     os.chmod(path / "a.txt", 0o644)
     (path / "a.txt").write_text("edited")
-    out, _ = run(capsys, "verify", "--cache", "--repair", code=1)  # pending versions are never repaired
-    assert "a.txt" in out and path.exists()
+    out, _ = run(capsys, "verify", "--repair")  # its read-only folder is made again from the blobs
+    assert "a.txt" in out and not path.exists()
+    assert (store.pull(f"data@{version.uid}") / "a.txt").read_text() == "one"
+    blob = blob_path(env / ".cairn", sha("one"))
+    os.chmod(blob, 0o644)
+    blob.write_text("ONE")
+    out, _ = run(capsys, "verify", "--repair", code=1)  # the only copy of a pending version's contents: never removed
+    assert str(blob) in out and blob.exists()
 
 
 def make_store(tmp_path):
@@ -317,7 +323,7 @@ def make_store(tmp_path):
 def test_verify_a_store_finds_corrupt_and_missing_blobs(tmp_path, capsys):
     root, local = make_store(tmp_path)
     assert local.verify().ok
-    out, _ = run(capsys, "verify", "--store", str(root))
+    out, _ = run(capsys, "verify", "--repo", str(root))
     assert "no problems" in out
     corrupt, missing = local.blob_path(sha("one")), local.blob_path(sha("three"))
     os.chmod(corrupt, 0o644)
@@ -327,7 +333,7 @@ def test_verify_a_store_finds_corrupt_and_missing_blobs(tmp_path, capsys):
     kinds = sorted((problem.kind, problem.path) for problem in report.problems)
     assert any(path == str(corrupt) for _, path in kinds)  # the blob does not match its name
     assert any("study:b@v1" in path and "missing" in problem.message for problem in report.problems for path in [problem.path])
-    out, err = run(capsys, "verify", "--store", str(root), code=1)
+    out, err = run(capsys, "verify", "--repo", str(root), code=1)
     assert str(corrupt) in out and "study:b@v1" in out and "problems" in err
 
 
@@ -346,10 +352,10 @@ def test_verify_a_store_checks_manifest_digests(tmp_path):
 def test_object_api_verify(env):
     backend, version = local_pull(env)
     connected = store.connect(env / ".store")
-    assert connected.verify(store=True).ok and connected.verify(all=True).ok and connected.verify().ok
-    assert connected.verify("data@v1").ok
+    assert connected.verify().ok and connected.verify("data@v1").ok
     blob = backend.blob_path(sha("hello"))
     os.chmod(blob, 0o644)
     blob.write_text("hellO")
-    assert not connected.verify(store=True).ok
+    assert not connected.verify().ok
+    assert not connected.verify(repair=True).ok  # the repo's own blob: never removed
     assert not connected.verify("data@v1").ok

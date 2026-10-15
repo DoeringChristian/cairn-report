@@ -1,29 +1,30 @@
-"""The store UI: a browser view of an artifact store, as a process of its own.
+"""The UI: a browser view of a repo, as a process of its own.
 
-    cairn ui [--store URL|PATH] [--host 127.0.0.1] [--port 8801] [--no-auth] [--allow-http] [--insecure-cookies]
+    cairn ui [--remote URL | --repo FOLDER] [--host 127.0.0.1] [--port 8801] [--no-auth] [--allow-http] [--insecure-cookies]
 
-It reaches the store only through the store interface (`Remote` for a store server, `LocalRepo` for
-a folder), so it runs next to the store or on a laptop against a remote one. It serves the React app
-(web/, built into static/) and a small JSON API for it:
+It reaches the data only through the repo interface (the project's repo, which reads through its remote when it
+has one and shows the versions still waiting for it as pending; a repo folder; or a remote), so it runs next to the
+repo or on a laptop against a remote. It serves the React app (web/, built into static/) and a small JSON API for it:
 
     /, /login, /p/<p>/, /p/<p>/a/<name>[@sel]   the app (index.html; the app routes on the client)
     /assets/<file>                               the app's hashed scripts and styles
     /ui-api/...                                  the app's JSON API (see `_api`), session-scoped
     /p/<p>/r/<slug>[@v<n>]/...                   a report version's built site (latest without @), its `_static/`
                                                  files and a generated `site.json` at /p/<p>/r/
-    /files/<p>/<name>@sel//<path>                the store's files, with Range (so videos seek)
+    /files/<p>/<name>@sel//<path>                the repo's files, with Range (so videos seek)
     /files/<p>/<name>@sel.zip                    a whole version as a zip, streamed (`<name>-v<n>/...` inside)
 
-Reports are a UI concept: an artifact `reports/<slug>` whose files have `site/` and `source/`.
+A selector is `v<n>`, a uid (a pending version has no number yet), an alias, or a label. Reports are a UI concept:
+an artifact `reports/<slug>` whose files have `site/` and `source/`.
 
-Login: the user enters a store token on /login (the app posts it to /ui-api/login). The UI checks it against
-the store (a remote store: an authenticated API call; a folder: the folder's owner token file and
-tokens.jsonl), keeps it server-side in an in-memory session table, and gives the browser only a random
-session id (HttpOnly, SameSite=Strict cookie, Secure unless --insecure-cookies). Every request of a session
-uses its token, so a scoped token sees only its project. Every /ui-api/ call also needs the header
-`X-Cairn: 1`, which a cross-site form or image cannot send (on top of SameSite=Strict). `--no-auth`
-(loopback only) skips the login and uses `CAIRN_STORE_TOKEN` / `[store] token_file` for a remote store, or
-the owner's full access to a folder.
+Login: `cairn ui` prints a one-time link (a random code, valid once for 10 minutes); or the user enters a token on
+/login (the app posts it to /ui-api/login). The UI checks it (a remote: an authenticated API call; a repo on this
+machine: its owner token file and tokens.jsonl), keeps it server-side in an in-memory session table, and gives the
+browser only a random session id (HttpOnly, SameSite=Strict cookie, Secure unless --insecure-cookies). Every
+request of a session uses its token, so a scoped token sees only its project. Every /ui-api/ call also needs the
+header `X-Cairn: 1`, which a cross-site form or image cannot send (on top of SameSite=Strict). `--no-auth`
+(loopback only) skips the login and uses `CAIRN_TOKEN` / `[repo] token_file` for a remote, or the owner's full
+access to a repo on this machine.
 """
 
 from __future__ import annotations
@@ -48,7 +49,9 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from .._version import __version__
 from ..store import BadRange, Deleted, FileRead, Forbidden, NotFound, Ref, StoreError, Unauthorized, refs
 from ..store.blobs import resolve_entry, valid_path
+from ..store.outbox import exact_ref
 from ..store.tokens import Principal
+from ..store.uids import UID
 from .backends import LocalBackend, RemoteBackend
 from .sessions import COOKIE, LOGIN_DELAY, MAX_SESSIONS, SESSION_SECONDS, Session
 
@@ -92,7 +95,7 @@ def message_page(title: str, text: str) -> bytes:
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{html.escape(title)}</title></head><body style=\"font:16px/1.5 system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem\">"
-        f'<h1>{html.escape(title)}</h1><p>{html.escape(text)}</p><p><a href="/">Back to the store</a></p></body></html>'
+        f'<h1>{html.escape(title)}</h1><p>{html.escape(text)}</p><p><a href="/">Back to the repo</a></p></body></html>'
     ).encode()
 
 
@@ -101,6 +104,11 @@ def app_route(segments: list[str]) -> bool:
     if segments == ["", ""] or segments == ["", "login"]:
         return True
     return len(segments) >= 4 and segments[1] == "p" and (segments[3] == "" and len(segments) == 4 or segments[3] == "a" and len(segments) > 4)
+
+
+def selector_of(version: dict) -> str:
+    """`v<n>`, or the uid of a pending version (not numbered yet)."""
+    return f"v{version['version']}" if version.get("version") is not None else version["uid"]
 
 
 def summarize_version(version: dict) -> dict:
@@ -172,7 +180,7 @@ class UIHandler(BaseHTTPRequestHandler):
             self._error(403, str(error))
         except Unauthorized:
             if self.no_auth:
-                return self._error(401, "the store rejected the token from CAIRN_STORE_TOKEN or [store] token_file")
+                return self._error(401, "the remote rejected the token from CAIRN_TOKEN or [repo] token_file")
             self._drop()
             if self._is_api() or urlparse(self.path).path.startswith("/files/"):
                 return self._send(401, json.dumps({"error": "log in first"}).encode(), "application/json",
@@ -181,7 +189,7 @@ class UIHandler(BaseHTTPRequestHandler):
         except (StoreError, ValueError) as error:
             self._error(400, str(error))
         except OSError as error:
-            self._error(502, f"cannot reach the store: {error}")
+            self._error(502, f"cannot reach the remote: {error}")
 
     def _is_api(self) -> bool:
         return urlparse(self.path).path.startswith("/ui-api/")
@@ -265,7 +273,7 @@ class UIHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------ JSON API
 
     def _api(self, url, query: dict) -> None:
-        """The app's data, as the session's store handle sees it (never the store's folders). Needs the session and `X-Cairn: 1`."""
+        """The app's data, as the session's repo handle sees it (never the repo's folders). Needs the session and `X-Cairn: 1`."""
         if self.headers.get("X-Cairn") != "1":
             raise HttpError(403, "missing X-Cairn header")
         session = self._session()
@@ -315,7 +323,7 @@ class UIHandler(BaseHTTPRequestHandler):
         version = self._version(store, project, name, chosen)
         consumers, deleted, nodes = [], [], {}
         if version["status"] in ("completed", "deleted", "running", "failed"):  # a deleted version keeps its edges, a running run has some
-            found = store.lineage(refs.exact(project, name, version["version"]), marks=True)
+            found = store.lineage(exact_ref(project, name, version), marks=True)
             consumers, deleted, nodes = found["consumers"], found.get("deleted", []), found.get("nodes", {})
         return {"project": project, "name": name, "version": version, "consumers": consumers, "deleted": deleted, "nodes": nodes}
 
@@ -326,9 +334,9 @@ class UIHandler(BaseHTTPRequestHandler):
         chosen = f"v{selector}" if selector.isdigit() else selector
         version = self._version(store, project, name, chosen)
         if version["status"] == "deleted":
-            raise Deleted(f"{refs.exact(project, name, version['version'])} was deleted")
+            raise Deleted(f"{exact_ref(project, name, version)} was deleted")
         files = {entry["path"]: entry for entry in version.get("files", [])}
-        exact = f"v{version['version']}"
+        exact = selector_of(version)
 
         def read(path: str, limit: int) -> tuple[bytes, bool]:
             entry = files.get(path)
@@ -397,10 +405,10 @@ class UIHandler(BaseHTTPRequestHandler):
         version keeps its edges; its node says `deleted: true` (the key is there only then)."""
         store, principal = session.store, session.principal
         if ref.exact:  # any status: a deleted version keeps its edges, a running run has consumers already
-            number = ref.version or store.get_version(ref.project, ref.name, ref.uid)["version"]
+            manifest = store.get_version(ref.project, ref.name, ref.version if ref.version is not None else ref.uid)
         else:
-            number = store.resolve(ref)[2]["version"]
-        root = refs.exact(ref.project, ref.name, number)
+            manifest = store.resolve(ref)[2]
+        root = exact_ref(ref.project, ref.name, manifest)
         first = store.lineage(root, marks=True)
         nodes: dict[str, dict] = {root: {"inputs": None, "consumers": None}}
         gone = set(first.get("deleted", []))
@@ -479,8 +487,8 @@ class UIHandler(BaseHTTPRequestHandler):
         store = session.store
         version = self._version(store, project, ref.name, ref.selector)
         if version["status"] == "deleted":
-            raise Deleted(f"{refs.exact(project, ref.name, version['version'])} was deleted: its files are gone")
-        exact = f"v{version['version']}"
+            raise Deleted(f"{exact_ref(project, ref.name, version)} was deleted: its files are gone")
+        exact = selector_of(version)
         top = f"{ref.name.replace('/', '-')}-{exact}"
         self.send_response(200)
         self.send_header("Content-Type", "application/zip")
@@ -553,6 +561,8 @@ class UIHandler(BaseHTTPRequestHandler):
         """A version manifest: `v<n>` exactly (whatever its status), else the completed version an alias or label names."""
         if selector and refs.VERSION.fullmatch(selector):
             return store.get_version(project, name, int(selector[1:]))
+        if selector and UID.fullmatch(selector):
+            return store.get_version(project, name, selector)
         return store.resolve(Ref(project, name, selector))[2]
 
     def _report(self, session: Session, project: str, rest: list[str], url) -> None:
@@ -577,7 +587,7 @@ class UIHandler(BaseHTTPRequestHandler):
         if resolve_entry(version["files"], file) is None:
             raise HttpError(404, f"the report has no {file}")
         immutable = re.search(r"(^|&)v=[0-9a-f]+", url.query) is not None
-        exact = f"v{version['version']}"
+        exact = selector_of(version)
         if resolve_entry(version["files"], file + ".gz") and "gzip" in self.headers.get("Accept-Encoding", ""):
             read = store.read_file(project, name, exact, file + ".gz")
             return self._stream(read, entry_type(file), immutable, encoding="gzip")
@@ -594,7 +604,7 @@ class UIHandler(BaseHTTPRequestHandler):
                 name = summary["name"]
                 for version in reversed(store.versions(project, name)) if is_report(name) else ():
                     if version["status"] == "completed" and resolve_entry(version["files"], f"site/_static/{file}"):
-                        found = (name, version["version"], resolve_entry(version["files"], f"site/_static/{file}.gz") is not None)
+                        found = (name, selector_of(version), resolve_entry(version["files"], f"site/_static/{file}.gz") is not None)
                         break
                 if found:
                     break
@@ -603,8 +613,8 @@ class UIHandler(BaseHTTPRequestHandler):
             self.static_cache[key] = found  # where it lives, not its bytes: every read still goes to the store with the session's token
         name, number, compressed = self.static_cache[key]
         if compressed and "gzip" in self.headers.get("Accept-Encoding", ""):
-            return self._stream(store.read_file(project, name, f"v{number}", f"site/_static/{file}.gz"), entry_type(file), True, encoding="gzip")
-        self._stream(store.read_file(project, name, f"v{number}", f"site/_static/{file}"), entry_type(file), True)
+            return self._stream(store.read_file(project, name, number, f"site/_static/{file}.gz"), entry_type(file), True, encoding="gzip")
+        self._stream(store.read_file(project, name, number, f"site/_static/{file}"), entry_type(file), True)
 
     @staticmethod
     def _site(session: Session, project: str) -> dict:
@@ -749,7 +759,7 @@ def make_ui_server(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1
     """A bound UI server (not yet serving). With no_auth there is no login and every request uses the
     backend's own access, so it is refused on any address but this machine's loopback."""
     if no_auth and host not in LOCAL_HOSTS:
-        raise SystemExit("--no-auth shows the store to anyone who can connect: only with a loopback --host")
+        raise SystemExit("--no-auth shows the repo to anyone who can connect: only with a loopback --host")
     handler = type("Handler", (UIHandler,), {
         "backend": backend, "sessions": {}, "login_codes": {}, "lock": threading.Lock(), "no_auth": no_auth, "local": host in LOCAL_HOSTS,
         "secure_cookie": secure_cookie, "static_cache": {}, "fixed": backend.anonymous() if no_auth else None,
@@ -798,11 +808,11 @@ def serve_ui(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", por
         server = make_ui_server(backend, host, 0, no_auth=no_auth, secure_cookie=secure_cookie)
     shown = host if ":" not in host else f"[{host}]"
     base = f"http://{shown}:{server.server_address[1]}/"
-    print(f"UI: {base} (store: {backend.describe})", flush=True)
+    print(f"UI: {base} (repo: {backend.describe})", flush=True)
     if host not in LOCAL_HOSTS:
         print("warning: the UI speaks plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
     if no_auth:
-        print("Authentication is off (--no-auth): everyone who can connect sees the store; for local use only", flush=True)
+        print("Authentication is off (--no-auth): everyone who can connect sees the repo; for local use only", flush=True)
     opening = base
     if login_token and not no_auth:
         here = {"0.0.0.0": "127.0.0.1", "::": "[::1]"}.get(host, shown)  # the link works from this machine

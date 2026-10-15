@@ -278,7 +278,7 @@ def test_a_sweep_between_the_check_and_the_commit_fails_the_publish_cleanly(loca
 def age(root, version, seconds=LATER):
     """Make a version's blobs look old (past the grace period)."""
     for item in version.files:
-        path = root / "blobs" / item.sha256[:2] / item.sha256[2:]
+        path = root / "blobs" / item.sha256[:2] / item.sha256
         os.utime(path, (time.time() - seconds,) * 2)
 
 
@@ -452,14 +452,14 @@ def test_publishes_racing_server_sweeps_end_complete_and_downloadable(server, en
 @pytest.fixture(params=["local", "remote"])
 def configured(request, env, tmp_path, monkeypatch):
     if request.param == "local":
-        (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
-        yield SimpleNamespace(root=env / ".cairn" / "store", remote=False)  # the default local store
+        (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
+        yield SimpleNamespace(root=env / ".cairn", remote=False)  # the project's repo, without a remote
         return
     from test_identity import Server
 
     started = Server(tmp_path / "store-root").start()
-    monkeypatch.setenv("CAIRN_STORE_TOKEN", started.token)
-    (env / "cairn.toml").write_text(f'[store]\nurl = "{started.url}"\nproject = "study"\n')
+    monkeypatch.setenv("CAIRN_TOKEN", started.token)
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{started.url}"\nproject = "study"\n')
     yield SimpleNamespace(root=tmp_path / "store-root", remote=True)
     started.stop()
 

@@ -3,24 +3,23 @@
     with cairn.draft("models/student") as model:  # a fresh, empty folder: model.path
         model.add({"val_loss": 0.1, "step": 0})   # a draft is a writer on its folder (client/logger.py)
         model.add_file("model.pt")
-    model.version                                # models/student@v<n> (a pending Version while the server is down)
+    model.version                                # models/student@v<n> (a pending Version while the remote is down)
 
-A draft lives at `<base>/drafts/<name>/<uid>/` (the project's `.cairn/`, git-ignored; outside a project the
-data root's `drafts/`), with its record beside it, `<uid>.draft.json` (name, project, label, metadata,
+A draft lives at `<repo>/drafts/<name>/<uid>/` (the project's `.cairn/`, git-ignored), with its record beside it, `<uid>.draft.json` (name, project, label, metadata,
 aliases, owner, state, run). Every draft is an output of the process's run (cairn/client/runs.py): opening one
 starts the run if `cairn.init()` was not called, and the draft's one input is that run's version, named by its
 uid while the run is still running. What the process pulls is an input of the run, not of the draft. Leaving the
 block publishes the folder exactly like `cairn.publish(name, folder)` (the unchanged check, digest, aliases; the
-label defaults to the draft's start time) and removes it: its files now live in the store (blobs are cloned, or
-hard-linked where the filesystem cannot clone, never copied when avoidable), the replica, or the cache. An
+label defaults to the draft's start time) and removes it: its files now live in the repo's blobs (cloned, or
+hard-linked where the filesystem cannot clone, never copied when avoidable). An
 exception keeps the folder (state `kept`, printed on stderr) and marks a running version failed; `cairn drafts`
 lists kept and open drafts, `cairn drafts publish <uid>` publishes one later, `cairn drafts discard <uid>`
 removes it. A draft's version gets the draft's uid. `config=` (and, for a Hydra run dir, the resolved job config
 and its overrides) becomes `metadata["config"]` (`metadata["overrides"]`).
 
 `watch=True` starts a running version at once and keeps it synced while the block runs (a `Publication`,
-like `cairn publish --watch`: every `[store] interval` seconds when something changed, a heartbeat on a store
-server, `sync()` by hand); closing completes it, an exception fails it.
+like `cairn publish --watch`: every `[repo] interval` seconds when something changed, with a heartbeat,
+`sync()` by hand); closing completes it, an exception fails it.
 
 Hydra may point `hydra.run.dir` at `${cairn.draft:<name>}` (cairn/runs/hydra.py) to make the job folder an output
 draft; `current_draft()` returns the draft the process writes into (the innermost open one, else the one the
@@ -38,9 +37,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..config import cairn_base, protect
 from ..store import StoreError, refs
-from ..store.cache import data_root, pid_alive as _pid_alive, read_json, write_json
+from ..store.folders import pid_alive as _pid_alive, read_json, write_json
+from .open import repo_root
 from ..store.uids import UID, new_uid
 from . import logger as _logger
 from .logger import Writer
@@ -52,12 +51,8 @@ _logger._OWN_FILES.add(Path(__file__).resolve())
 
 
 def drafts_root() -> Path:
-    """`<base>/drafts` (the project's `.cairn/`), else `<data root>/drafts` outside a project."""
-    base = cairn_base()
-    if base is not None:
-        protect(base)
-        return base / DRAFTS
-    return data_root() / DRAFTS
+    """`<repo>/drafts` (the project's `.cairn/`; StoreError outside a project without `$CAIRN_DIR`)."""
+    return repo_root() / DRAFTS
 
 
 def _record_path(folder: Path) -> Path:
@@ -181,7 +176,7 @@ class Draft(Writer):
 
     @property
     def store(self):
-        """The object API's Store this draft publishes to (opened on first use; None: the configured store)."""
+        """The object API's Repo this draft publishes to (opened on first use; None: the project's repo)."""
         if self._store is None:
             from .objects import Repo
             from .open import as_repo
@@ -304,7 +299,7 @@ class Draft(Writer):
         self._save()
         if not follow:
             return
-        interval = float(self._interval if self._interval is not None else self._pub.config.store.get("interval", 30))
+        interval = float(self._interval if self._interval is not None else self._pub.config.repo.get("interval", 30))
         self._stop = threading.Event()
         self._watcher = threading.Thread(target=self._follow, args=(self._stop, interval), name=f"cairn-draft {self.uid}",
                                          daemon=True)
@@ -350,7 +345,7 @@ class Draft(Writer):
 
     def publish(self, *, allow_incomplete: bool = False):
         """Publish the folder as the next version (like `cairn.publish(name, path)`), remove the draft, and return the
-        `Version` (also `self.version`; pending while the store server does not answer). If publishing fails, the
+        `Version` (also `self.version`; pending while the remote does not answer). If publishing fails, the
         folder is kept (`fail`) and the error raised. A folder whose `run.json` is not `completed` is refused unless
         `allow_incomplete`."""
         self._ensure_open()
@@ -418,23 +413,20 @@ class Draft(Writer):
             with self._lock:
                 self._pub.fail()
             self._pub = None
-        elif (self.record.get("running") or {}).get("number") is not None:
+        elif (self.record.get("running") or {}).get("uid"):
             self._fail_running()
         self._remove()
 
     def _fail_running(self) -> None:
-        """A kept or abandoned watch draft's running version on a local store: fail it (a server fails it by heartbeat)."""
-        from ..store import LocalRepo
-
+        """A kept or abandoned watch draft's running version: fail it (with a remote a sender would also fail it once its
+        heartbeat expires)."""
         running = self.record["running"]
-        backend = self.store.backend
-        if isinstance(backend, LocalRepo):
-            target = self.target
-            try:
-                if backend.get_version(target.project.name, target.name, running["number"])["status"] == "running":
-                    backend.fail_version(target.project.name, target.name, running["number"])
-            except StoreError:
-                pass
+        target = self.target
+        try:
+            if self.store.backend.get_version(target.project.name, target.name, running["uid"])["status"] == "running":
+                self.store.backend.fail_version(target.project.name, target.name, running["uid"])
+        except StoreError:
+            pass
 
     def _remove(self) -> None:
         self._closed = True
@@ -478,7 +470,7 @@ def draft(name: str, *, label: str | None = None, metadata: dict | None = None, 
         model.version                          # the published Version; its input is the process's run
 
     `label` defaults to the start time (`YYYY-MM-DD_HH-MM-SS`); `watch=True` keeps a running version synced while
-    the block runs. `store` as for `cairn.publish` (None: the configured store). `config` (a plain dict) becomes
+    the block runs. `store` as for `cairn.publish` (None: the project's repo). `config` (a plain dict) becomes
     `metadata["config"]`. The version's uid is the draft's uid. The process's run starts now if it has not."""
     return Draft(name, label=label, metadata=metadata, aliases=aliases, watch=watch, store=store, config=config)
 

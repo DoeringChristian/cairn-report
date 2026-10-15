@@ -23,15 +23,15 @@ def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool
     """
     where = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
     url = f"http://[{where}]:{port}" if ":" in where else f"http://{where}:{port}"
-    command = [sys.executable, "-m", "cairn", "ui", "--store", url, "--host", host, "--port", str(ui_port), "--allow-http", "--no-browser"]
+    command = [sys.executable, "-m", "cairn", "ui", "--remote", url, "--host", host, "--port", str(ui_port), "--allow-http", "--no-browser"]
     if no_auth:
         command.append("--no-auth")
     if host in LOCAL_HOSTS:
         command.append("--insecure-cookies")  # plain HTTP on this machine
     env = dict(os.environ)
-    env.pop("CAIRN_STORE_TOKEN", None)
+    env.pop("CAIRN_TOKEN", None)
     if not no_auth:
-        env["CAIRN_STORE_TOKEN"] = owner_token
+        env["CAIRN_TOKEN"] = owner_token
     env[PARENT_ENV] = str(os.getpid())  # the UI exits when this process is gone, even after a SIGKILL
     child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, text=True)
     line = child.stdout.readline().rstrip()

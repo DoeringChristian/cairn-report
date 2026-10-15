@@ -1,25 +1,26 @@
-"""The object API: a store, its projects, their artifacts, and the artifacts' versions.
+"""The object API: a repo, its projects, their artifacts, and the artifacts' versions.
 
     import cairn
 
-    store = cairn.connect()                       # [store] in cairn.toml; or connect("https://...", token=...) / connect("path/to/store")
-    project = store.project()                     # the configured project; store.project("other") for another
+    repo = cairn.connect()                        # the project's repo (with its remote, if [repo] remote names one)
+    project = repo.project()                      # the configured project; repo.project("other") for another
     crops = project.artifact("datasets/crops")
     v3 = crops.version(3)                         # also "v3", an alias, a label, or a uid; crops.latest
     v3.files, v3.metadata, v3.inputs, v3.consumers
     with v3.open("tables/cases.csv") as handle:  # streams one file (recorded as an input, like pull)
         ...
-    folder = v3.pull()                            # the whole version, read-only, from the cache
+    folder = v3.pull()                            # the whole version, read-only, in the repo
     fit = project.artifact("fit").publish("outputs/fit", metadata={"loss": 0.1}, aliases=["best"])
     fit.ref                                       # "study:fit@v4"; a pending version: number None, ref by uid
     v3.delete(reason="bad crop")                  # a tombstone; refused for protected versions unless force=True
-    project.retention = [{"prefix": "runs/", "keep_last": 5}]   # applied by store.gc(dry_run=False)
+    project.retention = [{"prefix": "runs/", "keep_last": 5}]   # applied by repo.gc(dry_run=False)
 
 Objects are thin and lazy: a `Project` reads its record, an `Artifact` its summary, and a `Version` its
-manifest on first access and keep them. Publishing to a store server goes through the local replica
-(replica.py, sync.py): the version is committed there first, and when the server does not answer,
-`publish` returns a pending `Version` (status `pending`, number None) that is usable at once (`pull`,
-`open`, as an input by its uid) and a background uploader sends it once the server answers.
+manifest on first access and keep them. The backend is a LocalRepo (no remote) or a SyncedRepo (repo.py). With a
+remote, publishing goes through the outbox (outbox.py, sync.py): the version is committed there first, and when
+the remote does not answer, `publish` returns a pending `Version` (status `pending`, number None) that is usable at
+once (`pull`, `open`, as an input by its uid), and it is sent once the remote answers (a background uploader, the
+next command, `cairn sync`).
 """
 
 from __future__ import annotations
@@ -31,16 +32,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import Config, load_config
-from ..store import IncompleteRun, LocalRepo, StoreError, read_inputs, record_input, refs, run_status
+from ..store import IncompleteRun, StoreError, read_inputs, record_input, refs, run_status
 from ..store.blobs import resolve_entry
-from ..store.cache import cache_root
-from ..store.errors import Deleted, MissingBlobs, NotFound, Unreachable
+from ..store.errors import Deleted, NotFound, Unreachable
 from ..store.gc import GRACE
+from ..store.outbox import exact_ref, manifest_of
 from ..store.refs import Ref
 from ..store.uids import UID
-from . import offline as fallback, replica
-from .http import HashCache
-from .remote import Remote
+from .repo import ProjectRepo
 
 
 @dataclass(frozen=True)
@@ -57,28 +56,31 @@ def _source(local: Path) -> dict:
 
 
 class Repo:
-    """A store, local (`LocalRepo`) or a server (`Remote`), as `backend`."""
+    """The project's repo (`backend`: a client/repo.py ProjectRepo, with or without a remote)."""
 
-    def __init__(self, backend: LocalRepo | Remote):
+    def __init__(self, backend: ProjectRepo):
+        if not isinstance(backend, ProjectRepo):  # a LocalRepo, a repo folder, a Remote, a remote's URL
+            from .open import as_repo
+
+            backend = as_repo(backend)
         self.backend = backend
 
     def __repr__(self) -> str:
-        return f"<cairn.Repo {getattr(self.backend, 'url', None) or self.backend.root}>"
+        return f"<cairn.Repo {self.backend.root}{f' remote {self.backend.url}' if self.backend.url else ''}>"
 
     @property
-    def remote(self) -> bool:
-        return isinstance(self.backend, Remote)
+    def remote(self) -> str | None:
+        """The remote's address (the source of truth for numbers, aliases, and deletions), else None."""
+        return self.backend.url
 
     @property
     def uid(self) -> str | None:
+        """The uid of the source of truth: the remote's repo, else this repo."""
         return self.backend.uid
 
     @property
-    def replica(self):
-        """This store server's records in the local replica (`sync.Replica`; None for a local store)."""
-        from .sync import Replica
-
-        return Replica(self.backend) if self.remote else None
+    def root(self) -> Path:
+        return self.backend.root
 
     # ------------------------------------------------------------- projects
 
@@ -86,10 +88,10 @@ class Repo:
         return [Project(self, item["name"], item) for item in self.backend.projects()]
 
     def project(self, name: str | None = None) -> "Project":
-        """A project by name; None means the configured default (`[store] project`)."""
+        """A project by name; None means the configured default (`[repo] project`)."""
         name = name or self.backend.project
         if name is None:
-            raise StoreError("no project named and the store has no default")
+            raise StoreError("no project named and the repo has no default")
         return Project(self, refs.valid_project(name))
 
     def create_project(self, name: str, title: str | None = None, description: str = "") -> "Project":
@@ -110,7 +112,7 @@ class Repo:
         exact reference (`@v<n>`, `@<uid>`) also names a running or failed version."""
         parsed = refs.parse(ref)
         try:
-            project, name, manifest = fallback.resolve_version(self.backend, parsed, offline)
+            project, name, manifest = self.backend.resolve(parsed, offline)
         except (Deleted, NotFound, Unreachable):
             raise
         except StoreError:
@@ -122,12 +124,12 @@ class Repo:
 
     def pull(self, ref: str, *, record: bool = True, offline: bool = False) -> Path:
         """A read-only local copy of the version (or of the file after `//`) a reference names."""
-        return fallback.pull(self.backend, ref, record, offline)
+        return self.backend.pull(ref, record, offline)
 
     def _exact_version(self, ref: str) -> "Version | None":
         """The version an exact reference names, whatever its status (a deleted one as its tombstone), else None."""
         try:
-            project, name, manifest = fallback.resolve_version(self.backend, refs.parse(ref))
+            project, name, manifest = self.backend.resolve(refs.parse(ref))
             return Version(self.project(project).artifact(name), manifest)
         except (StoreError, ValueError):
             pass
@@ -142,40 +144,26 @@ class Repo:
             return None
 
     def pending(self) -> list["Version"]:
-        """The versions of this machine the server does not have yet: pending, running, rejected (none for a local store)."""
-        if not self.remote:
-            return []
-        return [Version.from_record(self, record) for record in self.replica.records()]
+        """The versions of this repo the remote does not have yet: pending, running, rejected (none without a remote)."""
+        return [Version.from_record(self, record) for record in self.backend.pending()]
 
-    def verify(self, ref: str | None = None, *, cache: bool = False, store: bool = False, all: bool = False,
-               repair: bool = False):
-        """Re-hash what this machine holds and return a `Report` (`.ok`, `.problems`, `.summary()`; `cairn verify`).
+    def verify(self, ref: str | None = None, *, repair: bool = False):
+        """Re-hash what this repo holds and return a `Report` (`.ok`, `.problems`, `.summary()`; `cairn verify`).
 
-        `ref`: one version (its digest, its cached or pending copy, its blobs). `cache`: the pull cache and the
-        pending versions (also the default when nothing else is asked). `store`: this store's own blobs and
-        versions, when it is a local folder. `all`: everything. `repair` (cache only): remove broken cached
-        versions and blobs, so the next pull downloads them again."""
-        from .verify import verify
+        `ref`: one version (its digest, its read-only folder, its blobs). Without: every blob against its name,
+        every version of the database against its blobs and digest, every read-only folder, every outbox entry.
+        `repair`: remove what can be made again (a broken read-only folder; a broken blob only a copy of the
+        remote's version needs), so the next pull makes or downloads it again; never the only copy of anything."""
+        return self.backend.verify(ref, repair=repair)
 
-        return verify(self.backend, ref, cache=cache, local_store=store, everything=all, repair=repair)
-
-    def sync(self, report=None, refresh: bool = True) -> dict:
-        """Send the pending versions now (`Replica.flush`), then learn the current aliases of the artifacts this
-        machine has versions of (`refreshed`: how many; skipped while the server does not answer)."""
-        if not self.remote:
-            return {"sent": [], "rejected": [], "waiting": [], "refreshed": 0}
-        result = self.replica.flush(report)
-        result["refreshed"] = 0
-        if refresh and not [record for record in result["waiting"] if record["sync"] != "running"]:
-            try:
-                result["refreshed"] = self.replica.refresh()
-            except Unreachable:
-                pass
-        return result
+    def sync(self, report=None) -> dict:
+        """Send the pending versions now (`Sync.flush`), then mirror the remote's aliases of the artifacts this repo
+        has versions of (`refreshed`: how many; skipped while the remote does not answer)."""
+        return self.backend.sync(report)
 
     def gc(self, dry_run: bool = True, grace: float | str = GRACE) -> dict:
-        """Apply the retention rules and remove unreferenced blobs older than `grace` (LocalRepo.gc; on a server,
-        the owner token only). `dry_run` (the default) only says what would go."""
+        """Apply the retention rules and remove unreferenced blobs older than `grace` (LocalRepo.gc; with a remote, on
+        the remote: the owner token only). `dry_run` (the default) only says what would go."""
         return self.backend.gc(dry_run=dry_run, grace=grace)
 
 
@@ -264,24 +252,11 @@ class Artifact:
         return self.backend.aliases(self.project.name, self.name)
 
     def versions(self) -> list["Version"]:
-        """Every version, oldest first, whatever its status; this machine's versions the server lacks come last (pending)."""
+        """Every version, oldest first, whatever its status; this repo's versions the remote lacks come last (pending)."""
         try:
-            found = [Version(self, manifest) for manifest in self.backend.versions(self.project.name, self.name)]
+            return [Version(self, manifest) for manifest in self.backend.versions(self.project.name, self.name)]
         except NotFound:
-            found = []
-        except Unreachable:  # the server does not answer: the versions this machine has in its cache
-            if not self.store.remote:
-                raise
-            uid = self.backend.uid
-            found = [Version(self, record["manifest"]) for record in replica.synced_records()
-                     if (record.get("project"), record.get("name")) == (self.project.name, self.name)
-                     and (record.get("store") in (uid, None))]
-            found.sort(key=lambda version: version.number or 0)
-        if self.store.remote:
-            known = {version.uid for version in found}
-            found += [Version.from_record(self.store, record) for record in self.store.replica.records()
-                      if (record["project"], record["name"]) == (self.project.name, self.name) and record["uid"] not in known]
-        return found
+            return []
 
     def version(self, selector: int | str) -> "Version":
         """A version by number (3 or "v3"), uid, alias, or label (completed versions only for the last two). Lazy."""
@@ -300,7 +275,7 @@ class Artifact:
         if not isinstance(version, Version):
             version = self.version(version)
         if version.number is None:
-            raise StoreError(f"{version.ref} is pending (not on the store server yet): alias it once it is uploaded"
+            raise StoreError(f"{version.ref} is pending (the remote does not have it yet): alias it once it is sent"
                              " (or pass aliases= to publish)")
         self.backend.set_alias(self.project.name, self.name, name, version.number)
 
@@ -322,9 +297,9 @@ class Artifact:
         """Store a folder as the next version; when nothing changed since the latest, that version is returned.
 
         A symlinked folder is followed (the label defaults to the resolved folder's name). The folder's
-        `.cairn-inputs.jsonl` and `inputs` become the version's inputs. On a store server the version is
-        committed to the local replica first; if the server does not answer, a pending Version is returned
-        (usable at once) and uploaded in the background (and by `cairn sync` or the next cairn command).
+        `.cairn-inputs.jsonl` and `inputs` become the version's inputs. With a remote the version is committed
+        to the outbox first; if the remote does not answer, a pending Version is returned (usable at once) and
+        sent in the background (and by `cairn sync` or the next cairn command).
 
         A folder whose `run.json` says the run is not `completed` is refused unless `allow_incomplete`;
         then the status is recorded as `metadata.run_status`.
@@ -339,42 +314,11 @@ class Artifact:
                                  " (allow_incomplete=True)")
             metadata = {**(metadata or {}), "run_status": status}
         config = config or load_config()
-        cache = HashCache(config.project)
         merged = [*read_inputs(local), *(str(item) for item in inputs or [])]
-        label = label or local.name
-        project, backend = self.project.name, self.backend
-        if not self.store.remote:
-            from .publishing import stage_local
-
-            backend.create_project(project)
-            for attempt in range(3):
-                entries = stage_local(backend, local, config, cache, link=_link)
-                try:
-                    number = backend.publish(project, self.name, entries, label=label, metadata=metadata, inputs=merged,
-                                             aliases=aliases, source=_source(local), uid=_uid)
-                    break
-                except MissingBlobs:  # garbage collection removed a blob since staging: stage it again
-                    if attempt == 2:
-                        raise
-            return Version(self, backend.get_version(project, self.name, number))
-        from .sync import restage, stage, start_uploader
-
-        pending = self.store.replica
-        entries, sources = stage(local, config, cache, link=_link)
-        record = pending.add("publish", project, self.name, files=entries, label=label, metadata=metadata,
-                             inputs=merged, aliases=aliases, source=_source(local), uid=_uid)
-        restage(entries, sources, cache)
-        try:
-            sent = pending.send(record)
-        except Unreachable as error:
-            print(f"pending {project}:{self.name}@{record['uid']}: the store does not answer ({error}); it is usable here now"
-                  " and uploaded when the store answers (`cairn status` lists it, `cairn sync` sends it now)",
-                  file=sys.stderr, flush=True)
-            start_uploader(backend)
-            return Version.from_record(self.store, record)
-        if not sent and record.get("number") is None:  # another flusher sent it meanwhile
-            return Version(self, backend.get_version(project, self.name, record["uid"]))
-        return Version(self, backend.get_version(project, self.name, record["number"]))
+        manifest = self.backend.publish_folder(self.project.name, self.name, local, exclude=config.repo.get("exclude", []),
+                                               project_root=config.project, link=_link, label=label or local.name,
+                                               metadata=metadata, inputs=merged, aliases=aliases, source=_source(local), uid=_uid)
+        return Version(self, manifest)
 
     def draft(self, *, label: str | None = None, metadata: dict | None = None, aliases=(), watch: bool = False):
         """A fresh, empty folder managed by Cairn that becomes this artifact's next version when it closes (a `Draft`,
@@ -401,8 +345,8 @@ class Version:
 
     @classmethod
     def from_record(cls, store: Repo, record: dict) -> "Version":
-        """A version from a replica record (one the server does not have yet, or a synced one)."""
-        return cls(store.project(record["project"]).artifact(record["name"]), replica.manifest_of(record))
+        """A version from an outbox entry (one the remote does not have yet)."""
+        return cls(store.project(record["project"]).artifact(record["name"]), manifest_of(record))
 
     def __repr__(self) -> str:
         return f"<cairn.Version {self.ref if self._manifest is not None else f'{self.artifact.name}@{self._selector}'}>"
@@ -423,35 +367,17 @@ class Version:
         artifact, selector = self.artifact, self._selector
         project, name, backend = artifact.project.name, artifact.name, artifact.backend
         if refs.VERSION.fullmatch(selector) or UID.fullmatch(selector):  # any status, like versions()
-            remote = isinstance(backend, Remote)
-            if remote and UID.fullmatch(selector):
-                record = replica.load(selector)
-                if record and (record["project"], record["name"]) == (project, name):
-                    return replica.manifest_of(record)  # pending, running, or rejected: this machine's record
-            hint = fallback.cached(selector if UID.fullmatch(selector) else
-                                   (replica.hint(backend.key, project, name, selector) or {}).get("uid")) if remote else None
-            if hint and (hint["project"], hint["name"]) == (project, name):
-                return hint["manifest"]
-            try:
-                return backend.get_version(project, name, int(selector[1:]) if selector.startswith("v") else selector)
-            except NotFound:
-                record = replica.load(selector) if remote and UID.fullmatch(selector) else None
-                if record and (record["project"], record["name"]) == (project, name):
-                    return replica.manifest_of(record)
-                raise
-        return fallback.resolve_version(backend, Ref(project, name, selector))[2]
+            return backend.get_version(project, name, int(selector[1:]) if refs.VERSION.fullmatch(selector) else selector)
+        return backend.resolve(Ref(project, name, selector))[2]
 
     def refresh(self) -> "Version":
-        """Read the manifest again (a pending version learns its number once it is uploaded)."""
+        """Read the manifest again (a pending version learns its number once the remote has it)."""
         uid = self.manifest["uid"]
         try:
             self._manifest = self.artifact.backend.get_version(self.artifact.project.name, self.artifact.name, uid)
         except (NotFound, Unreachable):
             if not self.manifest.get("pending"):
                 raise
-            record = replica.load(uid)
-            if record is not None:
-                self._manifest = replica.manifest_of(record)
         return self
 
     # ----------------------------------------------------------- the manifest
@@ -467,7 +393,7 @@ class Version:
     @property
     def ref(self) -> str:
         """The exact reference: `project:name@v<n>`, or `project:name@<uid>` while the version is pending."""
-        return replica.exact_ref(self.artifact.project.name, self.artifact.name, self.manifest)
+        return exact_ref(self.artifact.project.name, self.artifact.name, self.manifest)
 
     @property
     def pending(self) -> bool:
@@ -484,12 +410,10 @@ class Version:
         other than `latest` points at it, a version that is not deleted consumed it, or it is running, unless
         `force` (the owner token on a server)."""
         if self.number is None:
-            raise StoreError(f"{self.ref} is pending (not on the store server): nothing to delete there")
+            raise StoreError(f"{self.ref} is pending (the remote does not have it yet): nothing to delete there")
         number = self.number
         result = self.artifact.backend.delete_version(self.artifact.project.name, self.artifact.name, number, reason=reason, force=force)
         self._manifest = self.artifact.backend.get_version(self.artifact.project.name, self.artifact.name, number)  # the tombstone
-        if self.artifact.store.remote:
-            fallback.forget(self._manifest["uid"], self._manifest)
         return result
 
     label = property(lambda self: self.manifest.get("label"))
@@ -576,17 +500,16 @@ class Version:
             raise Deleted(f"{self.ref} was deleted: its files are gone")
         if self.pending and (self.status != "pending" or self.manifest.get("sync") != "pending"):
             what = {"running": "still running", "failed": "failed"}.get(self.status, self.manifest.get("sync"))
-            raise StoreError(f"{self.ref} is {what} on this machine and not on the store server: it cannot be read")
+            raise StoreError(f"{self.ref} is {what} in this repo and the remote does not have it: it cannot be read")
 
     def _record(self, record: bool) -> None:
         if record and (self.number is not None or self.pending):
             record_input(self.ref)
 
     def pull(self, *, record: bool = True) -> Path:
-        """The whole version, read-only (`<cache>/versions/<uid>/files/`, or `<data>/versions/<uid>/files/` while it
-        is pending); recorded as an input."""
+        """The whole version, read-only (`<repo>/versions/<uid>/files/`); recorded as an input."""
         self._usable()
-        folder = fallback.local_folder(self.artifact.backend, self.artifact.project.name, self.artifact.name, self.manifest)
+        folder = self.artifact.backend.local_folder(self.artifact.project.name, self.artifact.name, self.manifest)
         self._record(record)
         return folder
 
@@ -596,20 +519,18 @@ class Version:
         entry = resolve_entry(self.manifest["files"], path)
         if entry is None:
             raise NotFound(f"{self.ref} has no file {path}")
-        from ..store.cache import cached, files_folder, touch, version_folder
+        from ..store.folders import cached, files_folder, touch, version_folder
 
         backend = self.artifact.backend
-        local = files_folder(cache_root(), self.uid) / path
-        if self.pending:
-            local = fallback.local_folder(backend, self.artifact.project.name, self.artifact.name, self.manifest) / path
-        elif cached(self.uid) is not None:
-            touch(version_folder(cache_root(), self.uid))
+        root = backend.root
+        local = files_folder(root, self.uid) / path
+        if cached(root, self.uid) is not None:
+            touch(version_folder(root, self.uid))
         if local.is_file():
             handle = local.open("rb")
-        elif isinstance(backend, LocalRepo):
-            handle = backend.blob_path(entry["sha256"]).open("rb")
         else:
-            read = backend.read_file(self.artifact.project.name, self.artifact.name, f"v{self.number}", path)
+            selector = f"v{self.number}" if self.number is not None else self.uid
+            read = backend.read_file(self.artifact.project.name, self.artifact.name, selector, path)
             handle = io.BufferedReader(_Chunks(read))
         self._record(record)
         return handle
@@ -644,41 +565,21 @@ class _Chunks(io.RawIOBase):
 
 
 def connect(url_or_path: str | Path | None = None, *, token: str | None = None, project: str | None = None) -> Repo:
-    """A store: None for the one `[store]` in cairn.toml names, a server URL, or a store folder.
-
-    `project` is the default project (default: the configured one). Connecting to a server for which this
-    machine has pending versions starts the background uploader."""
-    from .http import Client, connect as client_for, project_name
-    from .open import open_repo
+    """A repo: None for the project's (with its remote, if `[repo] remote` names one), a remote's URL (with the project's
+    repo for its outbox and files, and as its cache when it is the project's own remote), or a repo folder on this
+    machine. `project` is the default project (default: the configured one). Connecting to a repo whose outbox holds
+    pending versions starts the background uploader."""
+    from .open import as_repo, open_remote
 
     if isinstance(url_or_path, Repo):
         return url_or_path
-    if isinstance(url_or_path, (LocalRepo, Remote)):
-        backend = url_or_path
-    elif url_or_path is None:
-        config = load_config()
-        backend = open_repo(config)
+    if isinstance(url_or_path, str) and url_or_path.startswith(("http://", "https://")):
+        backend = open_remote(url_or_path, token=token, project=project)
+    else:
+        backend = as_repo(url_or_path)
         if project:
             backend.project = refs.valid_project(project)
-        if isinstance(backend, Remote) and token is not None:
-            backend.client.token = token
-    else:
-        try:
-            config = load_config()
-            default = project or project_name(config)
-        except (SystemExit, ValueError):
-            config, default = None, project
-        text = str(url_or_path)
-        if text.startswith(("http://", "https://")):
-            client = Client(text, token, allow_http=bool(config and config.store.get("allow_http"))) if token is not None \
-                else client_for(config, text)
-            backend = Remote(client, default)
-        else:
-            backend = LocalRepo(Path(text).expanduser(), default)
-    store = Repo(backend)
-    if store.remote:
-        from .sync import has_pending, start_uploader
-
-        if has_pending(backend.url):
-            start_uploader(backend, first_delay=0)
-    return store
+        if token is not None:
+            backend.use_token(token)
+    backend.resume()
+    return Repo(backend)

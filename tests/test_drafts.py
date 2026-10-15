@@ -107,7 +107,7 @@ def test_a_draft_published_while_the_server_is_down_is_pending(configured, env):
 
 
 def test_nested_drafts_are_outputs_of_the_one_run(env):
-    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
     outer = cairn.draft("outer")
     inner = cairn.draft("inner")
     with cairn.draft("innermost") as innermost:
@@ -162,7 +162,7 @@ def test_a_failed_run_keeps_the_edge_to_its_outputs(configured, env):
 
 
 def test_config_becomes_metadata(env, capsys):
-    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
     with cairn.draft("fit", config={"lr": 0.1, "model": {"depth": 3, "widths": [8, 16]}}) as fit:
         assert fit.config == {"lr": 0.1, "model": {"depth": 3, "widths": [8, 16]}}
         (fit.path / "a.txt").write_text("a")
@@ -205,7 +205,7 @@ def test_watch_marks_the_version_failed_on_an_exception(configured, env):
 
 
 def test_watch_syncs_in_the_background(env):
-    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
     store = cairn.connect()
     with cairn.draft("live", watch=True) as run:
         run._stop.set()  # restart the follower with a short interval
@@ -256,10 +256,13 @@ def test_cli_lists_publishes_and_discards_kept_drafts(configured, env, capsys):
         main(["drafts", "publish", "nope"])
 
 
-def test_outside_a_project_drafts_live_in_the_data_root(tmp_path):
-    local = cairn.LocalRepo(tmp_path / "store-root", "loose")
+def test_outside_a_project_drafts_need_a_repo(tmp_path, monkeypatch):
+    local = cairn.LocalRepo(tmp_path / "repo-root", "loose")
+    with pytest.raises(cairn.StoreError, match="no repo"):
+        cairn.draft("loose", store=local)
+    monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "chosen"))
     with cairn.draft("loose", store=local) as run:
-        assert run.path.parent.parent == tmp_path / "data" / "drafts"
+        assert run.path.parent.parent == tmp_path / "chosen" / "drafts"
         (run.path / "a.txt").write_text("a")
     assert run.version.ref == "loose:loose@v1" and not run.path.exists()
 
@@ -270,7 +273,7 @@ def test_a_local_store_shares_storage_with_the_published_blobs(env, monkeypatch)
     import cairn.store.fs
 
     monkeypatch.setattr(cairn.store.fs, "clone", lambda source, target: False)
-    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
     with cairn.draft("big") as run:
         (run.path / "data.bin").write_bytes(os.urandom(1 << 16))
         inode = (run.path / "data.bin").stat().st_ino
@@ -426,7 +429,7 @@ def test_hydra_multirun_publishes_one_sweep_draft(hydra_project):
 
 def test_finalize_study_publishes_a_sweep_draft(env, capsys):
     pytest.importorskip("hydra")
-    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
     sweep = drafts.Draft("sweep", activate=False)
     for trial in ("0", "1"):
         (sweep.folder / trial / ".hydra").mkdir(parents=True)

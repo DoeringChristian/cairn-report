@@ -34,7 +34,7 @@ def build_data(base: Path, url: str) -> None:
     project = base / "study"
     project.mkdir()
     (project / "pyproject.toml").write_text("")
-    (project / "cairn.toml").write_text(f'[store]\nurl = "{url}"\nproject = "study"\ninterval = 1\n')
+    (project / "cairn.toml").write_text(f'[repo]\nremote = "{url}"\nproject = "study"\ninterval = 1\n')
     os.chdir(project)
     os.environ["CAIRN_CACHE_DIR"] = str(base / "cache")
     os.environ.pop("CAIRN_INPUTS", None)
@@ -117,7 +117,7 @@ def run(keep: bool) -> int:
     store_httpd.log = None
     threading.Thread(target=store_httpd.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{store_httpd.server_address[1]}"
-    os.environ["CAIRN_STORE_TOKEN"] = token
+    os.environ["CAIRN_TOKEN"] = token
     build_data(base, url)
     ui_httpd = make_ui_server(RemoteBackend(url, False), port=0, secure_cookie=False)
     ui_httpd.RequestHandlerClass.log_message = lambda *a: None

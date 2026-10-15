@@ -8,8 +8,9 @@ import tempfile
 import time
 from pathlib import Path
 
-from ..client.http import HashCache, entries_for, scan
+from ..client.http import entries_for, scan
 from ..client.open import open_repo, versions_of
+from ..store.hashes import HashCache
 from ..client.publishing import describe, publish
 from ..config import Config
 from ..store import StoreError, refs
@@ -28,7 +29,7 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
     (the shared page files it needs), so it can be viewed on its own. Its inputs are the exact versions
     the report read. A report whose source, inputs, and metadata match the latest version creates none
     (the built pages carry build times, so the source is what is compared). Returns the version number
-    (the existing one when unchanged), or None when the version is queued for an unreachable server.
+    (the existing one when unchanged), or None while it is pending (the remote did not answer).
     """
     say = (lambda *_args, **_kwargs: None) if quiet else print
     from . import build as builder
@@ -50,14 +51,14 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
         for hashed in builder.STATIC_NAMES.values():
             for file in (hashed, f"{hashed}.gz"):
                 shutil.copy2(builder.OUTPUT_ROOT / builder.STATIC / file, static / file)
-        before = max((v["version"] for v in versions_of(store, name)), default=0) if _exists(store, name) else 0
+        before = max((v["version"] or 0 for v in versions_of(store, name)), default=0) if _exists(store, name) else 0
         if before and _same_source(store, name, stage / "source", config, inputs, metadata):
             say(f"{name}@v{before} unchanged", flush=True)
             return before
         number = publish(name, stage, metadata=metadata, inputs=inputs, label=time.strftime("%Y-%m-%d_%H-%M-%S"),
                                    store=store, config=config)
     if number is None:
-        say(f"pending {name}: the store does not answer; `cairn status` lists it, `cairn sync` sends it", flush=True)
+        say(f"pending {name}: the remote does not answer; `cairn status` lists it, `cairn sync` sends it", flush=True)
         return None
     state = store.resolve(refs.exact(store.project, name, number))[2]
     say(f"published {name}@v{number} ({describe(state)}; inputs: {', '.join(inputs) or 'none'})", flush=True)
@@ -77,8 +78,8 @@ def _same_source(store, name: str, source: Path, config: Config, inputs: list[st
         _, _, latest = store.resolve(name)
     except StoreError:
         return False
-    files = scan(source, "", config, exclude=config.store.get("exclude", []))
-    entries, _ = entries_for(files, HashCache(config.project))
+    files = scan(source, "", config.project, config.repo.get("exclude", []))
+    entries, _ = entries_for(files, HashCache.of(store.root, config.project))
 
     def key(entry: dict, prefix: str = ""):
         return (prefix + entry["path"], entry.get("sha256"), entry.get("link"))

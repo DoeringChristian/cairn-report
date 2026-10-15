@@ -11,9 +11,8 @@ A `Run` is a draft (cairn/client/drafts.py) of the artifact `runs/<name>`, with 
 `metadata.config`. The name defaults to the script's stem (`python -m pkg.mod`: the module's name; an interactive
 session: `interactive`). There is one current run per process: a second `init()` returns it (adding its `config` and `metadata`, and refusing another
 name), `cairn.run()` returns it or None. Its version is created at once (running), so the outputs published while
-it runs name it by its uid; with a store server it is synced every `[store] interval` seconds (`watch`, the
-default there) with a heartbeat, so the UI shows it live; with a local store it is synced when it ends (`watch=True`
-to follow it).
+it runs name it by its uid; with a remote it is synced every `[repo] interval` seconds (`watch`, the default
+there) with a heartbeat, so the UI shows it live; without one it is written when it ends (`watch=True` to follow it).
 
 Its folder gets, besides what the job writes with `run.add(...)` and `run.add_*`:
 
@@ -34,9 +33,9 @@ Completion: at exit (`atexit`), the open drafts of the run are published, then t
 (`sys.excepthook`), a non-zero exit (`sys.exit(2)`, `raise SystemExit("message")`: the exit code goes to
 logs/error.txt and `metadata.exit_code`; `sys.exit(0)` and `sys.exit()` complete it) or SIGTERM (when no other
 handler is installed) fails it, keeping its folder and writing logs/error.txt. A process killed without a chance to
-run any of this (SIGKILL, the OOM killer) leaves the version `running` until the store notices the missing
-heartbeat: it fails it the next time anything opens the store (local store: `LocalRepo.reap`; store server: a
-flusher, see sync.py). `run.finish()` ends it earlier (a Hydra job does, cairn/runs/hydra.py), after which the process may
+run any of this (SIGKILL, the OOM killer) leaves the version `running` until the repo notices the missing
+heartbeat: it fails it the next time anything opens the repo (`LocalRepo.reap`), or, with a remote, at the next
+sync (sync.py). `run.finish()` ends it earlier (a Hydra job does, cairn/runs/hydra.py), after which the process may
 start another one.
 """
 
@@ -91,12 +90,7 @@ def _interactive() -> bool:
 
 
 def _same_store(one, other) -> bool:
-    a, b = one.backend, other.backend
-    if type(a) is not type(b):
-        return False
-    if getattr(a, "url", None) or getattr(b, "url", None):
-        return getattr(a, "url", None) == getattr(b, "url", None)
-    return Path(a.root).resolve() == Path(b.root).resolve() and a.project == b.project
+    return one.backend.same_as(other.backend)
 
 
 class Run(Draft):
@@ -144,7 +138,7 @@ class Run(Draft):
         """Create the running version and start recording (env, output, system, code); see the module doc."""
         global _CURRENT
         watch = self.options["watch"]
-        watch = self.store.remote if watch is None else bool(watch)
+        watch = self.store.backend.live if watch is None else bool(watch)
         self.record["watch"] = watch
         self._save()
         self._start_watch(follow=watch)
@@ -302,10 +296,10 @@ def init(name: str | None = None, *, config=None, metadata: dict | None = None, 
     """Start this process's run (see the module doc), or return it when it already runs.
 
     `name` (default: the script's stem) makes it a version of `runs/<name>`; `config` (plain values) becomes
-    `metadata.config`, `metadata` is added to the version's metadata. `watch` (default: True for a store server)
+    `metadata.config`, `metadata` is added to the version's metadata. `watch` (default: True with a remote)
     keeps the running version synced while it runs; `capture` tees stdout and stderr into logs/; `system` samples
     the machine every 10 s (or every `system` seconds); `code` snapshots the source and the installed packages.
-    `store` as for `cairn.publish` (None: the configured store). A second call returns the current run; with
+    `store` as for `cairn.publish` (None: the project's repo). A second call returns the current run; with
     another name it raises, and a `config` or `metadata` given then is added to the running run (also when the
     first `use`/`pull`/`draft` started it implicitly)."""
     with _LOCK:

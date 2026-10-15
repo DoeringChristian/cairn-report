@@ -1,21 +1,20 @@
-"""Where Cairn keeps things: the base folder (`.cairn`) and the roots inside it."""
+"""Where Cairn keeps things: the repo (`.cairn`), the one folder of a project, and its layout."""
 
+import json
 from pathlib import Path
 
 import pytest
 
-from cairn.client.open import open_repo
+import cairn
+from cairn.client.open import open_repo, repo_root
 from cairn.config import cairn_base, load_config
 from cairn.runs.snapshot import _denied
-from cairn.store import cache
-from cairn.store.cache import cache_root, data_root
+from cairn.store import StoreError
 
 
 @pytest.fixture
 def proj(tmp_path, monkeypatch):
-    monkeypatch.delenv("CAIRN_DATA_DIR")
     monkeypatch.delenv("CAIRN_DIR", raising=False)
-    monkeypatch.delenv("CAIRN_CACHE_DIR", raising=False)
     folder = tmp_path / "proj"
     folder.mkdir()
     (folder / "pyproject.toml").write_text("")
@@ -28,50 +27,61 @@ def proj(tmp_path, monkeypatch):
 
 def test_project_default_puts_everything_in_dot_cairn(proj):
     base = proj / ".cairn"
-    assert cairn_base() == base
-    assert (data_root(), cache_root()) == (base / "pending", base / "cache")
+    assert cairn_base() == base and repo_root() == base
     config = load_config()
-    assert (config.store_path, config.output_dir) == (base / "store", base / "build")
+    assert (config.cairn_dir, config.output_dir) == (base, base / "build")
+
+
+def test_the_repo_layout(proj, tmp_path):
+    data = tmp_path / "d"
+    data.mkdir()
+    (data / "a.txt").write_text("1")
+    version = cairn.connect().artifact("data").publish(data)
+    folder = cairn.pull(f"data@v{version.number}")
+    base = proj / ".cairn"
+    assert folder == base / "versions" / version.uid / "files"
+    names = {path.name for path in base.iterdir()}
+    assert {"repo.json", "metadata.sqlite3", "blobs", "tmp", "versions", "drafts", ".gitignore"} <= names
+    assert not names & {"store", "pending", "cache", "store.json", "projects"}  # the 0.13 layout is gone
+    record = json.loads((base / "repo.json").read_text())
+    assert record["layout"] == 1 and record["uid"]
+    sha = version.files[0].sha256
+    assert (base / "blobs" / sha[:2] / sha).is_file()  # blobs/<aa>/<sha256>
+    assert (base.stat().st_mode & 0o777) == 0o700  # private to its owner
 
 
 def test_base_resolution_order(proj, tmp_path, monkeypatch):
     (proj / "cairn.toml").write_text('[cairn]\ndir = "work/cairn"\n')
     assert cairn_base() == proj / "work" / "cairn"
-    assert data_root() == proj / "work" / "cairn" / "pending"
-    assert load_config().store_path == proj / "work" / "cairn" / "store"
+    assert load_config().cairn_dir == proj / "work" / "cairn"
     monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "elsewhere"))  # the environment beats cairn.toml
     assert cairn_base() == tmp_path / "elsewhere"
-    assert (data_root(), cache_root()) == (tmp_path / "elsewhere" / "pending", tmp_path / "elsewhere" / "cache")
     assert load_config().output_dir == tmp_path / "elsewhere" / "build"
+    (proj / "cairn.toml").write_text('output_dir = "site"\n')
+    assert load_config().output_dir == proj / "site"
 
 
-def test_each_root_has_its_own_overrides(proj, tmp_path, monkeypatch):
-    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / "scratch"))
-    assert (data_root(), cache_root()) == (tmp_path / "data", tmp_path / "scratch")
-    cache.use_data_dir(tmp_path / "flag")  # --data-dir beats the environment
-    assert data_root() == tmp_path / "flag"
-    (proj / "cairn.toml").write_text('output_dir = "site"\n[store]\npath = "mine"\n')
-    config = load_config()
-    assert (config.output_dir, config.store_path) == (proj / "site", proj / "mine")
-
-
-def test_outside_a_project_the_xdg_folders_are_used(tmp_path, monkeypatch):
-    monkeypatch.delenv("CAIRN_DATA_DIR")
+def test_outside_a_project_there_is_no_repo_unless_cairn_dir_names_one(tmp_path, monkeypatch):
     monkeypatch.delenv("CAIRN_DIR", raising=False)
     monkeypatch.chdir(tmp_path)  # no project marker above it
     assert cairn_base() is None
-    assert data_root() == tmp_path / "xdg-data" / "cairn"
-    assert cache_root() == tmp_path / "cache" / "cairn"
+    with pytest.raises(StoreError, match="no repo"):
+        repo_root()
     monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "chosen"))  # CAIRN_DIR works anywhere
-    assert data_root() == tmp_path / "chosen" / "pending"
+    assert repo_root() == tmp_path / "chosen"
+
+
+def test_store_config_is_an_unknown_key(proj):
+    (proj / "cairn.toml").write_text('[store]\nurl = "https://x.example.org"\n')
+    with pytest.raises(ValueError, match=r"unknown keys \['store'\]"):
+        load_config()
 
 
 def test_old_config_keys_are_errors(proj):
     (proj / "cairn.toml").write_text('outputs_dir = "runs"\n')
     with pytest.raises(ValueError, match="unknown keys.*outputs_dir"):
         load_config()
-    (proj / "cairn.toml").write_text('[hub]\nurl = "x"\n')
+    (proj / "cairn.toml").write_text('[hub]\nremote = "x"\n')
     with pytest.raises(ValueError, match="unknown keys.*hub"):
         load_config()
 
@@ -91,21 +101,16 @@ def test_a_folder_with_only_the_old_config_is_still_a_project(tmp_path, monkeypa
         load_config()
 
 
-def test_the_removed_state_dir_variable_does_nothing(proj, tmp_path, monkeypatch):
-    monkeypatch.setenv("CAIRN_STATE_DIR", str(tmp_path / "state-dir"))
-    assert data_root() == proj / ".cairn" / "pending"
-
-
 # ------------------------------------------------------------------ .gitignore
 
 
 def test_gitignore_is_written_once_with_a_star(proj):
-    cache_root()
+    repo_root()
     marker = proj / ".cairn" / ".gitignore"
     assert marker.read_text() == "*\n"
     marker.write_text("custom\n")
-    cache_root()
-    data_root()
+    repo_root()
+    open_repo()
     assert marker.read_text() == "custom\n"  # never rewritten
     assert not (proj / ".gitignore").exists()  # the project's own file is never touched
 

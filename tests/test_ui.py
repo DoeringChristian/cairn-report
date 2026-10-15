@@ -66,7 +66,10 @@ def data(ui, path, cookie, expect=200):
 
 
 def publish_reports(project, server):
-    """The conftest project (reports alpha and beta, input `descent`) with its store switched to the server."""
+    """The conftest project (reports alpha and beta, input `descent`) with a fresh repo whose remote is the server."""
+    import shutil
+
+    shutil.rmtree(project / ".cairn")  # the fixture's repo had no remote: start over (adopting it is tested elsewhere)
     r = use_remote(project, server)
     store.publish("descent", make_data(project.parent / "remote-data"), store=r)
     main(["publish", "reports/alpha"])
@@ -200,9 +203,9 @@ def test_no_auth_ui_over_a_no_auth_store_uses_no_token(tmp_path, env, monkeypatc
     init_root(root)
     store_httpd = make_server(root, port=0, no_auth=True)
     threading.Thread(target=store_httpd.serve_forever, daemon=True).start()
-    monkeypatch.delenv("CAIRN_STORE_TOKEN", raising=False)
+    monkeypatch.delenv("CAIRN_TOKEN", raising=False)
     url = f"http://127.0.0.1:{store_httpd.server_address[1]}"
-    (env / "cairn.toml").write_text(f'[store]\nurl = "{url}"\nproject = "study"\n')
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{url}"\nproject = "study"\n')
     store.publish("open", folder(env, "o", {"a.txt": "x"}))
     httpd, ui = start(RemoteBackend(url, False), no_auth=True)
     try:
@@ -438,28 +441,30 @@ def test_the_ui_uses_only_the_store_interface_and_the_server_has_no_ui_code():
         assert gone not in server_text.replace("there are no cookies", "").replace("--insecure-cookies", ""), gone
 
 
-def test_ui_command_wires_the_configured_store(env, server, monkeypatch, capsys):
-    (env / "cairn.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\n')
+def test_ui_command_wires_the_project_repo(env, server, monkeypatch, capsys):
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "study"\n')
     seen = {}
     monkeypatch.setattr("cairn.ui.serve_ui", lambda backend, **options: seen.update(backend=backend, **options))
-    main(["ui"])
-    assert isinstance(seen["backend"], RemoteBackend) and seen["backend"].url == server.url and seen["port"] == 8801
-    assert seen["no_auth"] is False and seen["secure_cookie"] is True
-    main(["ui", "--store", str(server.root), "--port", "9999", "--insecure-cookies"])
+    main(["ui"])  # the project's repo directly, reading through its remote
+    assert isinstance(seen["backend"], LocalBackend) and seen["backend"].root == (env / ".cairn").resolve()
+    assert seen["backend"].store.url == server.url and seen["port"] == 8801
+    assert seen["no_auth"] is False and seen["secure_cookie"] is True and seen["login_token"] == seen["backend"].owner
+    main(["ui", "--remote", server.url])
+    assert isinstance(seen["backend"], RemoteBackend) and seen["backend"].url == server.url
+    main(["ui", "--repo", str(server.root), "--port", "9999", "--insecure-cookies"])
     assert isinstance(seen["backend"], LocalBackend) and seen["port"] == 9999 and seen["secure_cookie"] is False
-    (env / "cairn.toml").write_text('[store]\npath = "mystore"\n')
-    LocalRepo(env / "mystore")
+    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
     main(["ui", "--no-auth"])
-    assert seen["backend"].root == (env / "mystore").resolve() and seen["no_auth"] is True
-    with pytest.raises(SystemExit, match="no store folder"):
-        main(["ui", "--store", str(env / "missing")])
+    assert seen["backend"].root == (env / ".cairn").resolve() and seen["no_auth"] is True and seen["backend"].store.url is None
+    with pytest.raises(SystemExit, match="no repo folder"):
+        main(["ui", "--repo", str(env / "missing")])
 
 
 def test_serve_ui_prints_where_it_runs(server, capsys, monkeypatch):
     monkeypatch.setattr(ui_server.ThreadingHTTPServer, "serve_forever", lambda self: self.server_close())
     ui_server.serve_ui(RemoteBackend(server.url, False), port=0)
     out = capsys.readouterr().out
-    assert re.fullmatch(rf"UI: http://127\.0\.0\.1:\d+/ \(store: {re.escape(server.url)}\)\n", out) and server.token not in out
+    assert re.fullmatch(rf"UI: http://127\.0\.0\.1:\d+/ \(repo: {re.escape(server.url)}\)\n", out) and server.token not in out
 
 
 # -------------------------------------------------------------- end to end
@@ -472,7 +477,7 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
         root = tmp_path / name
         root.mkdir()
         (root / "pyproject.toml").write_text("")
-        (root / "cairn.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\ninterval = 1\n')
+        (root / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "study"\ninterval = 1\n')
         monkeypatch.chdir(root)
         monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / f"cache-{name}"))
         monkeypatch.delenv("CAIRN_INPUTS", raising=False)

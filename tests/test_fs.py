@@ -6,7 +6,7 @@ import cairn.server.app as app_module
 import cairn.store.local as local_module
 from cairn.cli import main
 from cairn.server import make_server
-from cairn.store import LocalRepo
+from cairn.store import LocalRepo, StoreError
 from cairn.store.fs import is_network_type, network_filesystem, type_from_mounts
 from cairn.store.tokens import init_root
 
@@ -63,22 +63,20 @@ def test_this_machines_temporary_folder_is_local(tmp_path):
 @pytest.fixture
 def on_nfs(monkeypatch):
     """Every path looks like it lies on NFS."""
-    monkeypatch.setattr(app_module, "network_filesystem", lambda path: "nfs4")
+    import cairn.client.open as open_module
+
     monkeypatch.setattr(local_module, "network_filesystem", lambda path: "nfs4")
-    monkeypatch.setattr(local_module, "_WARNED", set())
+    monkeypatch.setattr(open_module, "network_filesystem", lambda path: "nfs4")
 
 
-def test_the_server_refuses_a_root_on_a_network_filesystem(tmp_path, on_nfs, capsys):
+def test_the_server_refuses_a_repo_on_a_network_filesystem(tmp_path, on_nfs, capsys):
     root = tmp_path / "root"
     init_root(root)
     with pytest.raises(SystemExit) as refused:
         make_server(root, port=0)
-    assert "network filesystem (nfs4)" in str(refused.value) and "--allow-network-fs" in str(refused.value)
-    server = make_server(root, port=0, allow_network_fs=True)  # the only writer: allowed, with a warning
-    try:
-        assert "must be the only process writing it" in capsys.readouterr().err
-    finally:
-        server.server_close()
+    assert "network filesystem (nfs4)" in str(refused.value) and "allow_network_fs" in str(refused.value)
+    server = make_server(root, port=0, allow_network_fs=True)  # the only writer: allowed
+    server.server_close()
     with pytest.raises(SystemExit):
         app_module.serve_store(tmp_path / "new-root", port=0)
     assert not (tmp_path / "new-root").exists()  # refused before anything was created
@@ -95,20 +93,32 @@ def test_the_cli_passes_allow_network_fs(tmp_path, monkeypatch):
     assert seen["allow_network_fs"] is False
 
 
-def test_a_local_store_on_a_network_filesystem_refuses_writes(tmp_path, on_nfs):
-    store = LocalRepo(tmp_path / "shared")
-    store.projects()  # opening and reading are fine
-    with pytest.raises(StoreError, match=r"network filesystem \(nfs4\).*\[store\] url.*allow_network_fs"):
-        store.create_project("p")
-    LocalRepo(tmp_path / "allowed", allow_network_fs=True).create_project("p")  # one writer, by the user's word
+def test_a_repo_database_is_never_made_on_a_network_filesystem(tmp_path, on_nfs):
+    with pytest.raises(StoreError, match=r"network filesystem \(nfs4\).*\[repo\] remote.*allow_network_fs"):
+        LocalRepo(tmp_path / "shared")
+    assert not (tmp_path / "shared" / "metadata.sqlite3").exists()
+    LocalRepo(tmp_path / "allowed", allow_network_fs=True).create_project("p")  # one writer, by the owner's word
+
+
+def test_without_a_remote_a_repo_on_a_network_filesystem_explains_the_cluster_setup(tmp_path, on_nfs, monkeypatch, capsys):
+    from cairn.client.open import open_repo
+    from cairn.config import load_config
+
+    (tmp_path / "pyproject.toml").write_text("")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(StoreError, match=r"cairn server.*\[repo\] remote.*cairn sync.*allow_network_fs"):
+        open_repo(load_config(tmp_path))
+    with pytest.raises(SystemExit, match="network filesystem"):
+        main(["versions", "x"])
+    assert not (tmp_path / ".cairn" / "metadata.sqlite3").exists()
 
 
 def test_allow_network_fs_comes_from_cairn_toml(tmp_path, on_nfs, monkeypatch):
     from cairn.client.open import open_repo
     from cairn.config import load_config
 
-    (tmp_path / "cairn.toml").write_text('[store]\nproject = "p"\nallow_network_fs = true\n')
+    (tmp_path / "cairn.toml").write_text('[repo]\nproject = "p"\nallow_network_fs = true\n')
     assert open_repo(load_config(tmp_path)).projects()[0]["name"] == "p"
-    (tmp_path / "cairn.toml").write_text('[store]\nproject = "q"\nallow_network_fs = "yes"\n')
+    (tmp_path / "cairn.toml").write_text('[repo]\nproject = "q"\nallow_network_fs = "yes"\n')
     with pytest.raises(ValueError, match="allow_network_fs must be true or false"):
         load_config(tmp_path)

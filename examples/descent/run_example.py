@@ -11,15 +11,15 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-os.chdir(HERE)  # the project root (cairn.toml): the store, drafts, and reports are found from here
+os.chdir(HERE)  # the project root (cairn.toml): its repo (.cairn/), drafts, and reports are found from here
 
 import cairn  # noqa: E402
 import cairn.reports  # noqa: E402
 
 
 def main() -> None:
-    store = cairn.connect()                         # the store [store] in cairn.toml names: a local one in .cairn/store
-    project = store.project()                       # descent-example
+    repo = cairn.connect()                          # the project's repo, .cairn/ (no remote: it numbers the versions)
+    project = repo.project()                        # descent-example
 
     dataset = project.artifact("datasets/quadratic").publish("data/quadratic")
     print(f"published {dataset.ref}", flush=True)   # unchanged on a second run: the same version

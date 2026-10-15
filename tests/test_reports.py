@@ -252,7 +252,8 @@ def manifest_of(project, key="alpha"):
 
 def test_inputs_are_pinned_and_recorded(project):
     build_all(load_config(project))
-    expected = {"descent": {"requested": "descent@latest", "resolved": "study:descent@v1", "files": 4}}
+    uid = store.connect().artifact("descent").version(1).uid
+    expected = {"descent": {"requested": "descent@latest", "resolved": "study:descent@v1", "uid": uid, "files": 4}}
     manifest = manifest_of(project)
     assert manifest["inputs"] == expected and "source_runs" not in manifest and "selection" not in manifest
     assert json.loads((built(project) / "alpha" / "report-data.json").read_text())["inputs"] == expected
@@ -264,7 +265,8 @@ def test_inputs_are_pinned_and_recorded(project):
     store.publish("descent", data)
     assert store.versions("descent")[-1]["version"] == 2
     build_all(load_config(project))
-    assert manifest_of(project)["inputs"]["descent"] | {"files": 0} == expected["descent"] | {"resolved": "study:descent@v2", "files": 0}
+    assert manifest_of(project)["inputs"]["descent"] | {"files": 0, "uid": None} == \
+        expected["descent"] | {"resolved": "study:descent@v2", "files": 0, "uid": None}
 
 
 def test_inputs_exposes_paths_by_attribute_and_item(project):

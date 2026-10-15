@@ -1,6 +1,6 @@
-"""`cairn server` and `cairn ui` with no arguments use the project's own store folder (.cairn/store), creating it
-if needed, and print a one-time login link. Processes on the machine always open the folder directly, so
-starting or stopping a server during a run changes nothing. Real processes, as a user runs them."""
+"""`cairn server` and `cairn ui` with no arguments use the project's repo (.cairn), creating it if needed, and print a
+one-time login link. Processes on the machine always open the repo directly, so starting or stopping a server during
+a run changes nothing. Real processes, as a user runs them."""
 
 import json
 import os
@@ -38,9 +38,9 @@ print(result.version.ref)
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    for name in ("CAIRN_DIR", "CAIRN_DATA_DIR", "CAIRN_CACHE_DIR", "CAIRN_INPUTS", "CAIRN_STORE_TOKEN"):
+    for name in ("CAIRN_DIR", "CAIRN_INPUTS", "CAIRN_TOKEN"):
         monkeypatch.delenv(name, raising=False)
-    (tmp_path / "cairn.toml").write_text('[store]\nproject = "demo"\n')
+    (tmp_path / "cairn.toml").write_text('[repo]\nproject = "demo"\n')
     return tmp_path
 
 
@@ -82,22 +82,22 @@ def link_of(lines):
     return re.search(r"Log in: (\S+)", lines[-1]).group(1)
 
 
-def test_cairn_server_serves_the_project_store_beside_direct_writers(project):
+def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(project):
     slow = subprocess.Popen([sys.executable, "-c", SLOW], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    store = project / ".cairn" / "store"
-    for _ in range(400):  # the run is started (the store exists) before any server
+    store = project / ".cairn"
+    for _ in range(400):  # the run is started (the repo exists) before any server
         if (store / "metadata.sqlite3").exists():
             break
         time.sleep(0.05)
     server, lines = start(project, "server", "--port", "0")
     try:
-        assert any(line.startswith("Created store") for line in lines)  # an existing folder gets its owner token
-        (project / "go").touch()  # the run finishes while the server serves the folder
+        assert any(line.startswith("Created the repo") for line in lines)  # an existing repo gets its owner token
+        (project / "go").touch()  # the run finishes while the server serves the repo
         out, err = slow.communicate(timeout=120)
         assert slow.returncode == 0, err
         assert out.strip() == "demo:slow-result@v1"
 
-        result = run(project, sys.executable, "-c", SCRIPT)  # a script beside the server: the folder directly
+        result = run(project, sys.executable, "-c", SCRIPT)  # a script beside the server: the repo directly
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "demo:res@v1"
         listed = run(project, sys.executable, "-m", "cairn", "artifacts")
@@ -112,8 +112,8 @@ def test_cairn_server_serves_the_project_store_beside_direct_writers(project):
         with opener().open(link) as again:  # the link works once
             assert again.url.endswith("/login")
 
-        port = re.search(r"Store: http://127.0.0.1:(\d+)/", "\n".join(lines)).group(1)
-        second = run(project, sys.executable, "-m", "cairn", "server", str(project / "other-store"), "--port", port)
+        port = re.search(r"Repo: http://127.0.0.1:(\d+)/", "\n".join(lines)).group(1)
+        second = run(project, sys.executable, "-m", "cairn", "server", str(project / "other-repo"), "--port", port)
         assert second.returncode == 1 and f"port {port} on 127.0.0.1 is in use" in second.stderr, second  # never moved
     finally:
         stop(server)
@@ -121,23 +121,23 @@ def test_cairn_server_serves_the_project_store_beside_direct_writers(project):
     assert result.returncode == 0 and result.stdout.strip() == "demo:res@v2", result.stderr
 
 
-def test_cairn_ui_creates_the_project_store_and_logs_in_with_a_link(project):
+def test_cairn_ui_creates_the_project_repo_and_logs_in_with_a_link(project):
     ui, lines = start(project, "ui", "--no-browser", "--port", "0")
     try:
-        assert any(line.startswith("Created store") for line in lines)
-        assert (project / ".cairn" / "store" / "token").is_file()
+        assert any(line.startswith("Created an owner token for the repo") for line in lines)
+        assert (project / ".cairn" / "token").is_file() and (project / ".cairn" / "repo.json").is_file()
         assert (project / ".cairn" / ".gitignore").read_text().strip() == "*"
         link = link_of(lines)
         browser = opener()
         browser.open(link)
-        assert projects(browser, link.split("login?")[0]) == []
+        assert projects(browser, link.split("login?")[0]) == ["demo"]
         with pytest.raises(urllib.error.HTTPError):  # without the session: 401 on the API
             projects(opener(), link.split("login?")[0])
     finally:
         stop(ui)
 
 
-def test_cairn_server_refuses_a_project_with_a_store_url(project):
-    (project / "cairn.toml").write_text('[store]\nurl = "https://store.example.org"\n')
+def test_cairn_server_refuses_a_project_with_a_remote(project):
+    (project / "cairn.toml").write_text('[repo]\nremote = "https://cairn.example.org"\n')
     result = run(project, sys.executable, "-m", "cairn", "server")
-    assert result.returncode == 1 and "this project's store is the server https://store.example.org" in result.stderr
+    assert result.returncode == 1 and "this project's repo syncs with the remote https://cairn.example.org" in result.stderr

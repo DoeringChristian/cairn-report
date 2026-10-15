@@ -43,19 +43,11 @@ def test_symlinked_folder_is_followed_and_labelled_by_target(env, capsys):
     assert [entry["path"] for entry in version["files"]] == ["metrics.csv"]
 
 
-def test_mappings_from_config(env, capsys):
-    folder(env, "runs/a", {"a.txt": "1"})
-    (env / "cairn.toml").write_text(
-        '[store]\npublish = [{ folder = "runs/a", name = "alpha" }, { folder = "runs/missing", name = "beta" }]\n')
-    out = run(capsys, "publish")
-    assert "published alpha@v1" in out and "skipping beta" in out
-    assert run(capsys, "publish").count("unchanged") == 1
-    assert store.versions("beta") == []
-
-
-def test_no_arguments_and_no_mappings_is_an_error(env):
-    with pytest.raises(SystemExit, match="nothing to publish"):
+def test_publish_needs_a_folder_and_a_name(env):
+    with pytest.raises(SystemExit, match="publish takes FOLDER NAME"):
         main(["publish"])
+    with pytest.raises(SystemExit, match="publish takes FOLDER NAME"):
+        main(["publish", "runs/a"])
 
 
 def test_a_logger_table_is_an_unknown_key(env):

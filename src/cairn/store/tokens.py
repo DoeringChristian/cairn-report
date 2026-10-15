@@ -1,4 +1,4 @@
-"""Access tokens of a store server.
+"""Access tokens of a repo, for `cairn server` and `cairn ui`.
 
     <root>/token          the owner token (full access), created on the first launch
     <root>/tokens.jsonl   scoped tokens, append-only: a row per token (id, name, project, write, created,
@@ -49,8 +49,6 @@ def read_token(path: Path) -> str:
 
 def init_root(root: Path) -> Path:
     """Create a store root with a fresh random owner token, readable only by its owner."""
-    from .local import LocalRepo
-
     root.mkdir(parents=True, exist_ok=True)
     os.chmod(root, 0o700)
     token_file = root / "token"
@@ -60,7 +58,6 @@ def init_root(root: Path) -> Path:
     with os.fdopen(descriptor, "w") as handle:
         os.fchmod(handle.fileno(), 0o600)  # explicit: default ACLs may ignore the creation mode
         handle.write(secrets.token_urlsafe(32) + "\n")
-    LocalRepo(root)
     return token_file
 
 

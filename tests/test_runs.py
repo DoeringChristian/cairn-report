@@ -56,6 +56,7 @@ if __name__ == "__main__":
 
 @pytest.fixture
 def hydra_project(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("")  # the project: its repo is .cairn
     (tmp_path / "configs").mkdir()
     (tmp_path / "configs" / "config.yaml").write_text(CONFIG)
     (tmp_path / "experiments").mkdir()

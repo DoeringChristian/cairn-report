@@ -151,8 +151,8 @@ def blob_files(blobs_folder: str):
                 continue
             with os.scandir(folder.path) as entries:
                 for entry in entries:
-                    sha = folder.name + entry.name
-                    if len(sha) == 64 and HEX.fullmatch(entry.name) and entry.is_file(follow_symlinks=False):
+                    sha = entry.name
+                    if len(sha) == 64 and sha.startswith(folder.name) and HEX.fullmatch(sha) and entry.is_file(follow_symlinks=False):
                         yield sha, entry.path
 
 

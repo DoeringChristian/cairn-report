@@ -1,53 +1,35 @@
-"""Project configuration: where reports, runs, and build output live, and the page style.
+"""Project configuration: where reports and build output live, the page style, and the repo's remote.
 
 Everything has a default, so most projects need no configuration. To change
 something, add a `cairn.toml` at the project root:
 
-    reports_dir = "reports"            # the root report: report.md, assets/, child report folders
-    output_dir = ".cairn/build"        # build output, one folder per report slug (default: <cairn dir>/build)
+    reports_dir = "reports"            # one folder per report: reports/<slug>/report.md
+    output_dir = ".cairn/build"        # build output, one folder per report slug (default: <repo>/build)
 
     [cairn]
-    dir = ".cairn"                     # where Cairn keeps its files for this project (default: .cairn)
+    dir = ".cairn"                     # the repo: where Cairn keeps everything for this project (default: .cairn)
 
     [style]
     css = ["reports/style.css"]        # extra stylesheets, applied after the default style
     template_dir = "reports/template"  # files here replace the packaged page files by name
 
-    [store]                            # the artifact store `cairn` reads and writes
-    path = ".cairn/store"              # a local store folder (default: <cairn dir>/store), or:
-    url = "https://store.example.org"  # a store server (`cairn server`)
+    [repo]                             # the repo's remote and what the repo publishes
+    remote = "https://cairn.example.org"   # optional: a `cairn server`, the source of truth for numbers and aliases
     project = "my-study"               # default: the project folder name
-    token_file = "~/.config/cairn/store-token"  # or CAIRN_STORE_TOKEN; never the token itself
-    allow_http = false                 # send the token over plain HTTP to a non-local server (default: refuse)
-    exclude = ["*.pkl"]                # files never published: gitignore-style globs on project paths
-    interval = 30                      # seconds between syncs of `cairn publish --watch`
+    token_file = "~/.config/cairn/token"   # or CAIRN_TOKEN; never the token itself
+    allow_http = false                 # send the token over plain HTTP to a non-local remote (default: refuse)
+    interval = 30                      # seconds between live syncs of a running version
     heartbeat_timeout = 600            # seconds without a heartbeat before a running version counts as dead
-    allow_network_fs = false           # a path on NFS/Lustre/...: only if one process on one host ever writes it
-    publish = [{ folder = "runs/descent/latest", name = "descent" }]  # folders `cairn publish` syncs
+    allow_network_fs = false           # a repo on NFS/Lustre/...: only if one process on one host ever writes it
+    exclude = ["*.pkl"]                # files never published: gitignore-style globs on project paths
 
-The project root is the nearest folder, starting at the working directory, that
-contains `cairn.toml`, `pixi.toml`, or `pyproject.toml`. (A `cairn-report.toml` is an error: rename it to `cairn.toml`.)
+The project root is the nearest folder, starting at the working directory, that contains `cairn.toml`,
+`pixi.toml`, or `pyproject.toml`. (A `cairn-report.toml` is an error: rename it to `cairn.toml`.)
 
-Where Cairn keeps things. Everything Cairn writes for a project goes into one folder, the base:
-
-    <base>/.gitignore   "*" (written whenever the folder is created; the project's own .gitignore is never edited)
-    <base>/store/       the local store (when [store] has no url)
-    <base>/pending/     the data root: versions not on the store server yet, their blobs, the known servers
-    <base>/cache/       the cache root: pulled versions, downloaded blobs, hash caches (throwaway)
-    <base>/build/       built report pages
-
-Resolution, first match wins:
-
-    base          $CAIRN_DIR, else `[cairn] dir` in cairn.toml (relative to the project root), else
-                  `<project root>/.cairn` when a project root is found, else none
-    data root     `--data-dir`, else $CAIRN_DATA_DIR, else
-                  `<base>/pending`, else `$XDG_DATA_HOME/cairn` (~/.local/share/cairn)
-    cache root    $CAIRN_CACHE_DIR, else `<base>/cache`, else `$XDG_CACHE_HOME/cairn` (~/.cache/cairn)
-    local store   `[store] path` if set, else `<base>/store`
-    build output  `output_dir` if set, else `<base>/build`
-
-The data and cache roots are looked up from the working directory (its project root); `load_config(project)`
-resolves the store and build folders for that project.
+The repo is one folder, `$CAIRN_DIR`, else `[cairn] dir` (relative to the project root), else
+`<project root>/.cairn` (none outside a project). It ignores itself in git (a `.gitignore` of `*`; the
+project's own `.gitignore` is never edited) and holds the metadata, the blobs, the outbox, drafts, and report
+builds (store/local.py lists the layout). `load_config(project)` resolves the folders for that project.
 """
 
 from __future__ import annotations
@@ -63,6 +45,7 @@ ROOT_MARKERS = (CONFIG_FILE, OLD_CONFIG_FILE, "pixi.toml", "pyproject.toml")
 BASE_ENV = "CAIRN_DIR"
 BASE_NAME = ".cairn"
 _DIR_CACHE: dict[tuple, str | None] = {}
+REPO_KEYS = {"remote", "project", "token_file", "allow_http", "interval", "heartbeat_timeout", "allow_network_fs", "exclude"}
 
 
 def config_path(root: Path) -> Path | None:
@@ -80,11 +63,10 @@ class Config:
     project: Path
     reports_dir: Path
     output_dir: Path
-    cairn_dir: Path
-    store_path: Path
+    cairn_dir: Path  # the repo
     extra_css: tuple[Path, ...] = field(default_factory=tuple)
     template_dir: Path | None = None
-    store: dict = field(default_factory=dict)
+    repo: dict = field(default_factory=dict)  # the [repo] table
 
     @property
     def source(self) -> Path | None:
@@ -164,7 +146,7 @@ def load_config(project: Path | str | None = None) -> Config:
     source = config_path(root) or root / CONFIG_FILE
     if source.is_file():
         data = tomllib.loads(source.read_text())
-    unknown = set(data) - {"reports_dir", "output_dir", "cairn", "style", "store"}
+    unknown = set(data) - {"reports_dir", "output_dir", "cairn", "style", "repo"}
     if unknown:
         raise ValueError(f"{source}: unknown keys {sorted(unknown)}")
     section = data.get("cairn", {})
@@ -175,30 +157,28 @@ def load_config(project: Path | str | None = None) -> Config:
     if unknown_style:
         raise ValueError(f"{source}: unknown [style] keys {sorted(unknown_style)}")
 
-    store = data.get("store", {})
-    if "token" in store:
-        raise ValueError(f"{source}: never put the store token in the config; use token_file or CAIRN_STORE_TOKEN")
-    unknown_store = set(store) - {"path", "url", "project", "token_file", "exclude", "publish", "interval", "allow_http",
-                                     "heartbeat_timeout", "allow_network_fs"}
-    if unknown_store:
-        raise ValueError(f"{source}: unknown [store] keys {sorted(unknown_store)}")
-    for key in ("path", "url", "project", "token_file"):
-        if not isinstance(store.get(key, ""), str):
-            raise ValueError(f"{source}: [store] {key} must be text")
+    repo = data.get("repo", {})
+    if not isinstance(repo, dict):
+        raise ValueError(f"{source}: [repo] must be a table")
+    if "token" in repo:
+        raise ValueError(f"{source}: never put the token in the config; use [repo] token_file or CAIRN_TOKEN")
+    unknown_repo = set(repo) - REPO_KEYS
+    if unknown_repo:
+        raise ValueError(f"{source}: unknown [repo] keys {sorted(unknown_repo)} (it takes {', '.join(sorted(REPO_KEYS))})")
+    for key in ("remote", "project", "token_file"):
+        if not isinstance(repo.get(key, ""), str):
+            raise ValueError(f"{source}: [repo] {key} must be text")
     for key in ("allow_http", "allow_network_fs"):
-        if not isinstance(store.get(key, False), bool):
-            raise ValueError(f"{source}: [store] {key} must be true or false")
-    if not isinstance(store.get("exclude", []), list) or not all(isinstance(item, str) for item in store.get("exclude", [])):
-        raise ValueError(f"{source}: [store] exclude must be a list of glob patterns")
-    if isinstance(store.get("interval", 30), bool) or not isinstance(store.get("interval", 30), (int, float)):
-        raise ValueError(f"{source}: [store] interval must be a number of seconds")
-    timeout = store.get("heartbeat_timeout", 600)
+        if not isinstance(repo.get(key, False), bool):
+            raise ValueError(f"{source}: [repo] {key} must be true or false")
+    if not isinstance(repo.get("exclude", []), list) or not all(isinstance(item, str) for item in repo.get("exclude", [])):
+        raise ValueError(f"{source}: [repo] exclude must be a list of glob patterns")
+    interval = repo.get("interval", 30)
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval <= 0:
+        raise ValueError(f"{source}: [repo] interval must be a positive number of seconds")
+    timeout = repo.get("heartbeat_timeout", 600)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
-        raise ValueError(f"{source}: [store] heartbeat_timeout must be a positive number of seconds")
-    mappings = store.get("publish", [])
-    if not isinstance(mappings, list) or not all(isinstance(item, dict) and set(item) == {"folder", "name"}
-                                                 and all(isinstance(value, str) for value in item.values()) for item in mappings):
-        raise ValueError(f"{source}: [store] publish must be a list of {{ folder = ..., name = ... }} tables")
+        raise ValueError(f"{source}: [repo] heartbeat_timeout must be a positive number of seconds")
 
     def path(value: str | None, default: str | None) -> Path | None:
         if value is None and default is None:
@@ -217,14 +197,12 @@ def load_config(project: Path | str | None = None) -> Config:
     template_dir = path(style.get("template_dir"), None)
     if template_dir is not None and not template_dir.is_dir():
         raise ValueError(f"{source}: style template_dir {template_dir} is not a folder")
-    stored = Path(store["path"]).expanduser() if store.get("path") else None
     return Config(
         project=root,
         reports_dir=path(data.get("reports_dir"), "reports"),
         output_dir=path(data.get("output_dir"), None) or base / "build",
         cairn_dir=base,
-        store_path=(stored if stored.is_absolute() else root / stored) if stored else base / "store",
         extra_css=css,
         template_dir=template_dir,
-        store=dict(store),
+        repo=dict(repo),
     )

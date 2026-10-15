@@ -1,12 +1,15 @@
-"""`cairn prune`: trim the cache root by last access, never touching what only this machine has.
+"""`cairn prune`: trim a repo's read-only folders, and the contents it keeps of a remote's versions, by last access;
+never what only this repo has.
 
-Synced versions (`<cache>/versions/<uid>/`) go, least recently used first, when their `accessed` time
-(written into the record by pulls, not the filesystem's atime) is older than `older_than`, and then until
-the cache is under `max_size`. Blobs no remaining cached version references go too, except those a
-local record (pending, running, rejected) needs, and except blobs written in the last hour (a pull may
-be about to link them). Pending and running versions live in the data root and are never pruned; when
-both roots are the same folder, their records are skipped as well. Leftover scratch names
-(`.tmp-<host>-<pid>-...`) older than a day are removed.
+Read-only folders (`<repo>/versions/<uid>/`, what `pull` made) go, least recently used first, when their `accessed`
+time (written into the record by pulls, not the filesystem's atime) is older than `older_than`, and then until the
+repo is under `max_size`. A folder is made again from the blobs on the next pull.
+
+With `keep` (a set of hashes: what the outbox and the repo's own versions need), blobs no remaining folder needs and
+`keep` does not name go too (they are a remote's: the next pull downloads them again), except blobs written in the
+last hour (a pull may be about to link them); the copies' metadata stays (it is small, and it answers offline).
+Without `keep` (None: the blobs are the repo's own versions) no blob is pruned (`cairn gc` removes unreferenced
+ones). Leftover scratch names (`.tmp-<host>-<pid>-...`) older than a day are removed.
 """
 
 from __future__ import annotations
@@ -16,8 +19,8 @@ import re
 import time
 from pathlib import Path
 
-from ..store.cache import cache_root, remove
-from . import replica
+from .folders import read_record, remove
+from .outbox import epoch
 
 RECENT = 3600.0  # seconds: unreferenced blobs younger than this stay (a pull may be linking them)
 LEFTOVER = 86400.0  # seconds: scratch folders and files older than this are leftovers of a crash
@@ -52,22 +55,25 @@ def _files(folder: Path):
                 continue
 
 
-def prune(older_than: float | None = None, max_size: int | None = None, dry_run: bool = False) -> dict:
-    """Remove synced versions and unreferenced blobs from the cache root (see the module doc).
+def prune(root: Path, older_than: float | None = None, max_size: int | None = None, dry_run: bool = False,
+          keep: set[str] | None = None) -> dict:
+    """Remove read-only folders (and, with `keep`, unreferenced blobs) from the repo `root` (see the module doc).
 
-    Returns {"versions": [uids removed], "blobs": count, "freed": bytes, "size": bytes left}."""
-    root = cache_root()
-    keep = replica.needed()  # contents a local record needs
-    versions, inodes = [], {}  # (accessed, uid, folder, shas); inode -> [size, paths left]
-    for record in replica.synced_records():
-        folder = root / "versions" / record["uid"]
+    Returns {"versions": [uids of folders removed], "blobs": count, "freed": bytes, "size": bytes left}."""
+    root = Path(root)
+    versions, inodes = [], {}  # (accessed, uid, folder, shas, owned inodes); inode -> [size, paths left]
+    base = root / "versions"
+    for folder in sorted(base.iterdir()) if base.is_dir() else []:
+        record = None if ".tmp-" in folder.name else read_record(folder)
+        if record is None:
+            continue
         shas = {item["sha256"] for item in (record.get("manifest") or {}).get("files", []) if "sha256" in item}
         owned = []
         for path, info in _files(folder):
             key = (info.st_dev, info.st_ino)
             inodes.setdefault(key, [info.st_size, 0])[1] += 1
             owned.append(key)
-        accessed = record.get("accessed_at") or replica.epoch(record.get("accessed"))
+        accessed = record.get("accessed_at") or epoch(record.get("accessed"))
         versions.append((accessed, record["uid"], folder, shas, owned))
     blobs = {}
     for path, info in _files(root / "blobs"):
@@ -102,17 +108,18 @@ def prune(older_than: float | None = None, max_size: int | None = None, dry_run:
             removed.append(uid)
         else:
             left.append(shas)
-    referenced = set().union(*left) if left else set()
-    for sha, (path, info, key) in sorted(blobs.items(), key=lambda item: item[1][1].st_mtime):
-        if sha in referenced or sha in keep or now - info.st_mtime < RECENT:
-            continue
-        if not dry_run:
-            path.unlink(missing_ok=True)
-        gained = release([key])
-        size, freed, count = size - gained, freed + gained, count + 1
+    if keep is not None:
+        referenced = set().union(*left) if left else set()
+        for sha, (path, info, key) in sorted(blobs.items(), key=lambda item: item[1][1].st_mtime):
+            if sha in referenced or sha in keep or now - info.st_mtime < RECENT:
+                continue
+            if not dry_run:
+                path.unlink(missing_ok=True)
+            gained = release([key])
+            size, freed, count = size - gained, freed + gained, count + 1
     if not dry_run:
-        for base in (root / "versions", root / "blobs"):
-            for path in base.rglob("*.tmp-*") if base.is_dir() else []:
+        for folder in (root / "versions", root / "blobs", root / "outbox"):
+            for path in folder.rglob("*.tmp-*") if folder.is_dir() else []:
                 try:
                     if now - path.lstat().st_mtime > LEFTOVER:
                         remove(path) if path.is_dir() and not path.is_symlink() else path.unlink(missing_ok=True)
@@ -126,4 +133,3 @@ def describe_size(size: int) -> str:
         if size >= factor:
             return f"{size / factor:.1f} {unit}"
     return f"{size} B"
-

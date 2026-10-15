@@ -158,3 +158,12 @@ def clone_or_copy(source: Path | str, target: Path | str) -> bool:
         return True
     shutil.copyfile(source, target)
     return False
+
+
+def network_fs_message(root, fstype: str) -> str:
+    """Why a repo on a network filesystem has no database, and what to do on a cluster."""
+    return (f"the repo {root} is on a network filesystem ({fstype}), where SQLite and file locks are unreliable across the "
+            "nodes of a cluster, so it cannot hold the repo's database. On a cluster, run `cairn server` on a machine "
+            "with a local disk and set [repo] remote = \"https://...\" in cairn.toml: jobs then keep each version in its "
+            "own outbox folder here and send it to the remote themselves, or `cairn sync` (on the login node) sends "
+            "what they left. If one process on one host is the repo's only writer, set [repo] allow_network_fs = true.")

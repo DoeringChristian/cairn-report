@@ -1,9 +1,10 @@
-"""The store server: a LocalRepo root shared over HTTP, behind tokens. Only an artifact store: a JSON API and
-file downloads, no pages (`cairn ui` explores a store in a browser, locally or against this server).
+"""`cairn server`: a repo (a LocalRepo folder) shared over HTTP, behind tokens: the remote of other machines' repos.
+Only a JSON API and file downloads, no pages (`cairn ui` explores a repo in a browser, locally or against this server).
 
-    cairn server <root> [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth] [--gc-interval 24h]
+    cairn server [repo] [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth] [--gc-interval 24h]
 
-A new root gets a fresh owner token on first launch; every launch prints `Store: <url>` and
+Processes on the server's machine keep opening the repo directly, whether the server runs or not; the server is one
+more such process. A new repo gets a fresh owner token on first launch; every launch prints `Repo: <url>` and
 `Token: <owner token>` to the terminal (never into a URL). Scoped tokens (one project, read or
 write) are made with `cairn token create` (see store/tokens.py). Bind localhost, and put an
 HTTPS reverse proxy in front of anything else: the server speaks plain HTTP.
@@ -11,7 +12,7 @@ HTTPS reverse proxy in front of anything else: the server speaks plain HTTP.
 Artifact names are slash paths (`datasets/crops`), so every route says where the name ends:
 
     API (JSON, `Authorization: Bearer <token>`; a name is ONE percent-encoded path segment, `datasets%2Fcrops`)
-      GET  /api/v2/store                                         {uid, version}: the store's uid and the server's version
+      GET  /api/v2/repo                                          {uid, version}: the repo's uid and the server's version
       GET  /api/v2/projects                                      [{..., artifacts, updated}]   POST {name, title?, description?}
       GET  /api/v2/projects/<p>                                  PATCH {title?, description?}
       GET  /api/v2/projects/<p>/artifacts                        [{name, latest, versions, aliases, updated, metadata}]
@@ -40,7 +41,7 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
 
 References in the API are `project:name[@selector]` (the project is required: the server has no default).
 A client may supply a version's `uid` (UUIDv7) when it creates it: sending the same version again is
-answered with the version it made (a client's local replica can retry safely), and a known uid with different content
+answered with the version it made (a repo sending its outbox can retry safely), and a known uid with different content
 is refused with 409.
 
 Tokens are bearer tokens only: there are no cookies and no pages. Nothing stored changes but by deletion (tombstones), and the

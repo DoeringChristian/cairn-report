@@ -1,15 +1,16 @@
-"""Integrity checks: re-hash what a store, the pull cache, or the pending versions hold and say what is wrong.
+"""Integrity checks: re-hash what a repo holds and say what is wrong.
 
     Report                              the problems found (kind, path, message) and how many things were checked
     sha256_file(path)                   (hex digest, size) of a file
-    check_entries(folder, entries, ...) a materialized `files/` folder against the manifest entries it was made from
-    verify_cache(root, repair)          a cache or data root: every version folder, and every downloaded/staged blob
-    verify_store(store)                 a LocalRepo: every blob matches its name, every version's blobs exist and
-                                        its manifest digest matches its files
+    check_entries(folder, entries, ...) a read-only `files/` folder against the manifest entries it was made from
+    check_blobs(blobs, report, ...)     every blob against its name
+    verify_folders(root, repair)        every read-only folder `pull` made in a repo (`versions/<uid>/`)
+    verify_store(store)                 a LocalRepo's database: every version's blobs exist (with their size) and its
+                                        manifest digest matches its files
 
-Nothing here changes anything except `repair=True` on a cache root, which removes what is broken (a version
-folder, a blob) so the next pull downloads it again. Never repair a data root's pending versions: they are the
-only copy.
+Nothing here changes anything except `repair=True`, which removes what can be made again: a broken read-only folder
+(the next pull makes it again) and a broken blob whose hash is not in `keep` (the caller keeps everything that may be
+the only copy: a repo's own versions, the outbox).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .blobs import SHA256
-from .cache import FILES, read_record, remove
+from .folders import FILES, read_record, remove
 from .digest import manifest_digest, sha256_file
 
 
@@ -145,42 +146,31 @@ def check_blobs(blobs: Path, report: Report, repair: bool = False, keep=()) -> N
                     pass
 
 
-def verify_cache(root: Path | str, repair: bool = False, synced: bool | None = None, keep=()) -> Report:
-    """A replica root (the pull cache, or the data root with the pending versions): each version folder's files
-    against its manifest (and digest), then each blob against its name.
-
-    `synced`: None checks every record; True only synced ones (the cache), False only the others (pending).
-    With `repair` (the cache only), a broken version folder and a broken blob are removed, so the next pull
-    downloads them again; blobs whose hash is in `keep` are never removed."""
+def verify_folders(root: Path | str, repair: bool = False) -> Report:
+    """Every read-only folder `pull` made in the repo `root` (`versions/<uid>/files/`) against the manifest it was made
+    from (and its digest). With `repair`, a broken folder is removed: the next pull makes it again from the blobs."""
     root, report = Path(root), Report()
     base = root / "versions"
     for folder in sorted(base.iterdir()) if base.is_dir() else []:
         record = None if ".tmp-" in folder.name else read_record(folder)
         if record is None:
             continue
-        is_synced = record.get("sync") == "synced"
-        if synced is not None and is_synced != synced:
-            continue
-        manifest = record.get("manifest") or {} if is_synced else record
+        manifest = record.get("manifest") or {}
         entries, digest = manifest.get("files") or [], manifest.get("digest")
-        if not is_synced and record.get("status") != "completed":
-            continue  # a running or failed version has no digest; its files are not final
         report.count("versions")
         label = f"{record.get('project')}:{record.get('name')}@{record['uid']}"
         files = folder / FILES
         if not files.is_dir():
-            if is_synced:
-                problem = report.add("version", folder, f"{label} has no files folder")
-                if repair:
-                    remove(folder)
-                    problem.repaired = True
-            continue  # a pending version's files folder is made on first use
+            problem = report.add("version", folder, f"{label} has no files folder")
+            if repair:
+                remove(folder)
+                problem.repaired = True
+            continue
         first = len(report.problems)
         if not check_entries(files, entries, report, digest, label) and repair:
             for problem in report.problems[first:]:
                 problem.repaired = True
             remove(folder)
-    check_blobs(root / "blobs", report, repair=repair, keep=keep)
     return report
 
 
@@ -211,4 +201,70 @@ def verify_store(store) -> Report:
                     report.add("digest", label, "the version has no manifest digest")
                 elif manifest_digest(version["files"]) != version["digest"]:
                     report.add("digest", label, f"its files hash to {manifest_digest(version['files'])}, not the recorded {version['digest']}")
+    return report
+
+
+def verify_outbox(outbox, root: Path) -> Report:
+    """Every outbox entry: a completed one's digest against its files, and every blob it needs is in the repo `root`."""
+    from .blobs import blob_path
+
+    report = Report()
+    for record in outbox.records():
+        label = f"{record['project']}:{record['name']}@{record['uid']}"
+        report.count("versions")
+        entries = record.get("files") or []
+        if record.get("status") == "completed" and record.get("digest") and manifest_digest(entries) != record["digest"]:
+            report.add("digest", label, f"the entry's files hash to {manifest_digest(entries)}, not the recorded {record['digest']}")
+        for entry in entries:
+            if "sha256" in entry and not blob_path(root, entry["sha256"]).is_file():
+                report.add("blob", label, f"{entry['path']}: the blob {entry['sha256'][:16]}... is missing from the repo: this "
+                           "pending version cannot be sent")
+    return report
+
+
+def verify_copies(copies: list[tuple[str, str, dict]]) -> Report:
+    """Copies of a remote's versions: a completed one's digest against its file list (their blobs are fetched when needed)."""
+    report = Report()
+    for project, name, state in copies:
+        report.count("versions")
+        if state["status"] == "completed" and state.get("digest") and manifest_digest(state["files"]) != state["digest"]:
+            report.add("digest", f"{project}:{name}@v{state['version']}",
+                       f"its files hash to {manifest_digest(state['files'])}, not the recorded {state['digest']}")
+    return report
+
+
+def verify_version(root: Path | None, label: str, version: dict, own: bool, repair: bool = False) -> Report:
+    """One version: the digest of its manifest, its read-only folder in the repo `root`, the blobs the repo holds for
+    it. `own`: the repo's own version (a missing blob is a problem, a broken one is never removed); else a copy of a
+    remote's (`repair` removes a broken blob: the next pull downloads it again)."""
+    from .blobs import blob_path
+    from .folders import files_folder
+
+    report = Report()
+    report.count("versions")
+    entries, digest = version["files"], version.get("digest")
+    if digest is not None and manifest_digest(entries) != digest:
+        report.add("digest", label, f"the manifest's files hash to {manifest_digest(entries)}, not the recorded {digest}")
+    elif digest is None and version.get("status") == "completed":
+        report.add("digest", label, "the version has no manifest digest")
+    if root is None:
+        return report
+    folder = files_folder(root, version["uid"])
+    if folder.is_dir():
+        check_entries(folder, entries, report, None, label)
+    for entry in entries:
+        if "sha256" not in entry:
+            continue
+        blob = blob_path(root, entry["sha256"])
+        if not blob.is_file():
+            if own:
+                report.add("blob", label, f"{entry['path']}: the blob {entry['sha256'][:16]}... is missing from the repo")
+            continue
+        report.count("blobs")
+        sha, _ = sha256_file(blob)
+        if sha != entry["sha256"]:
+            problem = report.add("blob", blob, f"its contents hash to {sha[:16]}..., not {entry['sha256'][:16]}...")
+            if repair and not own:
+                blob.unlink(missing_ok=True)
+                problem.repaired = True
     return report

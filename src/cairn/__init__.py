@@ -15,8 +15,8 @@ This is the light API (no server, UI, reports, matplotlib, plotly, or hydra is i
 
 and the object API and shortcuts:
 
-    store = cairn.connect()                        # the store [store] in cairn.toml names (or a URL, or a folder)
-    crops = store.project().artifact("datasets/crops")
+    repo = cairn.connect()                         # the project's repo (.cairn/), with its remote if [repo] remote names one
+    crops = repo.project().artifact("datasets/crops")
     v3 = crops.version(3)                          # or "v3", an alias, a label, a uid; crops.latest
     v3.files, v3.metadata, v3.inputs, v3.consumers, v3.upstream(), v3.downstream(), v3.open("a.txt"), v3.pull()
     crops.publish("data/crops", metadata={"n": 3}, aliases=["paper"])   # -> Version
@@ -26,23 +26,21 @@ and the object API and shortcuts:
     cairn.versions("models/student")
     cairn.lineage("models/student@v2")             # through the run: the data it came from, what consumed it
 
-`store=None` means the configured store (`[store]` in cairn.toml): a store server when `url`
-is set (`Remote`; the token comes from CAIRN_STORE_TOKEN or `token_file`), else a local folder,
-`path` (default `.cairn/store` in the project root). `project` names the default project (default: the
-project folder's slug). The run (cairn/client/runs.py) points `$CAIRN_INPUTS` at its folder, so what the
-process and its plain subprocesses pull are its inputs; outside a run every pull appends the exact version to
-`$CAIRN_INPUTS`, else to `.cairn-inputs.jsonl` in the working directory, and `publish` carries a folder's
-`.cairn-inputs.jsonl` along as the version's `inputs`.
+`store=None` means the project's repo: the folder `.cairn/` (`[cairn] dir`, `$CAIRN_DIR`). Every write goes to the
+repo first. Without a remote the repo is the source of truth and numbers its versions. With `[repo] remote` (a
+`cairn server`; the token from `$CAIRN_TOKEN` or `[repo] token_file`) the remote is: versions wait in the repo's
+outbox (pending: a uid, no number) until the remote takes them, which happens at once when it answers and
+otherwise automatically later (`cairn status`, `cairn sync`); versions used from the remote are copied into the
+repo. `project` names the default project (default: the project folder's slug). The run (cairn/client/runs.py)
+points `$CAIRN_INPUTS` at its folder, so what the process and its plain subprocesses pull are its inputs; outside a
+run every pull appends the exact version to `$CAIRN_INPUTS`, else to `.cairn-inputs.jsonl` in the working directory,
+and `publish` carries a folder's `.cairn-inputs.jsonl` along as the version's `inputs`.
 
-Every version has a uid (UUIDv7), and `name@<uid>` names it as exactly as `name@v<n>`. Publishing to a
-store server goes through a local replica, so it works while the server is down: the version is pending
-in the durable data root (`$CAIRN_DATA_DIR`, else `.cairn/pending` in the project), usable at once by its uid,
-and sent later (`cairn status`, `cairn sync`). Pulls of exact versions, or of aliases by their last known
-resolution, work from the throwaway cache root (`$CAIRN_CACHE_DIR`, else `.cairn/cache` in the project; `$CAIRN_DIR` moves the whole `.cairn` folder).
+Every version has a uid (UUIDv7), and `name@<uid>` names it as exactly as `name@v<n>`.
 
-The parts are packages: `cairn.store` (the core), `cairn.client` (HTTP client, the object API, publishing,
-the replica, drafts and runs, `Remote`), `cairn.server`, `cairn.ui`, `cairn.reports`, and `cairn.runs`
-(Hydra); each is imported only when used.
+The parts are packages: `cairn.store` (the repo core), `cairn.client` (the remote, sync, the object API,
+publishing, drafts and runs), `cairn.server`, `cairn.ui`, `cairn.reports`, and `cairn.runs` (Hydra); each is
+imported only when used.
 """
 
 from __future__ import annotations
@@ -100,7 +98,7 @@ def _start_run(store) -> None:
     runs.ensure(store)
 
 
-def use(ref: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None, offline: bool = False) -> "Version":
+def use(ref: str, *, store: "Repo | LocalRepo | Path | str | None" = None, offline: bool = False) -> "Version":
     """The exact version a reference names, resolved now, as an input of this process's run (started if needed).
 
     Returns the `Version` (its files are listed lazily; `.path` is its read-only local folder, materialized on
@@ -116,31 +114,31 @@ def use(ref: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = No
     return version
 
 
-def pull(ref: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None, record: bool = True,
+def pull(ref: str, *, store: "Repo | LocalRepo | Path | str | None" = None, record: bool = True,
          offline: bool = False) -> Path:
     """A read-only local copy of an artifact version (or of the file after `//`), recorded as an input of the run.
 
     `record=False` leaves the inputs alone (and starts no run): the report builder records a report's inputs in
-    the report's own manifest instead. An exact version in the cache needs no server; when the server does not
-    answer (or `offline=True`), an alias falls back to its last known resolution, with a warning.
+    the report's own manifest instead. An exact version the repo has needs no remote; when the remote does not
+    answer (or `offline=True`), an alias resolves in the repo, with a warning.
     """
     if record:
         _start_run(store)
     return _store(store).pull(ref, record=record, offline=offline)
 
 
-def alias(ref: str, alias: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None) -> None:
+def alias(ref: str, alias: str, *, store: "Repo | LocalRepo | Path | str | None" = None) -> None:
     """Point `alias` at the version `ref` names (which must be completed)."""
     version = _store(store).version(ref)
     version.artifact.alias(alias, version)
 
 
-def versions(name: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None) -> list[dict]:
-    """Every version of an artifact (its manifest), oldest first, whatever its status; this machine's pending ones last."""
+def versions(name: str, *, store: "Repo | LocalRepo | Path | str | None" = None) -> list[dict]:
+    """Every version of an artifact (its manifest), oldest first, whatever its status; the repo's pending ones last."""
     return [version.manifest for version in _store(store).artifact(name).versions()]
 
 
-def lineage(ref: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None,
+def lineage(ref: str, *, store: "Repo | LocalRepo | Path | str | None" = None,
             through_runs: bool = True) -> dict[str, list[str]]:
     """One level up (`inputs`) and down (`consumers`) from a version, as exact references.
 

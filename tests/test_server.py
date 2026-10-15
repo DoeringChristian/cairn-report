@@ -31,7 +31,7 @@ def server(tmp_path, monkeypatch):
     httpd.log = requests.append
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     port = httpd.server_address[1]
-    monkeypatch.setenv("CAIRN_STORE_TOKEN", token)
+    monkeypatch.setenv("CAIRN_TOKEN", token)
     yield SimpleNamespace(url=f"http://127.0.0.1:{port}", root=root, token=token, port=port, requests=requests)
     httpd.shutdown()
     httpd.server_close()
@@ -63,7 +63,7 @@ def remote(server, token=None, project="study") -> Remote:
 
 
 def use_remote(env, server, project="study"):
-    (env / "cairn.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "{project}"\ninterval = 1\n')
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "{project}"\ninterval = 1\n')
     return remote(server, project=project)
 
 
@@ -110,7 +110,7 @@ def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
         serve_store(root, port=0)
         token = (root / "token").read_text().strip()
         out = capsys.readouterr().out
-        assert f"Token: {token}" in out and "Created store" in out and "Store: http://127.0.0.1:" in out
+        assert f"Token: {token}" in out and "Created the repo" in out and "Repo: http://127.0.0.1:" in out
         assert oct((root / "token").stat().st_mode & 0o777) == "0o600"
         serve_store(root, port=0)  # a second launch reuses it and prints the same token
         out = capsys.readouterr().out
@@ -128,7 +128,7 @@ def seed(server):
     """Projects `alpha` and `beta`, each with an artifact `data` (one file)."""
     for project in ("alpha", "beta"):
         store.publish(f"{project}:data", None or folder(server.root.parent, f"seed-{project}", {"x.txt": project}),
-                      store=remote(server, project=project), config=SimpleNamespace(project=server.root.parent, store={}))
+                      store=remote(server, project=project), config=SimpleNamespace(project=server.root.parent, repo={}))
 
 
 def test_scoped_tokens(server, env):
@@ -157,9 +157,9 @@ def test_scoped_tokens(server, env):
     assert call(server, "GET", "/files/alpha/data@v1//x.txt", token=read)[0] == 200
     # a write token publishes to its own project only
     other = folder(server.root.parent, "more", {"z.txt": "more"})
-    assert store.publish("alpha:data", other, store=remote(server, write_token), config=SimpleNamespace(project=other, store={})) == 2
+    assert store.publish("alpha:data", other, store=remote(server, write_token), config=SimpleNamespace(project=other, repo={})) == 2
     with pytest.raises(StoreError, match="cannot"):  # the store says the token cannot write there
-        store.publish("beta:data", other, store=remote(server, write_token, "beta"), config=SimpleNamespace(project=other, store={}))
+        store.publish("beta:data", other, store=remote(server, write_token, "beta"), config=SimpleNamespace(project=other, repo={}))
     assert call(server, "POST", "/api/v2/projects/beta/artifacts/data/publish", {"entries": [entry]}, token=write_token)[0] == 403
     # ... and cannot register inputs from another project (that would write into its lineage)
     status, _, data = call(server, "POST", "/api/v2/projects/alpha/artifacts/data/publish",
@@ -279,21 +279,18 @@ def test_pull_materializes_once_and_never_downloads_a_blob_twice(server, env, tm
     r = use_remote(env, server)
     store.publish("data", folder(env, "d", {"a.txt": "shared", "b.txt": "only in v1"}), store=r)
     store.publish("data", folder(env, "d2", {"a.txt": "shared", "c.txt": "only in v2"}), store=r)
-    from cairn.store.cache import cache_root
-
     before = blob_gets(server)
-    assert (store.pull("data@v1", store=r) / "b.txt").read_text() == "only in v1"  # publishing left it in the cache
+    assert (store.pull("data@v1", store=r) / "b.txt").read_text() == "only in v1"  # publishing left the blobs in the repo
     assert blob_gets(server) == before
-    shutil.rmtree(cache_root())  # the cache is throwaway: pulls download again
+    monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "other-machine"))  # another machine's repo downloads each blob once
     first = store.pull("data@v1", store=r)
     assert blob_gets(server) - before == 2
     assert store.pull("data@v1", store=r) == first and blob_gets(server) - before == 2  # materialized already
     store.pull("data@v2", store=r)
     assert blob_gets(server) - before == 3  # only c.txt was new
-    # a fresh pull cache folder with the blob cache kept would not re-download either; a corrupt download is refused
-    monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / "other-machine"))
+    shutil.rmtree(tmp_path / "other-machine" / "versions")  # the read-only folders are made again from the blobs
     assert (store.pull("data@v1", store=r) / "b.txt").read_text() == "only in v1"
-    assert blob_gets(server) - before == 5
+    assert blob_gets(server) - before == 3
 
 
 def test_pull_records_inputs_like_the_local_store(server, env):
@@ -466,8 +463,8 @@ def test_store_serve_starts_its_ui_as_a_child_with_the_token_in_its_environment_
         token = (root / "token").read_text().strip()
         text = "\n".join(lines)
         ui_port = port + 1
-        assert f"Store: http://127.0.0.1:{port}/" in text and f"Token: {token}" in text
-        assert any(line.startswith(f"UI: http://127.0.0.1:{ui_port}/ (store: http://127.0.0.1:{port}") for line in lines), lines
+        assert f"Repo: http://127.0.0.1:{port}/" in text and f"Token: {token}" in text
+        assert any(line.startswith(f"UI: http://127.0.0.1:{ui_port}/ (repo: http://127.0.0.1:{port}") for line in lines), lines
     except Exception:
         stop_process(process)
         raise
@@ -509,7 +506,7 @@ def test_store_serve_no_ui_and_ui_port(tmp_path):
     try:
         [(child, command)] = children_of(process.pid)
         [shown] = [line for line in lines if line.startswith("UI:")]
-        assert re.fullmatch(r"UI: http://127\.0\.0\.1:(\d+)/ \(store: http://127\.0\.0\.1:\d+\)", shown)
+        assert re.fullmatch(r"UI: http://127\.0\.0\.1:(\d+)/ \(repo: http://127\.0\.0\.1:\d+\)", shown)
         assert f"--port {shown.split(':')[2].split('/')[0]}" in command
     finally:
         stop_process(process)

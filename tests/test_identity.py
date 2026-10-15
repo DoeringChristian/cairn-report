@@ -93,7 +93,7 @@ def test_refs_accept_uids_and_reserve_their_form():
 
 def test_store_uid_and_version_uids(tmp_path):
     local = LocalRepo(tmp_path / "s")
-    assert UID.fullmatch(local.uid) and json.loads((tmp_path / "s" / "store.json").read_text())["uid"] == local.uid
+    assert UID.fullmatch(local.uid) and json.loads((tmp_path / "s" / "repo.json").read_text())["uid"] == local.uid
     assert LocalRepo(tmp_path / "s").uid == local.uid and LocalRepo(tmp_path / "t").uid != local.uid
     local.create_project("p")
     one = local.publish("p", "run", put(local, {"a.txt": "1"}))
@@ -125,8 +125,7 @@ def test_client_supplied_uids_are_idempotent_and_conflicts_refused(tmp_path):
 # --------------------------------------------------------------------- cache
 
 
-def test_cache_is_keyed_by_uid_and_two_stores_never_collide(env, tmp_path, monkeypatch):
-    monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / "scratch"))
+def test_read_only_folders_are_keyed_by_uid_and_two_repos_never_collide(env, tmp_path, monkeypatch):
     paths = []
     for name, text in (("one", "first store"), ("two", "second store")):
         local = LocalRepo(tmp_path / name, project="study")
@@ -134,7 +133,7 @@ def test_cache_is_keyed_by_uid_and_two_stores_never_collide(env, tmp_path, monke
         local.publish("study", "data", put(local, {"a.txt": text}))
         path = cairn.pull("data@v1", store=local, record=False)
         assert (path / "a.txt").read_text() == text
-        assert path == tmp_path / "scratch" / "versions" / local.get_version("study", "data", 1)["uid"] / "files"
+        assert path == tmp_path / name / "versions" / local.get_version("study", "data", 1)["uid"] / "files"
         paths.append(path)
     assert paths[0] != paths[1]
     assert (paths[0] / "a.txt").read_text() == "first store"  # the second pull did not touch the first
@@ -143,7 +142,7 @@ def test_cache_is_keyed_by_uid_and_two_stores_never_collide(env, tmp_path, monke
 def _pull_in_a_process(url, token, ref, cache, barrier, results):
     import os
 
-    os.environ["CAIRN_CACHE_DIR"] = cache
+    os.environ["CAIRN_DIR"] = cache
     import cairn
     from cairn.client.http import Client
     from cairn.client.remote import Remote
@@ -154,8 +153,8 @@ def _pull_in_a_process(url, token, ref, cache, barrier, results):
     results.put({str(file.relative_to(path)): file.read_text() for file in sorted(path.rglob("*.txt"))})
 
 
-def test_concurrent_pulls_into_one_cache(tmp_path, monkeypatch, env):
-    """Seven processes pull the same version into one cache at the same moment (as Slurm jobs on NFS would)."""
+def test_concurrent_pulls_into_one_repo(tmp_path, monkeypatch, env):
+    """Seven processes pull the same version into one repo at the same moment (as Slurm jobs sharing a project would)."""
     server = Server(tmp_path / "root").start()
     try:
         remote = server.remote()
@@ -201,8 +200,8 @@ def test_server_keeps_client_uids_and_exposes_the_store_uid(tmp_path, env):
             connection.close()
             return response.status, json.loads(data) if data.startswith(b"{") or data.startswith(b"[") else data
 
-        assert call("GET", "/api/v2/store", token=None)[0] == 401
-        status, answer = call("GET", "/api/v2/store")
+        assert call("GET", "/api/v2/repo", token=None)[0] == 401
+        status, answer = call("GET", "/api/v2/repo")
         assert status == 200 and answer["uid"] == LocalRepo(server.root).uid and answer["version"] == cairn.__version__
         assert remote.uid == answer["uid"]
         remote.create_project("study")

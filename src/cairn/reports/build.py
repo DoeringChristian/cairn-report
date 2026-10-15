@@ -50,9 +50,8 @@ from .._version import __version__
 from ..client.open import open_repo
 from ..config import Config, load_config, protect
 from ..formats import METRICS, fold_scalars, fold_series, read_jsonl
-from ..client.offline import local_folder, resolve_version
-from ..client.replica import exact_ref
-from ..store import StoreError, cache_root, refs, data_root
+from ..store import StoreError, refs
+from ..store.outbox import exact_ref
 
 PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
@@ -355,15 +354,14 @@ def source_line(markdown: Path, fallback):
 class Guard:
     """What report code may open while a block runs: the report folder, its generated output, its inputs.
 
-    Anything else inside the project or the store (its cache and blobs) is undeclared data. Paths
+    Anything else inside the project or the repo (its blobs and read-only folders) is undeclared data. Paths
     elsewhere (the standard library, site-packages, temporary files, font caches) are not watched.
     """
 
     def __init__(self, build: "Build", line):
         self.build, self.line, self.busy = build, line, False
         self.allowed = build.allowed_roots()
-        self.watched = [real(PROJECT), real(cache_root()), real(data_root()),
-                        *([real(build.store_root)] if build.store_root else [])]
+        self.watched = [real(PROJECT), *([real(build.store_root)] if build.store_root else [])]
         self.environment = environment_roots()
         self.violations: list[str] = []
 
@@ -495,7 +493,7 @@ class Build:
         if not declared:
             return
         store = open_repo(CONFIG)
-        self.store_root = getattr(store, "root", None)  # a remote store has no folder
+        self.store_root = store.root
         for name, text in declared.items():
             where = f"{self.markdown}: inputs.{name}"
             if not isinstance(name, str) or not INPUT_NAME.fullmatch(name):
@@ -506,13 +504,14 @@ class Build:
                 raise BuildError(f"{where}: {error}") from error
             if ref.path:
                 raise BuildError(f"{where}: {text!r} names a file; an input is a whole artifact version (use {name}/<file> in the report)")
-            try:  # through the replica: this machine's pending versions; with the server down, the cache and last answers
-                project, artifact, version = resolve_version(store, ref)
+            try:  # through the repo: its pending versions; with the remote down, its copies
+                project, artifact, version = store.resolve(ref)
                 exact = exact_ref(project, artifact, version)
-                folder = local_folder(store, project, artifact, version)
+                folder = store.local_folder(project, artifact, version)
             except StoreError as error:
                 raise BuildError(f"{where}: {error}") from error
-            self.inputs[name] = {"requested": str(text), "resolved": exact, "files": len(version["files"]), "path": folder}
+            self.inputs[name] = {"requested": str(text), "resolved": exact, "uid": version["uid"], "files": len(version["files"]),
+                                 "path": folder}
 
     def allowed_roots(self) -> list[str]:
         """Where this report may read: its folder, its generated output, and its inputs."""
@@ -1207,7 +1206,7 @@ OWN_FILES = ("index.html", "narrative.html", "report-data.json", "manifest.json"
 
 def input_record(build: Build) -> dict:
     """The declared inputs as the manifest and report-data.json record them."""
-    return {name: {field: item[field] for field in ("requested", "resolved", "files")} for name, item in build.inputs.items()}
+    return {name: {field: item[field] for field in ("requested", "resolved", "uid", "files")} for name, item in build.inputs.items()}
 
 
 def build_report(key: str, folder: Path) -> Build:

@@ -1,32 +1,43 @@
-"""LocalRepo: projects, artifacts, and immutable versions in a folder.
+"""LocalRepo: a repo folder on this machine (the project's `.cairn/`, or a server's folder), its metadata and blobs.
 
-    <root>/
-      store.json                 the store's uid (UUIDv7), made once, never changed
+    <repo>/
+      repo.json                  the repo's uid (UUIDv7, made once, never changed), its layout, and its remote's uid
       metadata.sqlite3           projects, versions, aliases and their log, consumers (db.py; WAL mode)
-      blobs/<aa>/<sha256-rest>   file contents (blobs.BlobStore)
-      server.lock                locked by the `cairn server` serving this root (db.ServerLock)
+      blobs/<aa>/<sha256>        file contents (blobs.BlobStore), shared by all versions and the outbox
+      outbox/<uid>/              versions on their way to the remote (client/outbox.py); their blobs are in blobs/
+      versions/<uid>/files/      read-only folders `pull` returns (cache.py)
+      drafts/  build/  share/    folders that become versions, report builds, shared pages
+      token  tokens.jsonl        the owner token and scoped tokens, for `cairn server` and `cairn ui` (tokens.py)
       heartbeats/<uid>           a running version's owner {time, host, pid}, rewritten while it runs (see `reap`)
+      server.lock                locked by the `cairn server` serving this repo (db.ServerLock)
+      tmp/                       uploads in progress
 
 A version starts `running` (it may grow), then becomes `completed` or `failed`; a completed version
 is never written again, except to delete it. Only completed versions resolve through `latest`, aliases, and labels, so
 readers never see half-published data. Every change is one SQLite transaction: a publish (version,
 files, completion, `latest`, aliases, consumers) commits whole or not at all, and version numbers are
-handed out inside the transaction, so they are unique however many threads and processes publish.
+handed out inside the transaction, so they are unique and contiguous however many threads and processes publish.
+
+Without a remote the repo is the source of truth and numbers its versions. With one, the repo is the remote's
+cache: it holds copies of the versions the remote numbered (`put_copy`, `origin` = the remote's uid, with their
+aliases mirrored by `mirror_aliases`), and the versions on their way there wait in the outbox, not here. Versions a
+repo numbered itself before it had a remote are sent once (client/sync.py adopts them: `local_versions`,
+`forget_versions`) and come back as copies with the remote's numbers.
 
 Every version has a `uid` (a UUIDv7, see uids.py), made when it starts or supplied by the client
-that created it (a client's local replica); a uid names one version for good, in the whole store.
+that created it; a uid names one version for good, in the whole repo and on every remote.
 
-Every process on the root's host opens the root directly, whether or not `cairn server` serves it: scripts,
+Every process on the repo's host opens the repo directly, whether or not `cairn server` serves it: scripts,
 commands, `cairn ui`, and the server itself. Any number may write at once: each write is one SQLite transaction
 (serialized by SQLite's lock), caches follow the projects' generations, and gc rechecks inside a transaction
-(gc.py). Other hosts reach a root only through `cairn server`. At most one server serves a root (`server.lock`,
-db.ServerLock). Never write a root over a network filesystem (fs.py).
+(gc.py). Other hosts reach a repo only through `cairn server`. At most one server serves a repo (`server.lock`,
+db.ServerLock). A repo database is never written on a network filesystem (fs.py).
 
 Deleting a version leaves a tombstone (status `deleted`: number, uid, label, metadata, and inputs kept, the file
 list dropped), so a number or uid is never used again; references to it fail with Deleted, and lineage keeps its
 edges. Protected versions (an alias other than `latest` points at them, a version that is not deleted consumed
 them, or they are running) are refused unless forced. `gc` applies retention rules and removes unreferenced blobs
-(gc.py).
+(gc.py); blobs an outbox entry needs are referenced too.
 """
 
 from __future__ import annotations
@@ -43,12 +54,12 @@ from pathlib import Path
 
 from ..ranges import byte_range
 from . import gc, refs
-from .cache import pid_alive
+from .folders import pid_alive
 from .blobs import CHUNK, BlobStore, BlobWriter, clean_entries, now, resolve_entry
 from .db import RETENTION_TABLE, Database, export
 from .digest import manifest_digest
 from .errors import BadRange, Conflict, Deleted, Forbidden, MissingBlobs, NotFound, Protected, StoreError, Unauthorized  # noqa: F401
-from .fs import network_filesystem
+from .fs import network_filesystem, network_fs_message
 from .refs import Ref
 from .uids import UID, new_uid, valid_uid
 
@@ -91,21 +102,30 @@ def _check_digest(given: str | None, actual: str, what: str) -> None:
         raise Conflict(f"{what}: the manifest digest {given} does not match the files received ({actual})")
 
 
-def store_uid(root: Path) -> str:
-    """The uid in `<root>/store.json`, made on first use. Two processes racing both end with the one that won
-    (the file is linked into place, which fails if it exists), so a store's uid never changes."""
-    path = root / "store.json"
+REPO_FILE = "repo.json"
+LAYOUT = 1
+
+
+def repo_uid(root: Path) -> str:
+    """The uid in `<root>/repo.json`, made on first use (the folder then becomes private to its owner, mode 700).
+    Two processes racing both end with the one that won (the file is linked into place, which fails if it exists),
+    so a repo's uid never changes."""
+    path = root / REPO_FILE
     for _ in range(3):
         try:
             return valid_uid(json.loads(path.read_text())["uid"])
         except FileNotFoundError:
             pass
         except (ValueError, KeyError, TypeError):
-            raise StoreError(f"{path} is damaged: it must hold {{\"uid\": <UUIDv7>}}")
-        temporary = root / f"store.json.{secrets.token_hex(6)}.tmp"
-        temporary.write_text(json.dumps({"uid": new_uid(), "created": now()}, indent=1))
+            raise StoreError(f"{path} is damaged: it must hold {{\"uid\": <UUIDv7>, ...}}")
+        temporary = root / f"{REPO_FILE}.{secrets.token_hex(6)}.tmp"
+        temporary.write_text(json.dumps({"uid": new_uid(), "layout": LAYOUT, "created": now()}, indent=1))
         try:
             os.link(temporary, path)
+            try:
+                os.chmod(root, 0o700)
+            except OSError:
+                pass
         except FileExistsError:
             pass
         except OSError:  # a filesystem without hard links: rename, accepting a tiny race on first use
@@ -114,6 +134,50 @@ def store_uid(root: Path) -> str:
         finally:
             temporary.unlink(missing_ok=True)
     return valid_uid(json.loads(path.read_text())["uid"])
+
+
+def read_repo_file(root: Path) -> dict:
+    """`<root>/repo.json` as a dict ({} if it is missing or damaged)."""
+    try:
+        value = json.loads((Path(root) / REPO_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def update_repo_file(root: Path, **fields) -> None:
+    """Add fields to `<root>/repo.json` (write-temp-and-rename; the uid stays). Never raises: it only records facts
+    (the remote's uid) that are learned again on the next contact."""
+    root = Path(root)
+    try:
+        current = read_repo_file(root)
+        if not current.get("uid") or all(current.get(key) == value for key, value in fields.items()):
+            return
+        temporary = root / f"{REPO_FILE}.{secrets.token_hex(6)}.tmp"
+        temporary.write_text(json.dumps({**current, **fields}, indent=1))
+        os.replace(temporary, root / REPO_FILE)
+    except OSError:
+        pass
+
+
+def outbox_blobs(root: Path) -> set[str]:
+    """The blobs the outbox entries of the repo `root` need (`<root>/outbox/<uid>/manifest.json`): never garbage."""
+    found: set[str] = set()
+    folder = Path(root) / "outbox"
+    try:
+        entries = list(os.scandir(folder))
+    except FileNotFoundError:
+        return found
+    for entry in entries:
+        if ".tmp-" in entry.name:
+            continue
+        try:
+            record = json.loads(Path(entry.path, "manifest.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict):
+            found.update(item["sha256"] for item in record.get("files") or [] if isinstance(item, dict) and "sha256" in item)
+    return found
 
 
 def summary_row(states: dict[int, dict], aliases: dict[str, int]) -> tuple:
@@ -143,14 +207,19 @@ _SUMMARY = "SELECT name, latest, versions, aliases, updated, metadata FROM artif
 class LocalRepo:
     def __init__(self, root: Path | str, project: str | None = None, allow_network_fs: bool = False,
                  heartbeat_timeout: float = 600.0):
-        """`project` is the default for references without one. Writing a root on a network filesystem is refused
-        (StoreError) unless `allow_network_fs`: the caller has made sure one process on one host is its only writer,
-        as `cairn server --allow-network-fs` does. Opening the store fails the running versions whose owner is gone (`reap`; `heartbeat_timeout` seconds without a heartbeat, or its process dead on this host);
-        what it failed is in `self.reaped`."""
+        """`project` is the default for references without one. A folder on a network filesystem is refused
+        (StoreError, before anything is written) unless `allow_network_fs`: the caller has made sure one process on
+        one host is its only writer (`[repo] allow_network_fs`, `cairn server --allow-network-fs`), or only reads it.
+        Opening the repo fails the running versions whose owner is gone (`reap`; `heartbeat_timeout` seconds without
+        a heartbeat, or its process dead on this host); what it failed is in `self.reaped`."""
         self.root, self.project = Path(root), project
-        self._blobs = BlobStore(self.root)  # creates blobs/, projects/, tmp/
-        self._network_checked = allow_network_fs
-        self.uid = store_uid(self.root)
+        if not allow_network_fs:
+            fstype = network_filesystem(self.root)
+            if fstype:
+                raise StoreError(network_fs_message(self.root, fstype))
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._blobs = BlobStore(self.root)  # creates blobs/ and tmp/
+        self.uid = repo_uid(self.root)
         self._db = Database(self.root, self.uid)
         self._add_digests()
         self._listings: dict[str, tuple[int, list[dict]]] = {}
@@ -233,16 +302,7 @@ class LocalRepo:
         return failed
 
     def _writing(self) -> None:
-        """Refuse a root on a network filesystem, where several writers (jobs on several nodes) corrupt it (fs.py)."""
-        if self._network_checked:
-            return
-        fstype = network_filesystem(self.root)
-        if fstype:
-            raise StoreError(f"the store folder {self.root} is on a network filesystem ({fstype}), where writers on "
-                             "several hosts corrupt it: run `cairn server` on a machine with a local disk and set "
-                             "[store] url (jobs that cannot reach it keep their versions pending for `cairn sync`), "
-                             "or set [store] allow_network_fs = true if one process on one host is its only writer")
-        self._network_checked = True
+        """Every write passes here (the network filesystem was checked when the repo was opened)."""
 
     def _write(self):
         """A metadata write transaction (db.Database.write)."""
@@ -265,7 +325,7 @@ class LocalRepo:
     def blob_path(self, sha: str) -> Path:
         return self._blobs.blob_path(sha)
 
-    def blob_file(self, project: str, name: str, version: int, entry: dict, cache_root=None) -> Path:
+    def blob_file(self, project: str, name: str, version: int, entry: dict, root=None) -> Path:
         """A local file with the contents of a version's entry (here: the blob itself)."""
         return self.blob_path(entry["sha256"])
 
@@ -515,12 +575,11 @@ class LocalRepo:
             connection.execute("UPDATE artifacts SET updated = max(updated, ?) WHERE project = ? AND name = ?", (_stamp(state), project, name))
         connection.execute("UPDATE projects SET generation = generation + 1 WHERE name = ?", (project,))
 
-    def _running(self, connection, project: str, name: str, version: int) -> dict:
-        state = self._state(connection, project, name, version)
-        if state is None:
-            raise NotFound(f"{project}:{name}@v{version} does not exist")
+    def _running(self, connection, project: str, name: str, version: int | str) -> dict:
+        """The record of a running version, by number, `v<n>`, or uid (StoreError if it is final)."""
+        state = self._lookup(connection, project, name, version)
         if state["status"] != "running":
-            raise StoreError(f"{project}:{name}@v{version} is {state['status']} and can no longer change")
+            raise StoreError(f"{refs.exact(project, name, state['version'])} is {state['status']} and can no longer change")
         return state
 
     def _exact_inputs(self, connection, inputs) -> list[str]:
@@ -615,13 +674,14 @@ class LocalRepo:
             self._save(connection, project, name, state, created=True)
             return state["version"]
 
-    def add_files(self, project: str, name: str, version: int, entries: list[dict]) -> None:
-        """Add or replace files in a running version (entries as in `blobs.clean_entries`, blobs already uploaded)."""
+    def add_files(self, project: str, name: str, version: int | str, entries: list[dict]) -> None:
+        """Add or replace files in a running version (by number or uid; entries as in `blobs.clean_entries`, blobs
+        already stored)."""
         with self._write() as connection:
             self._check(connection, project, name)
             self._save(connection, project, name, self._merged(self._running(connection, project, name, version), entries))
 
-    def set_metadata(self, project: str, name: str, version: int, metadata: dict) -> None:
+    def set_metadata(self, project: str, name: str, version: int | str, metadata: dict) -> None:
         """Replace the metadata of a running version (a completed one never changes)."""
         if not isinstance(metadata, dict):
             raise StoreError("metadata must be a dict")
@@ -631,20 +691,21 @@ class LocalRepo:
             state = self._running(connection, project, name, version)
             self._save(connection, project, name, {**state, "metadata": metadata})
 
-    def complete_version(self, project: str, name: str, version: int, inputs=None, digest: str | None = None) -> None:
-        """Freeze a version and move `latest` to it; `inputs` are the references it consumed. The version's manifest
-        digest is computed from its files; a `digest` the client supplies must equal it (else Conflict, and nothing changes)."""
+    def complete_version(self, project: str, name: str, version: int | str, inputs=None, digest: str | None = None) -> None:
+        """Freeze a version (by number or uid) and move `latest` to it; `inputs` are the references it consumed. The
+        version's manifest digest is computed from its files; a `digest` the client supplies must equal it (else
+        Conflict, and nothing changes)."""
         with self._write() as connection:
             self._check(connection, project, name)
             state = self._running(connection, project, name, version)
             exact = self._exact_inputs(connection, inputs)
             actual = manifest_digest(state["files"])
-            _check_digest(digest, actual, f"{project}:{name}@v{version}")
+            _check_digest(digest, actual, refs.exact(project, name, state["version"]))
             self._save(connection, project, name, {**state, "status": "completed", "completed": now(), "inputs": exact, "digest": actual})
-            self._completed(connection, project, name, version, exact)
+            self._completed(connection, project, name, state["version"], exact)
         self._clear_beat(state["uid"])
 
-    def fail_version(self, project: str, name: str, version: int, error: str | None = None) -> None:
+    def fail_version(self, project: str, name: str, version: int | str, error: str | None = None) -> None:
         with self._write() as connection:
             self._check(connection, project, name)
             state = self._running(connection, project, name, version)
@@ -717,6 +778,155 @@ class LocalRepo:
         with self._write() as connection:
             self._check(connection, project, name)
             self._set_alias(connection, project, name, alias, version)
+
+
+    # ------------------------------------------------------------------ copies of a remote's versions
+
+    def meta(self, key: str) -> str | None:
+        """A value of the database's meta table (e.g. `remote`: the uid of the remote this repo syncs with)."""
+        with self._db.read() as connection:
+            return Database.meta(connection, key)
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._write() as connection:
+            connection.execute("INSERT INTO meta VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
+
+    def _evict(self, connection, project: str, name: str, number: int, uid: str) -> None:
+        """Make room for the remote's version `number` (uid `uid`): another row holding that number is a stale copy,
+        dropped. A version this repo numbered itself and has not sent yet is never dropped (Conflict: it is adopted
+        first, see client/sync.py)."""
+        state = self._state(connection, project, name, number)
+        if state is None or state["uid"] == uid:
+            return
+        if not state.get("origin"):
+            raise Conflict(f"{refs.exact(project, name, number)} in the repo {self.root} is a version of this repo that the remote "
+                           "does not have yet; it is sent first")
+        self._drop_rows(connection, [(project, name, state)])
+
+    def _drop_rows(self, connection, rows: list[tuple[str, str, dict]]) -> None:
+        """Forget versions (not tombstones: they are gone from this repo), with their aliases and the edges they recorded."""
+        touched = set()
+        for project, name, state in rows:
+            me = refs.exact(project, name, state["version"])
+            connection.execute("DELETE FROM versions WHERE uid = ?", (state["uid"],))
+            if state["status"] != "deleted":
+                connection.execute("UPDATE artifacts SET versions = versions - 1 WHERE project = ? AND name = ?", (project, name))
+            connection.execute("DELETE FROM consumers WHERE consumer = ?", (me,))
+            for alias, number in self._aliases(connection, project, name).items():
+                if number == state["version"]:
+                    self._remove_alias(connection, project, name, alias)
+            touched.add((project, name))
+        for project, name in touched:
+            self._fix_latest(connection, project, name)
+            connection.execute("UPDATE projects SET generation = generation + 1 WHERE name = ?", (project,))
+
+    def _fix_latest(self, connection, project: str, name: str) -> None:
+        """`latest` names a completed version: the one it named, else the newest completed one left."""
+        row = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = 'latest'", (project, name)).fetchone()
+        state = self._state(connection, project, name, row[0]) if row else None
+        if state is not None and state["status"] == "completed":
+            return
+        newest = connection.execute("SELECT max(number) FROM versions WHERE project = ? AND name = ? AND status = 'completed'",
+                                    (project, name)).fetchone()[0]
+        if newest is not None:
+            self._move_alias(connection, project, name, "latest", newest)
+        elif row is not None:
+            self._remove_alias(connection, project, name, "latest")
+
+    def put_copy(self, project: str, name: str, manifest: dict, origin: str) -> bool:
+        """Record a version as the remote `origin` (its uid) answered it: a copy, numbered by the remote. Only final
+        versions are copied (completed, failed, deleted); a copy that is already here as given is left alone. A
+        tombstone replaces a copy. `latest` moves to a completed copy newer than the one it names (`mirror_aliases`
+        sets it exactly). Returns whether anything changed. One transaction."""
+        number, uid, status = manifest.get("version"), manifest.get("uid"), manifest.get("status")
+        if isinstance(number, bool) or not isinstance(number, int) or not isinstance(uid, str) or \
+                status not in ("completed", "failed", "deleted"):
+            return False
+        valid_uid(uid)
+        refs.valid_project(project)
+        refs.valid_name(name)
+        record = {key: value for key, value in manifest.items() if key not in ("pending", "sync", "aliases", "copied")}
+        record["origin"] = origin
+        with self._write() as connection:
+            if connection.execute("SELECT 1 FROM projects WHERE name = ?", (project,)).fetchone() is None:
+                connection.execute("INSERT INTO projects (name, record) VALUES (?, ?)",
+                                   (project, json.dumps({"name": project, "title": project, "description": "", "created": now()})))
+            known = self._by_uid(connection, uid)
+            if known is not None and known[:2] != (project, name):
+                raise Conflict(f"uid {uid} names {refs.exact(known[0], known[1], known[2]['version'])} in this repo, "
+                               f"not a version of {project}:{name}")
+            if known is not None:
+                state = known[2]
+                if {k: v for k, v in state.items() if k != "copied"} == record:
+                    return False
+                if state["version"] != number:
+                    self._evict(connection, project, name, number, uid)
+                    connection.execute("UPDATE versions SET number = ? WHERE uid = ?", (number, uid))
+                record["copied"] = state.get("copied") or now()
+                self._save(connection, project, name, record)
+                if state["status"] != "deleted" and status == "deleted":
+                    connection.execute("UPDATE artifacts SET versions = versions - 1 WHERE project = ? AND name = ?", (project, name))
+            else:
+                self._evict(connection, project, name, number, uid)
+                record["copied"] = now()
+                self._save(connection, project, name, record, created=True)
+                if status == "deleted":
+                    connection.execute("UPDATE artifacts SET versions = versions - 1 WHERE project = ? AND name = ?", (project, name))
+            me = refs.exact(project, name, number)
+            for text in record.get("inputs") or []:
+                connection.execute("INSERT OR IGNORE INTO consumers (input, consumer, time) VALUES (?, ?, ?)", (text, me, now()))
+            if status == "completed":
+                head = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = 'latest'",
+                                          (project, name)).fetchone()
+                if head is None or head[0] < number:
+                    self._move_alias(connection, project, name, "latest", number)
+            elif status == "deleted":
+                for alias, target in self._aliases(connection, project, name).items():
+                    if target == number and alias != "latest":
+                        self._remove_alias(connection, project, name, alias)
+                self._fix_latest(connection, project, name)
+        return True
+
+    def mirror_aliases(self, project: str, name: str, aliases: dict[str, int]) -> None:
+        """Make the artifact's aliases here what the remote says they are (`{alias: number}`, every alias it has): an
+        alias whose version is not copied here, or not completed, is left out. One transaction."""
+        with self._write() as connection:
+            if connection.execute("SELECT 1 FROM artifacts WHERE project = ? AND name = ?", (project, name)).fetchone() is None:
+                return
+            current = self._aliases(connection, project, name)
+            for alias, number in aliases.items():
+                state = self._state(connection, project, name, number) if isinstance(number, int) else None
+                if state is not None and state["status"] == "completed" and current.get(alias) != number:
+                    self._move_alias(connection, project, name, alias, number)
+            for alias in current:
+                if alias not in aliases:
+                    self._remove_alias(connection, project, name, alias)
+            self._fix_latest(connection, project, name)
+
+    def local_versions(self) -> list[tuple[str, str, dict]]:
+        """(project, name, record) of every version this repo numbered itself (no `origin`: not a remote's copy),
+        oldest first (by uid, which is creation order)."""
+        with self._db.read() as connection:
+            rows = [(row[0], row[1], json.loads(row[2])) for row in connection.execute(
+                "SELECT project, name, manifest FROM versions WHERE json_extract(manifest, '$.origin') IS NULL ORDER BY uid")]
+        return rows
+
+    def forget_versions(self, uids) -> int:
+        """Drop versions from this repo (not tombstones: they are gone from here, e.g. copies `cairn prune` trims, or
+        versions handed to the outbox), with their aliases and the edges they recorded. Returns how many. One transaction."""
+        wanted = set(uids)
+        if not wanted:
+            return 0
+        with self._write() as connection:
+            rows = [found for uid in sorted(wanted) if (found := self._by_uid(connection, uid)) is not None]
+            self._drop_rows(connection, rows)
+            return len(rows)
+
+    def copies(self) -> list[tuple[str, str, dict]]:
+        """(project, name, record) of every copy of a remote's version in this repo."""
+        with self._db.read() as connection:
+            return [(row[0], row[1], json.loads(row[2])) for row in connection.execute(
+                "SELECT project, name, manifest FROM versions WHERE json_extract(manifest, '$.origin') IS NOT NULL ORDER BY uid")]
 
     # ------------------------------------------------------------- resolving
 
@@ -1049,6 +1259,7 @@ class LocalRepo:
         with self._db.read() as connection:
             generations = dict(connection.execute("SELECT name, generation FROM projects").fetchall())
             referenced = self._referenced(connection, None, set(report["deleted"]) if dry_run else set())
+        referenced |= outbox_blobs(self.root)  # versions on their way to the remote: never garbage
         found = gc.candidates(self._blobs.blobs_name, referenced, cutoff)
         temporaries = gc.stale_temporaries(self._blobs.tmp_name, clock - max(grace, gc.STALE_UPLOAD))  # never a live upload
         if dry_run:
@@ -1061,6 +1272,7 @@ class LocalRepo:
                        if generations.get(name) != generation]
             if changed:
                 referenced |= self._referenced(connection, changed, set())
+            referenced |= outbox_blobs(self.root)  # again: an entry may have been written since
             for sha, path, size in found:
                 if sha in referenced:
                     continue
