@@ -27,7 +27,7 @@ Finding the repo is one rule (`locate`), which every caller uses:
 
     $CAIRN_DIR set        that folder is the repo (the project root is still found as below, for cairn.toml)
     otherwise             walk from the working directory upward; the first folder that holds `.cairn/repo.json`
-                          (an existing repo, as git finds `.git`), `cairn.toml`, `pixi.toml`, or `pyproject.toml` is
+                          (an existing repo, as git finds `.git`) or a `cairn.toml` is
                           the project root, and its repo is `[cairn] dir` (relative to it), else `<root>/.cairn`
     nothing found         the working directory is the project root and `<cwd>/.cairn` its repo: opening the repo
                           creates it (and says so); read-only commands refuse instead (`cairn init` makes one)
@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 CONFIG_FILE = "cairn.toml"
-ROOT_MARKERS = (CONFIG_FILE, "pixi.toml", "pyproject.toml")
+ROOT_MARKERS = (CONFIG_FILE,)  # besides `.cairn/repo.json` (an existing repo); nothing else marks a project
 BASE_ENV = "CAIRN_DIR"
 BASE_NAME = ".cairn"
 _DIR_CACHE: dict[tuple, str | None] = {}

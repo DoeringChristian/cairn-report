@@ -23,7 +23,7 @@ counts as evidence is up to the project.
 
 ```bash
 pip install git+https://github.com/DoeringChristian/cairn.git   # see Install for extras
-cd my-project                       # any folder with a pixi.toml, pyproject.toml or cairn.toml
+cd my-project                       # the project folder (its repo is .cairn/ here)
 cairn init                          # optional: the repo, .cairn/ (any command that writes makes it too)
 cairn publish data/crops datasets/crops   # a folder becomes version v1 of "datasets/crops" in the repo, .cairn/
 cairn pull datasets/crops@latest    # prints the path of a read-only local copy
@@ -1028,7 +1028,7 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
 
 1. `$CAIRN_DIR` set: that folder is the repo.
 2. Otherwise Cairn walks from the working directory upward. The first folder that holds `.cairn/repo.json`
-   (an existing repo, the way git finds `.git`), `cairn.toml`, `pixi.toml`, or `pyproject.toml` is the
+   (an existing repo, the way git finds `.git`) or a `cairn.toml` is the
    project root; its repo is `[cairn] dir`, else `<root>/.cairn`.
 3. Nothing found: whatever opens the repo (`cairn.init`, `use`, `draft`, `publish`, `cairn ui`, `cairn server`
    without a folder) creates `.cairn/` in the working directory and says so in one line on stderr. Commands that

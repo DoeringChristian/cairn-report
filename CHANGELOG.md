@@ -31,7 +31,7 @@ before it, so there is no migration and no compatibility code, and a project sta
   pending, running, and rejected versions; `cairn verify [REF] [--repo FOLDER] [--repair]`; `cairn prune` trims
   read-only folders and contents only copies need. `cairn migrate` (the hub importer) is removed.
 - **Finding the repo** is one rule: `$CAIRN_DIR`, else the first folder upward from the working directory that
-  holds `.cairn/repo.json`, `cairn.toml`, `pixi.toml`, or `pyproject.toml` (its repo is `[cairn] dir`, else
+  holds `.cairn/repo.json` or `cairn.toml` (`pixi.toml` and `pyproject.toml` do not count; its repo is `[cairn] dir`, else
   `.cairn`); with nothing found, opening the repo creates `.cairn/` in the working directory (and says so), while
   `cairn status`, `verify`, `prune`, and `sync` refuse. `cairn init [folder]` creates a repo (idempotent). A
   `cairn-report.toml` is no longer recognized at all.

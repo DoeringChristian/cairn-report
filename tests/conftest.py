@@ -97,7 +97,8 @@ def project(tmp_path, monkeypatch):
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
     folder = tmp_path / "study"
     folder.mkdir()
-    (folder / "pyproject.toml").write_text("")
+    (folder / "cairn.toml").write_text("")  # what makes the folder a project
+    (folder / "pyproject.toml").write_text("")  # a project file the report tests read
     monkeypatch.chdir(folder)
     make_tree(folder)
     make_run(folder)

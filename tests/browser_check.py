@@ -33,7 +33,7 @@ from conftest import make_data, write  # noqa: E402
 def build_data(base: Path, url: str) -> None:
     project = base / "study"
     project.mkdir()
-    (project / "pyproject.toml").write_text("")
+    (project / "cairn.toml").write_text("")
     (project / "cairn.toml").write_text(f'[repo]\nremote = "{url}"\nproject = "study"\ninterval = 1\n')
     os.chdir(project)
     os.environ.pop("CAIRN_INPUTS", None)

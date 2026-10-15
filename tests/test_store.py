@@ -18,7 +18,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
     project = tmp_path / "study"
     project.mkdir()
-    (project / "pyproject.toml").write_text("")
+    (project / "cairn.toml").write_text("")
     monkeypatch.chdir(project)
     return project
 

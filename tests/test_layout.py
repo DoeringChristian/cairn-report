@@ -17,7 +17,7 @@ def proj(tmp_path, monkeypatch):
     monkeypatch.delenv("CAIRN_DIR", raising=False)
     folder = tmp_path / "proj"
     folder.mkdir()
-    (folder / "pyproject.toml").write_text("")
+    (folder / "cairn.toml").write_text("")
     monkeypatch.chdir(folder)
     return folder.resolve()
 
@@ -103,6 +103,20 @@ def test_outside_any_project_opening_creates_the_repo_here_and_looking_refuses(t
     assert (bare / ".cairn" / "repo.json").is_file()
     assert result.stderr.count("created the repo") == 1 and str(bare.resolve() / ".cairn") in result.stderr
     assert subprocess.run([sys.executable, "-m", "cairn", "status"], cwd=bare, capture_output=True).returncode == 0
+
+
+def test_pyproject_and_pixi_files_do_not_mark_a_project(tmp_path):
+    import subprocess
+    import sys
+
+    (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "pixi.toml").write_text("")
+    (tmp_path / "sub").mkdir()
+    script = "import cairn; run = cairn.init(name='x', system=False, code=False); print(run.path)"
+    result = subprocess.run([sys.executable, "-c", script], cwd=tmp_path / "sub", capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "sub" / ".cairn" / "repo.json").is_file() and not (tmp_path / ".cairn").exists()
+    assert "created the repo" in result.stderr
 
 
 def test_cairn_init_is_idempotent_and_writes_only_the_repo(tmp_path, capsys):

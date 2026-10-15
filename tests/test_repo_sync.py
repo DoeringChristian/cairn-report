@@ -27,7 +27,6 @@ def project_at(base: Path, name: str, remote: str | None = None, extra: str = ""
     """A project folder (its own repo), with `remote` as its remote if given."""
     root = base / name
     root.mkdir(parents=True)
-    (root / "pyproject.toml").write_text("")
     lines = ['[repo]', 'project = "study"', 'interval = 0.5']
     if remote:
         lines.append(f'remote = "{remote}"')

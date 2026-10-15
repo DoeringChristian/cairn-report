@@ -550,7 +550,7 @@ def cmd_finalize_study(args) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="cairn", description="Cairn: a repo of versioned artifacts for research (runs, their results, reports built from pinned artifacts), with an optional remote, a server, and a UI.")
     parser.add_argument("--version", action="version", version=f"cairn {__version__}")
-    parser.add_argument("--project", type=Path, help="project root (default: nearest folder with cairn.toml, pixi.toml, or pyproject.toml)")
+    parser.add_argument("--project", type=Path, help="project root (default: the nearest folder upward with .cairn/repo.json or cairn.toml, else here)")
     commands = parser.add_subparsers(dest="command", required=True)
 
     build = commands.add_parser("build", help="build every report (or one)")

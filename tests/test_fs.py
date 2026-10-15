@@ -104,7 +104,7 @@ def test_without_a_remote_a_repo_on_a_network_filesystem_explains_the_cluster_se
     from cairn.client.open import open_repo
     from cairn.config import load_config
 
-    (tmp_path / "pyproject.toml").write_text("")
+    (tmp_path / "cairn.toml").write_text("")
     monkeypatch.chdir(tmp_path)
     with pytest.raises(StoreError, match=r"cairn server.*\[repo\] remote.*cairn sync.*allow_network_fs"):
         open_repo(load_config(tmp_path))

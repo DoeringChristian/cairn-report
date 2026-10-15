@@ -56,7 +56,6 @@ if __name__ == "__main__":
 
 @pytest.fixture
 def hydra_project(tmp_path):
-    (tmp_path / "pyproject.toml").write_text("")  # the project: its repo is .cairn
     (tmp_path / "configs").mkdir()
     (tmp_path / "configs" / "config.yaml").write_text(CONFIG)
     (tmp_path / "experiments").mkdir()
@@ -134,3 +133,34 @@ def test_finalize_study_after_a_dead_launcher(tmp_path):
     assert (tmp_path / "outputs" / "sweep" / "latest").resolve() == study.resolve()
     with pytest.raises(SystemExit):
         finalize_study(study)  # already finalized
+
+
+def test_a_fresh_folder_gets_one_repo_at_the_launch_folder(hydra_project):
+    """No `.cairn/` and no `cairn.toml` yet: a Hydra job (and a 2-trial multirun) whose job folder is the run's makes
+    exactly one repo, in the folder it was launched from, and publishes its runs there."""
+    from cairn.store import LocalRepo
+
+    config = CONFIG.replace("""  run:
+    dir: outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S-%f}
+  sweep:
+    dir: outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S-%f}
+    subdir: ${hydra.job.num}""", """  run:
+    dir: ${cairn.run:}
+  sweep:
+    dir: ${cairn.run:}
+    subdir: ${hydra.job.num}""")
+    (hydra_project / "configs" / "config.yaml").write_text(config)
+    assert not (hydra_project / ".cairn").exists() and not (hydra_project / "cairn.toml").exists()
+    single = run(hydra_project)
+    assert single.returncode == 0, single.stderr
+    assert single.stderr.count("created the repo") == 1 and str(hydra_project / ".cairn") in single.stderr
+    sweep = run(hydra_project, "-m", "experiment.fail=false,false")
+    assert sweep.returncode == 0, sweep.stderr
+    assert "created the repo" not in sweep.stderr  # found: the launch folder holds .cairn/repo.json now
+    assert [path for path in hydra_project.rglob(".cairn") if path.is_dir()] == [hydra_project / ".cairn"]
+    assert list(hydra_project.rglob("repo.json")) == [hydra_project / ".cairn" / "repo.json"]
+    repo = LocalRepo(hydra_project / ".cairn")
+    [project] = [item["name"] for item in repo.projects()]
+    runs = repo.versions(project, "runs/demo")
+    assert [v["status"] for v in runs] == ["completed"] * 4  # the single job, two trials, and the sweep's summary
+    assert len([v for v in runs if (v["metadata"].get("sweep") or {}).get("trials")]) == 1
