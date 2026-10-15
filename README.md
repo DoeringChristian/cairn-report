@@ -4,7 +4,7 @@ An artifact store for research projects that keep their evidence in plain run fo
 reports on top of it. Three parts live in this package:
 
 - the **client**: a light Python API (`cairn.connect()` with projects, artifacts, and versions as
-  objects; `cairn.pull`, `cairn.publish`, lineage; an offline outbox) and the `cairn`
+  objects; `cairn.pull`, `cairn.publish`, lineage; a local replica that works offline) and the `cairn`
   command, the **report builder** that turns single-page Markdown reports into a static site
   (reading numbers and figures from the artifacts each report declares as inputs), a **run
   logger** that writes evidence to fixed places in a run folder (files only; `cairn publish
@@ -131,8 +131,9 @@ inputs:
 ```
 
 Local names are lower-case identifiers (`[a-z_][a-z0-9_]*`). At build time each
-reference is resolved to an exact version (`project:name@vN`; aliases only
-resolve completed versions), materialized read-only through the store's cache,
+reference is resolved to an exact version (`project:name@vN`, or `project:name@<uid>`
+for a version this machine published that is still pending; aliases only resolve
+completed versions), materialized read-only through the local replica,
 and exposed in `python exec` blocks as `inputs`, an object whose attributes and
 items are `Path`s:
 
@@ -318,10 +319,10 @@ the exact versions it consumed (`inputs`), and where it was published from. Alia
 `[project:]name[@v3|@uid|@alias|@label][//file]`.
 
 Every version also has a **uid**, a UUIDv7 made where the version is created (by the store, or by
-the client's outbox, and kept by the server): `datasets/crops@0192f3a4-5b6c-7d8e-9f01-23456789abcd`
+the client's replica, and kept by the server): `datasets/crops@0192f3a4-5b6c-7d8e-9f01-23456789abcd`
 names that version as exactly as `@v3`. A selector in the canonical lowercase UUIDv7 form is always a
 uid, so no alias or label may take that form (nor `v<n>`). `v<n>` stays the readable name; the uid is
-what the cache, the outbox, and offline pulls key on. Every store has a uid too (`store.json` at
+what the replica (its state and cache roots) and offline pulls key on. Every store has a uid too (`store.json` at
 its root). A store made before uids existed is upgraded as it is read: each version gets a uid
 derived from the store and the version (the same in every process), and the root gets its
 `store.json`.
@@ -372,6 +373,7 @@ token_file = "~/.config/cairn/store-token" # chmod 600; or CAIRN_STORE_TOKEN
 allow_http = false                                # plain HTTP to a non-local server (default: refused)
 exclude = [".submitit/**/*.pkl"]                  # never published: gitignore-style globs on project paths
 interval = 30                                     # seconds between syncs with --watch
+heartbeat_timeout = 600                           # seconds without a heartbeat before a running version is failed
 ```
 
 ```bash
@@ -390,9 +392,10 @@ cairn project edit my-study --description "..."
 cairn artifacts [--prefix reports/] [--project other]      # latest version, version count, aliases
 cairn versions datasets/crops                              # number, status, label, created, uid, size
 cairn show datasets/crops@paper                            # metadata, files, inputs, consumers
-cairn status                                               # versions waiting in the outbox
-cairn sync                                                 # send them now
+cairn status [--all]                                       # this machine's versions the server lacks (--all: every one)
+cairn sync                                                 # send them now, and refresh the known aliases
 cairn pull datasets/crops@paper --offline                  # never ask the server (see below)
+cairn prune [--older-than 30d] [--max-size 20G]            # trim the cache by last pull
 ```
 
 All of them work the same against a store folder and a store server.
@@ -416,7 +419,7 @@ v3.ref, v3.uid, v3.label, v3.status, v3.created, v3.metadata, v3.inputs, v3.cons
 [(f.path, f.size, f.sha256) for f in v3.files]
 with v3.open("tables/cases.csv") as handle:     # streams one file without pulling the version; recorded as an input
     header = handle.readline()
-folder = v3.pull()                              # the whole version, read-only, from the cache; recorded as an input
+folder = v3.pull()                              # <cache>/versions/<uid>/files/, read-only; recorded as an input
 
 fit = project.artifact("models/fit")
 v = fit.publish("outputs/fit", metadata={"loss": 0.1}, aliases=["best"], inputs=[v3.ref])   # -> Version
@@ -428,53 +431,108 @@ with fit.publishing("outputs/live") as running:    # a running version that foll
 
 The functions `cairn.pull`, `cairn.publish`, `cairn.alias`, `cairn.versions`, `cairn.lineage`, and
 `cairn.Publication` stay, as shortcuts on top of these objects (`cairn.publish` returns the
-version number, or None while the version waits in the outbox).
+version number, or None while the version is pending).
 
-### Offline
+### The local replica
 
-Publishing to a store server first commits the version to a local **outbox**
-(`<cache>/outbox/<store-uid>/<version-uid>.json`: manifest, label, metadata, inputs, aliases), with
-the contents it needs cloned (copy-on-write where the filesystem can) or copied into the blob cache,
-so the upload never reads the source folder again: a file changed after `publish` returns does not
-change the queued version. Then it uploads. If the server does not answer, `publish` returns a
-**pending** version (its uid is set, its number is None until the server assigns it) and says it is
-queued. The outbox is sent in order by a background thread (in long-lived processes, once something
-is queued or `connect()` finds something queued), by `cairn sync`, and at the start of every `cairn`
-command that uses the store; `cairn status` lists what waits. Sending is idempotent: every request
-carries the version's uid, and the server answers a uid it already has with that version. A version
-the server refuses stays in the outbox as `rejected` (shown by `cairn status`, skipped by every
-flush; delete its file to drop it).
+Every version this machine knows is one record in the **replica**, `versions/<uid>/manifest.json`,
+with a sync state (`synced`, `pending`, `rejected`, or `running` for a `--watch` version) and its
+files, read-only, under `versions/<uid>/files/`: that folder is what `pull` returns. The replica has
+two roots:
+
+```text
+<state>/versions/<uid>/manifest.json, files/   versions the server does not have yet: pending, running, rejected
+<state>/versions/<uid>/heartbeat               a running version's owner: time, host, pid (rewritten while it runs)
+<state>/blobs/<aa>/<sha256>                    the contents they need
+<state>/stores/<store-uid>.json                each server: URL, last contact, last known aliases and labels per artifact
+<cache>/versions/<uid>/manifest.json, files/   synced versions, with their last pull time
+<cache>/blobs/<aa>/<sha256>                    downloaded contents (a file is downloaded once)
+```
+
+`<state>` is durable: `$CAIRN_STATE_DIR`, else `$XDG_STATE_HOME/cairn`, else `~/.local/state/cairn`.
+It holds what only this machine has, so it belongs on persistent storage. `<cache>` is throwaway:
+`$CAIRN_CACHE_DIR`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`; deleting it loses nothing
+the server does not have, and `cairn prune` trims it by last pull (recorded in the manifest, not the
+filesystem's atime), never touching pending or running versions or the blobs they need.
+
+Publishing to a store server first commits the version to the state root: the record (manifest,
+label, metadata, inputs, aliases) and the contents it needs, cloned (copy-on-write where the
+filesystem can) or copied, so the upload never reads the source folder again: a file changed after
+`publish` returns does not change the pending version. Then it uploads. If the server does not
+answer, `publish` returns a **pending** version (its uid is set, its number is None until the server
+assigns it) that is usable at once: `cairn.pull`, `Version.open`, and a report's `inputs:` resolve it
+by uid, by an alias it was published with, by its label, or as `latest` (when it is newer than what
+the server has), with a warning that it is pending. Its uid-exact reference `project:name@<uid>` is
+what lineage records until the server numbers it; pending versions are sent in uid order, so an
+input goes before its consumers, and the server turns that input into `@v<n>`.
+
+Pending versions are sent by a background thread (in long-lived processes, once something is pending
+or `connect()` finds something pending), by `cairn sync`, and at the start of every `cairn` command
+that uses the store. Sending is idempotent: every request carries the version's uid, and the server
+answers a uid it already has with that version. A sent version is promoted to the cache under the same
+uid (its folder is renamed when both roots share a filesystem; otherwise the state copy is dropped
+and the cache downloads it on its next pull). A version the server refuses stays as `rejected`
+(shown by `cairn status`, skipped by every flush; delete its folder to drop it). `cairn sync` also
+refreshes what this machine knows about the aliases of every artifact it has versions of.
+`cairn status` lists the versions the server does not have yet, with their host, age, state, and last
+error; `cairn status --all` lists every version in the replica.
 
 `cairn publish --watch -- cmd` always starts the command: the running version is created in the
-outbox and, as soon as the server answers, on the server under the same uid; its files follow as
-they are synced, and completion or failure is queued like any publish. A job that dies leaves its
-version running only until the next flush on that host (`cairn sync`, any `cairn` command) marks it failed. A local store
-(`[store] path`) is written directly, with no outbox.
+state root and, as soon as the server answers, on the server under the same uid; its files follow
+as they are synced, and completion or failure turns it pending like any publish. While it runs, its
+owner rewrites `heartbeat` every few seconds. A job that dies leaves its version running only until
+a flush notices: on the same host a dead pid fails it at once, and a flush on any host fails it once
+its heartbeat is older than `[store] heartbeat_timeout` (default 600 seconds).
+
+Several hosts may share one state root (a home folder on NFS). Nothing locks: every record is written
+under a scratch name and renamed into place, and a flusher claims a version by exclusively creating
+`versions/<uid>/.flushing-<host>-<pid>` with a timestamp (claims older than the timeout, or of a dead
+pid on this host, are ignored). The claim only avoids double work; sending twice would be harmless.
+
+A local store (`[store] path`) is written directly, with no replica.
 
 Pulls work offline too. An exact reference (`name@vN` this machine has seen, or `name@<uid>`)
 whose version is in the cache comes from the cache without asking the server at all. When the
 server does not answer, an alias, label, or `latest` falls back to its last known resolution (kept in
-`<cache>/resolved/<store-uid>.json`) with a warning naming the version, and that exact version is
+`<state>/stores/<store-uid>.json`) with a warning naming the version, and that exact version is
 recorded as the input. `cairn pull --offline` and `cairn.pull(..., offline=True)` force the
 fallback; a report build resolves its `inputs:` the same way.
 
-### The cache
+Versions are keyed by uid, never by project, name, and number, so two stores never collide in one
+replica. Either root may be shared by many jobs, also on NFS: a version folder or a blob is written
+under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place, and whoever
+loses a race discards its copy. The layout before the replica (`<cache>/outbox/`, `resolved/`,
+`stores.json`) is converted on first use and removed.
 
-`<cache>` is `$CAIRN_CACHE_DIR`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`:
+### Clusters (Slurm)
 
-```text
-<cache>/versions/<uid>/       pulled versions, read-only, one folder per version uid
-<cache>/blobs/<aa>/<sha256>   downloaded and staged file contents (a file is downloaded once)
-<cache>/outbox/<store-uid>/   versions waiting for a store server
-<cache>/resolved/, stores.json   the last answers, for offline pulls
+The safe setup:
+
+- run `cairn server` on a machine with a local disk (not on a compute node, and with its root not
+  on a shared filesystem many writers touch), behind HTTPS;
+- jobs publish over HTTP (`[store] url`), never into a store folder on NFS;
+- `CAIRN_STATE_DIR` stays on persistent storage: the default, under your home folder, is right;
+  pending versions live there until the server has them, also after the job and its node are gone;
+- `CAIRN_CACHE_DIR` points at node-local scratch, so pulls read from a local disk and the cache
+  disappears with the job;
+- every job script ends with `cairn sync` (it sends what the job left pending; a job killed before
+  that is sent by the next sync anywhere, and a killed `--watch` version is failed once its heartbeat
+  expires), and a login-node timer can run `cairn sync` too;
+- `cairn status` shows what is still pending, from which host, and why.
+
+```bash
+#!/bin/bash
+#SBATCH ...
+export CAIRN_CACHE_DIR="${TMPDIR:-/tmp}/cairn-$SLURM_JOB_ID"   # node-local, throwaway
+# CAIRN_STATE_DIR: the default ~/.local/state/cairn (persistent home) is right
+cairn publish runs/fit/latest fit --watch -- python fit.py
+cairn sync                                                    # send anything still pending
 ```
 
-Versions are keyed by uid, never by project, name, and number, so two stores never collide in
-one cache. The cache may be shared by many jobs, also on NFS: a version folder or a blob is written
-under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place, and whoever
-loses a race discards its copy; there are no file locks. On a cluster, point `CAIRN_CACHE_DIR` at
-node-local scratch (for example `export CAIRN_CACHE_DIR=$TMPDIR/cairn` in the job script) so pulls
-read from a local disk.
+```bash
+# on a login node, e.g. from cron or a systemd user timer
+*/15 * * * * cd ~/my-study && cairn sync >/dev/null 2>&1
+```
 
 `exclude` takes gitignore-style globs on project paths: `*` and `?` stay within a folder, `**`
 spans folders, a leading `/` anchors to the project root.
