@@ -134,8 +134,11 @@ def test_protected_versions_are_refused_without_force(local):
     local.delete_version("p", "data", 3, force=True)
     assert local.get_version("q", "reports/summary", 1)["inputs"] == ["p:data@v3"]
     marked = local.lineage("q:reports/summary@v1", marks=True)
-    assert marked == {"inputs": ["p:data@v3"], "consumers": [], "deleted": ["p:data@v3"]}
-    assert local.lineage("p:data@v3", marks=True) == {"inputs": [], "consumers": ["q:reports/summary@v1"], "deleted": ["p:data@v3"]}
+    assert marked == {"inputs": ["p:data@v3"], "consumers": [], "deleted": ["p:data@v3"],
+                      "nodes": {"q:reports/summary@v1": {"status": "completed"}, "p:data@v3": {"status": "deleted"}}}
+    marked = local.lineage("p:data@v3", marks=True)
+    assert {key: marked[key] for key in ("inputs", "consumers", "deleted")} == {"inputs": [], "consumers": ["q:reports/summary@v1"],
+                                                                               "deleted": ["p:data@v3"]}
     assert local.lineage("p:data@v2", marks=True)["deleted"] == ["p:data@v2", "q:fit@v1"]
 
 

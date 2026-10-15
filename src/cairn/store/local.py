@@ -475,10 +475,21 @@ class LocalStore:
         return state
 
     def _exact_inputs(self, connection, inputs) -> list[str]:
-        """Exact `project:name@v<n>` strings for input references; each must resolve to a completed version."""
+        """Exact `project:name@v<n>` strings for input references; each must resolve to a completed version, or, named
+        by its exact uid, to a running one (the run a job's outputs come from, which completes after them). Unknown,
+        failed, and deleted inputs are refused."""
         exact: list[str] = []
         for item in inputs or []:
-            project, name, version = self._resolve(connection, item)
+            ref = refs.parse(item) if isinstance(item, str) else item
+            if ref.uid:
+                project = ref.project or self.project
+                found = self._by_uid(connection, ref.uid) if project else None
+                if found is not None and found[:2] == (project, ref.name) and found[2]["status"] == "running":
+                    text = refs.exact(project, ref.name, found[2]["version"])
+                    if text not in exact:
+                        exact.append(text)
+                    continue
+            project, name, version = self._resolve(connection, ref)
             text = refs.exact(project, name, version["version"])
             if text not in exact:
                 exact.append(text)
@@ -487,7 +498,7 @@ class LocalStore:
     def _new(self, connection, project, name, label, metadata, source, uid=None) -> dict:
         """A new running version's record, numbered next (unique: this runs inside a write transaction)."""
         if label is not None:
-            refs.valid_word(label, "label")
+            refs.valid_label(label)
         metadata = {} if metadata is None else metadata
         if not isinstance(metadata, dict):
             raise StoreError("metadata must be a dict")
@@ -689,18 +700,37 @@ class LocalStore:
         references among them (and the version itself) that were deleted."""
         ref = refs.parse(ref) if isinstance(ref, str) else ref
         with self._db.read() as connection:
-            try:
+            if ref.exact:  # an exact version of any status: a running run already has consumers
+                project, name = ref.project or self.project, ref.name
+                self._check(connection, project, name)
+                version = self._lookup(connection, project, name, ref.selector)
+            else:
                 project, name, version = self._resolve(connection, ref)
-            except Deleted:
-                project = ref.project or self.project
-                version = self._lookup(connection, project, ref.name, ref.selector)
-                name = ref.name
             me = refs.exact(project, name, version["version"])
             consumers = [row[0] for row in connection.execute("SELECT consumer FROM consumers WHERE input = ? ORDER BY seq", (me,))]
             found = {"inputs": list(version["inputs"]), "consumers": consumers}
             if marks:
                 found["deleted"] = [item for item in [me, *found["inputs"], *consumers] if self._tombstoned(connection, item)]
+                found["nodes"] = self._node_marks(connection, [me, *found["inputs"], *consumers])
         return found
+
+    def _node_marks(self, connection, items: list[str]) -> dict[str, dict]:
+        """{ref: {"status", "kind"}} for lineage references (status of the version, kind from its metadata, e.g. "run")."""
+        marks: dict[str, dict] = {}
+        for item in items:
+            if item in marks:
+                continue
+            try:
+                ref = refs.parse(item)
+                state = self._lookup(connection, ref.project or self.project, ref.name, ref.selector)
+            except (StoreError, ValueError):
+                continue
+            mark = {"status": state["status"]}
+            kind = (state.get("metadata") or {}).get("kind")
+            if isinstance(kind, str):
+                mark["kind"] = kind
+            marks[item] = mark
+        return marks
 
     # ------------------------------------------------------------- deleting (tombstones)
 

@@ -26,7 +26,7 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
                                                                  or this uid was published already)
       POST /api/v2/projects/<p>/artifacts/<name>/aliases         {alias, version}
       GET  /api/v2/resolve?ref=<ref>                             {project, name, version: manifest}
-      GET  /api/v2/lineage?ref=<ref>                             {ref, inputs, consumers, deleted}
+      GET  /api/v2/lineage?ref=<ref>                             {ref, inputs, consumers, deleted, nodes: {ref: {status, kind}}}
       POST /api/v2/blobs/missing {sha256: [...]}                 PUT /api/v2/blobs/<sha256> (streamed, hash-verified)
     Deleting (a write token of the project; `force=1` and gc need the owner token; 409 + `protected` when refused)
       DELETE /api/v2/projects/<p>/artifacts/<name>/versions/<n>  [?force=1&reason=...] -> {deleted: [refs], skipped: []}
@@ -349,15 +349,15 @@ class StoreApp:
                 return _json(200, {"project": project, "name": name, "version": version})
             case ["lineage"]:
                 ref = self._ref(query, principal)
-                try:
-                    project, name, version = store.resolve(ref)
-                except Deleted:  # a deleted version keeps its edges
-                    if not ref.exact:
-                        raise
+                if ref.exact:  # any status: a deleted version keeps its edges, a running run already has consumers
                     project, name, version = ref.project, ref.name, store.get_version(ref.project, ref.name, ref.uid or ref.version)
+                else:
+                    project, name, version = store.resolve(ref)
                 found = store.lineage(Ref(project, name, f"v{version['version']}"), marks=True)
+                nodes = found.pop("nodes", {})
                 visible = {key: [item for item in items if principal.can(refs.parse(item).project)] for key, items in found.items()}
-                return _json(200, {"ref": refs.exact(project, name, version["version"]), **visible})
+                nodes = {item: mark for item, mark in nodes.items() if principal.can(refs.parse(item).project)}
+                return _json(200, {"ref": refs.exact(project, name, version["version"]), **visible, "nodes": nodes})
         raise HttpError(404, "no such API route")
 
     def _post(self, principal: Principal, route: list[str], payload: dict) -> Answer:

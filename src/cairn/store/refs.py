@@ -19,6 +19,7 @@ from .uids import UID
 PROJECT = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 SEGMENT = re.compile(r"[a-z0-9][a-z0-9_.-]*")
 WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")  # aliases and labels
+LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*")  # labels may also be words joined by `/`
 VERSION = re.compile(r"v(0|[1-9][0-9]*)")
 MAX_NAME = 200
 
@@ -47,6 +48,15 @@ def valid_word(word: str, what: str) -> str:
     if UID.fullmatch(word.lower()):
         raise ValueError(f"invalid {what} {word!r}: a UUIDv7 is reserved for version uids")
     return word
+
+
+def valid_label(label: str) -> str:
+    """A label: a word, or words joined by single slashes (a multirun trial's `<sweep-time>/<n>`)."""
+    if not isinstance(label, str) or not LABEL.fullmatch(label) or len(label) > 128:
+        raise ValueError(f"invalid label {label!r}: use [A-Za-z0-9][A-Za-z0-9_.-]* (words may be joined by '/')")
+    for word in label.split("/"):
+        valid_word(word, "label")
+    return label
 
 
 @dataclass(frozen=True)
@@ -94,7 +104,7 @@ def parse(text: str) -> Ref:
         if VERSION.fullmatch(selector) is None and UID.fullmatch(selector) is None:
             if re.fullmatch(r"v[0-9]+", selector):
                 raise ValueError(f"invalid reference {text!r}: version numbers have no leading zeros")
-            valid_word(selector, "alias or label")
+            valid_label(selector) if "/" in selector else valid_word(selector, "alias or label")
     return Ref(project, name, selector if at else None, path if separator else None)
 
 

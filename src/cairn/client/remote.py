@@ -260,6 +260,7 @@ class RemoteStore:
         found = {"inputs": answer["inputs"], "consumers": answer["consumers"]}
         if marks:
             found["deleted"] = answer.get("deleted", [])
+            found["nodes"] = answer.get("nodes", {})
         return found
 
 
