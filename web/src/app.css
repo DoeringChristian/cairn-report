@@ -28,11 +28,22 @@ main a, .rail-note a { color: var(--accent); }
 .pill.alias { display: inline-block; padding: 1px 8px; border-radius: 99px; background: transparent; border: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 700; }
 .app-metrics { margin: 24px 0 0; }
 .toolbar { display: flex; gap: 10px; margin: 24px 0 0; flex-wrap: wrap; }
-input[type="search"], select, .login-form input { font: inherit; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
-input[type="search"] { flex: 1; min-width: 14rem; }
+input[type="search"], select, .login-form input { box-sizing: border-box; height: 42px; font: inherit; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background-color: var(--card); color: var(--ink); }
+input[type="search"] { flex: 1; min-width: 14rem; -webkit-appearance: none; appearance: none; }
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+input[type="search"]:hover, select:hover:not(:disabled), .login-form input:hover { border-color: var(--accent); }
+input[type="search"]:focus, select:focus, .login-form input:focus { border-color: var(--accent); }
+/* Selects in the report theme: no system look, a chevron of our own; the native picker and keyboard stay. */
+select { -webkit-appearance: none; appearance: none; padding-right: 36px; cursor: pointer; text-overflow: ellipsis;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%237a8580' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 13px center; background-size: 12px 8px; }
+select:hover:not(:disabled), select:focus { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23176b5b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 1.75 6 6.25l4.5-4.5'/%3E%3C/svg%3E"); }
+select:disabled, input:disabled { opacity: .5; cursor: default; }
+select option { color: var(--ink); background: var(--card); }
 input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.tabs { display: flex; gap: 4px; margin: 20px 0 6px; border-bottom: 1px solid var(--line); }
-.tabs button { font: inherit; font-weight: 700; padding: 10px 14px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); cursor: pointer; }
+.tabs { display: flex; gap: 4px; margin: 20px 0 6px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { flex: none; white-space: nowrap; font: inherit; font-weight: 700; padding: 10px 14px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); cursor: pointer; }
 .tabs button:hover { color: var(--ink); }
 .tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .tabs button span { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -83,10 +94,28 @@ video.preview-media { background: #111; }
 .form-actions { justify-content: flex-start; }
 .form-actions button { font: inherit; }
 .form-actions .primary:disabled { opacity: .6; }
+/* The phone rail: brand and a Browse button in one bar; the lists open below it. */
+.graph-card { position: relative; }
 @media (max-width: 760px) {
-  .app-metrics { grid-template-columns: 1fr; }
+  .app-metrics, .run-charts { grid-template-columns: 1fr; }
   .section-head { flex-wrap: wrap; }
-  .row-actions { flex-wrap: wrap; }
+  .row-actions { flex-wrap: nowrap; }
+  .toolbar { gap: 8px; }
+  .toolbar input[type="search"] { flex: 1 1 100%; min-width: 0; }
+  .toolbar select { flex: 1 1 100%; }
+  .tabs button { min-height: 44px; padding: 10px 16px; }
+  .action-button, .graph-toggle button, .form-actions button { min-height: 40px; }
+  .action-button.small { padding: 8px 12px; }
+  .row-actions .image-copy, .app-panel .image-copy { width: 40px; height: 40px; }
+  .graph-scroll { max-height: 26rem; -webkit-overflow-scrolling: touch; }
+  .graph-scroll svg { margin: 0; max-width: none; }
+  .graph-card::after { content: ""; position: absolute; top: 44px; right: 0; bottom: 0; width: 28px; border-radius: 0 var(--radius) var(--radius) 0; pointer-events: none; background: linear-gradient(to right, transparent, color-mix(in srgb, var(--ink) 14%, transparent)); }
+  .table-wrap { -webkit-overflow-scrolling: touch; background: linear-gradient(to right, var(--card) 30%, transparent) left center / 32px 100% no-repeat local, linear-gradient(to left, var(--card) 30%, transparent) right center / 32px 100% no-repeat local, linear-gradient(to right, color-mix(in srgb, var(--ink) 16%, transparent), transparent) left center / 12px 100% no-repeat scroll, linear-gradient(to left, color-mix(in srgb, var(--ink) 16%, transparent), transparent) right center / 12px 100% no-repeat scroll; }
+  .table-card table { min-width: 34rem; }
+  .table-card pre, .app-panel pre, .run-log pre { max-width: 100%; overflow: auto; }
+  .login-form { max-width: none; }
+  .login-form input, input[type="search"], select { font-size: 16px; } /* no iOS zoom on focus */
+  .app-figures { grid-template-columns: 1fr; }
 }
 .hero h1 { overflow-wrap: anywhere; }
 /* deleted versions: tombstones stay in the tables and the graph, greyed */

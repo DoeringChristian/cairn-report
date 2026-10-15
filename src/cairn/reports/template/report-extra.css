@@ -191,3 +191,30 @@ main { width: min(100%, calc(var(--column) + 2 * clamp(24px, 5vw, 74px))); }
 .back-link:hover, .back-link:focus-visible { border-color: var(--accent); color: var(--accent); }
 @media (max-width: 760px) { .back-link { top: auto; bottom: 14px; left: 14px; } }
 @media print { .back-link { display: none; } }
+
+/* Phone and tablet-portrait: the rail becomes a compact bar (brand + Browse); its lists open on demand. */
+.rail-toggle { display: none; }
+@media (max-width: 760px) {
+  .rail { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; padding: 8px 16px; max-height: 100vh; border-right: 0; border-bottom: 1px solid var(--line); overflow-y: auto; }
+  .brand { min-height: 44px; }
+  .rail-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .rail-toggle:hover, .rail-toggle:focus-visible, .rail-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  .rail-toggle::after { content: ""; width: 7px; height: 7px; border: solid currentColor; border-width: 0 2px 2px 0; transform: translateY(-2px) rotate(45deg); transition: transform .15s; }
+  .rail-toggle[aria-expanded="true"]::after { transform: translateY(1px) rotate(-135deg); }
+  .rail:not(.open) .report-list { display: none; }
+  .rail .report-list { flex: 1 0 100%; margin: 12px 0 0; }
+  .rail .report-list nav { display: grid; margin-top: 0; max-height: 40vh; overflow-y: auto; }
+  .rail .report-list a { padding: 10px 12px; min-height: 40px; box-sizing: border-box; align-content: center; }
+  .rail .rail-note { display: none; }
+  .rail.open .rail-note { display: block; flex: 1 0 100%; padding: 12px 0 4px; }
+  main { padding: 24px 16px; }
+  h1 { font-size: clamp(32px, 10vw, 44px); overflow-wrap: anywhere; }
+  .report-prose h2 { font-size: 26px; }
+  .report-prose pre, .report-prose .out { max-width: 100%; overflow-x: auto; }
+  .report-prose table { display: block; max-width: 100%; overflow-x: auto; }
+  .back-link { min-height: 40px; box-sizing: border-box; display: inline-flex; align-items: center; }
+  body { padding-bottom: 64px; } /* room for the back pill at the bottom of the window */
+  .zoom button, .lightbox .icon { min-width: 40px; min-height: 40px; }
+  .image-copy, .data-row .image-copy { width: 40px; height: 40px; }
+  .plotly-card > .image-copy { right: 54px; }
+}

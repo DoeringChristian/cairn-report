@@ -29,6 +29,8 @@ function RailSection({ label, items }: { label: string; items: RailItem[] }) {
 
 function Rail() {
   const { pathname } = useLocation();
+  const [open, setOpen] = useState(false);
+  useEffect(() => { setOpen(false); }, [pathname]);
   const match = /^\/p\/([^/]+)(?:\/a\/(.+?))?\/?$/.exec(pathname);
   const project = match ? decodeURIComponent(match[1]) : null;
   const here = match?.[2] ? decodeURIComponent(match[2]).split("@")[0] : null;
@@ -42,8 +44,9 @@ function Rail() {
   const runs = artifacts.filter(a => isRunName(a.name));
   const projectItems: RailItem[] = (projects.data ?? []).map(p => ({ key: p.name, title: p.title || p.name, to: `/p/${encodeURIComponent(p.name)}/`, plain: true, current: p.name === project }));
   return (
-    <aside className="rail">
+    <aside className={open ? "rail open" : "rail"}>
       <Link className="brand" to="/"><span>C</span> <span className="site-title">Cairn</span></Link>
+      <button type="button" className="rail-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>Browse</button>
       <RailSection label="Projects" items={projectItems} />
       {project && <RailSection label="Reports" items={reports.map(a => ({ key: a.name, title: title(a), to: reportHref(project, a.name), current: false }))} />}
       {project && <RailSection label="Artifacts" items={others.map(a => ({ key: a.name, title: a.name, to: artifactHref(project, a.name), plain: true, current: a.name === here }))} />}

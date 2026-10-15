@@ -275,6 +275,13 @@ async function loadReportList(data) {
   if (brand || title) $("#site-title").textContent = brand || title;
   if (mark) $(".brand span").textContent = mark;
   addBackLink(title);
+  const addToggle = () => {  // phones: the rail is a bar; its lists open under a Browse button
+    const rail = $(".rail"); if (!rail || $(".rail-toggle")) return;
+    const toggle = el("button", "rail-toggle", "Browse"); toggle.type = "button"; toggle.setAttribute("aria-expanded", "false");
+    toggle.onclick = () => toggle.setAttribute("aria-expanded", String(rail.classList.toggle("open")));
+    $(".brand").after(toggle);
+  };
+  if (groups || reports.length > 1) addToggle();
   if (groups) {  // the store UI sends the sections of its own rail: Projects, Reports, Artifacts, Runs
     const note = $(".rail-note");
     groups.forEach(group => {

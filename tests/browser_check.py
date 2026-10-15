@@ -289,15 +289,57 @@ def run(keep: bool) -> int:
         page.get_by_role("link", name="train").first.wait_for()
         shot("18-runs-tab")
 
-        # phone width and dark mode
-        page.set_viewport_size({"width": 390, "height": 800})
-        page.goto(ui + "/p/study/a/toy-fit")
-        page.locator(".graph-node").first.wait_for()
-        shot("12-phone-artifact")
+        # desktop: the styled selects next to the search box
         page.goto(ui + "/p/study/")
-        page.locator("main").get_by_text("Toy fit summary").first.wait_for()
-        shot("13-phone-project")
-        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"), "no horizontal page scroll on a phone"
+        page.get_by_label("Sort").wait_for()
+        assert page.get_by_label("Sort").evaluate("e => getComputedStyle(e).appearance") == "none", "selects are styled, not native"
+        assert page.get_by_label("Sort").evaluate("e => e.offsetHeight") == page.get_by_label("Search").evaluate("e => e.offsetHeight"), "select and search are the same height"
+        page.get_by_label("Sort").focus()
+        page.wait_for_timeout(200)
+        shot("22-desktop-selects")
+        page.goto(ui + "/p/study/a/toy-fit")
+        page.get_by_label("Version", exact=True).wait_for()
+        shot("23-desktop-version-select")
+
+        # phone (390x844) and tablet (820x1180): every page, no sideways page scroll, tap targets, collapsed rail
+        def responsive(tag: str, width: int, height: int) -> None:
+            page.set_viewport_size({"width": width, "height": height})
+            pages = [("projects", "/", "h1"), ("project", "/p/study/", ".tabs"), ("project-artifacts", "/p/study/?tab=artifacts", ".table-card"),
+                     ("artifact", "/p/study/a/toy-fit", ".graph-node"), ("dataset", "/p/study/a/datasets/toy@v2", ".graph-node"),
+                     ("run", "/p/study/a/runs/train", ".run-chart"), ("report", "/p/study/r/summary/", "#report-prose h2")]
+            for name, path, ready in pages:
+                page.goto(ui + path)
+                page.locator(ready).first.wait_for()
+                page.wait_for_load_state("networkidle")
+                page.wait_for_timeout(300)
+                sw = page.evaluate("[document.documentElement.scrollWidth, window.innerWidth]")
+                assert sw[0] <= sw[1], f"{tag} {name}: horizontal page scroll {sw}"
+                wide = page.evaluate("""() => [...document.querySelectorAll('main *')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1
+                    && !e.closest('.table-wrap, .graph-scroll, .tabs, pre, .raw-html, .math, svg, table, .plotly-card'); }).map(e => e.tagName + '.' + e.className).slice(0, 5)""")
+                assert not wide, f"{tag} {name}: elements stick out of the window: {wide}"
+                small = page.evaluate("""() => [...document.querySelectorAll('.tabs button, .action-button, select, input, .rail-toggle, .back-link, .image-copy, .graph-toggle button, .report-list a')]
+                    .filter(e => e.offsetParent !== null || getComputedStyle(e).position === 'fixed')
+                    .map(e => [e.tagName + '.' + e.className, e.getBoundingClientRect()]).filter(([, r]) => r.height > 0 && r.height < 39.5).map(([n, r]) => n + ' ' + Math.round(r.height)).slice(0, 5)""")
+                if width < 600:
+                    assert not small, f"{tag} {name}: tap targets under 40px: {small}"
+                    assert page.locator(".rail .report-list:not([hidden])").first.is_hidden() or not page.locator(".rail .report-list").count(), f"{tag} {name}: rail lists start collapsed"
+                    rail_h = page.locator(".rail").bounding_box()["height"]
+                    assert rail_h < 70, f"{tag} {name}: collapsed rail is {rail_h}px tall"
+                page.screenshot(path=str(shots / f"{tag}-{name}.png"), full_page=True)
+                if name == "report":
+                    back = page.locator("#back-link")
+                    back.wait_for()
+                    page.screenshot(path=str(shots / f"{tag}-{name}-viewport.png"))
+                if name in ("project", "report") and width < 760:
+                    page.locator(".rail-toggle").click()
+                    assert page.locator(".rail .report-list:not([hidden])").first.is_visible(), "Browse opens the rail lists"
+                    page.screenshot(path=str(shots / f"{tag}-{name}-browse.png"))
+                    page.locator(".rail-toggle").click()
+                    assert page.locator(".rail .report-list:not([hidden])").first.is_hidden(), "Browse closes them again"
+
+        responsive("phone", 390, 844)
+        responsive("tablet", 820, 1180)
+        page.set_viewport_size({"width": 1280, "height": 900})
         dark = browser.new_context(viewport={"width": 1280, "height": 900}, color_scheme="dark")
         page = dark.new_page()
         page.on("pageerror", lambda error: problems.append(f"page error: {error}"))
@@ -311,7 +353,10 @@ def run(keep: bool) -> int:
         shot("14-dark-artifact")
         browser.close()
 
-    print("screenshots:", shots)
+    out = Path("/tmp/cairn-ui-mobile-shots")
+    shutil.rmtree(out, ignore_errors=True)
+    shutil.copytree(shots, out)
+    print("screenshots:", shots, "and", out)
     for line in problems:
         print("PROBLEM", line)
     ui_httpd.shutdown()
