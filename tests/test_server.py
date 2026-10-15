@@ -466,14 +466,17 @@ def test_store_serve_starts_its_ui_as_a_child_with_the_token_in_its_environment_
     try:
         [(child, command)] = children_of(process.pid)
         assert "cairn" in command and "ui" in command and token not in command  # never on the command line
-        form = {"Content-Type": "application/x-www-form-urlencoded"}
+        form = {"Content-Type": "application/json", "X-Cairn": "1"}
         ui = SimpleNamespace(port=ui_port, token="")
         assert call(ui, "GET", "/", token=None)[0] == 303  # the UI asks for a login
-        assert call(ui, "POST", "/login", body="token=" + "x" * 40, token=None, headers=form)[0] == 401
-        status, headers, _ = call(ui, "POST", "/login", body=f"token={token}", token=None, headers=form)
-        assert status == 303 and token not in headers["Set-Cookie"]
-        page = call(ui, "GET", "/", token=None, headers={"Cookie": headers["Set-Cookie"].split(";")[0]})
-        assert page[0] == 200 and b"Store" in page[2] and token.encode() not in page[2]
+        assert call(ui, "POST", "/ui-api/login", body=json.dumps({"token": "x" * 40}), token=None, headers=form)[0] == 401
+        status, headers, _ = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=form)
+        assert status == 200 and token not in headers["Set-Cookie"]
+        cookie = {"Cookie": headers["Set-Cookie"].split(";")[0]}
+        page = call(ui, "GET", "/", token=None, headers=cookie)
+        assert page[0] == 200 and b'<div id="root">' in page[2] and token.encode() not in page[2]
+        projects = call(ui, "GET", "/ui-api/projects", token=None, headers={**cookie, "X-Cairn": "1"})
+        assert projects[0] == 200 and token.encode() not in projects[2]
         # the child stops with the server
         stop_process(process)
         for _ in range(50):

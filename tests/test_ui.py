@@ -21,7 +21,8 @@ from conftest import make_data, write
 from test_server import api, call, remote, seed, server, use_remote  # noqa: F401  (the store server in a thread, helpers)
 from test_store import env, folder  # noqa: F401
 
-FORM = {"Content-Type": "application/x-www-form-urlencoded"}
+X = {"X-Cairn": "1"}
+JSON = {**X, "Content-Type": "application/json"}
 
 
 @pytest.fixture(autouse=True)
@@ -48,13 +49,20 @@ def ui(request, server):
 
 def login(ui, token=None):
     """A session cookie header for a token (the owner's by default)."""
-    status, headers, _ = call(ui, "POST", "/login", body=f"token={token or ui.server.token}&next=/", token=None, headers=FORM)
-    assert status == 303, status
+    status, headers, _ = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token or ui.server.token}), token=None, headers=JSON)
+    assert status == 200, status
     return {"Cookie": headers["Set-Cookie"].split(";")[0]}
 
 
 def get(ui, path, cookie, **headers):
     return call(ui, "GET", path, token=None, headers={**cookie, **headers})
+
+
+def data(ui, path, cookie, expect=200):
+    """A /ui-api/ call as the app makes it (session cookie and the X-Cairn header), decoded."""
+    status, _, body = get(ui, "/ui-api/" + path, cookie, **X)
+    assert status == expect, (path, status, body[:200])
+    return json.loads(body)
 
 
 def publish_reports(project, server):
@@ -75,35 +83,52 @@ def test_login_is_required_and_the_token_stays_server_side(ui):
         status, headers, _ = call(ui, "GET", path, token=None)
         assert status == 303 and headers["Location"].startswith("/login"), path
     assert call(ui, "GET", "/files/study/data@v1//x", token=None)[0] == 401
+    assert call(ui, "GET", "/ui-api/me", token=None, headers=X)[0] == 401
     assert call(ui, "GET", "/", token="owner", headers={})[0] == 303  # a bearer header is not a login
-    status, _, form = call(ui, "GET", "/login?next=/p/study/", token=None)
-    assert status == 200 and b'type="password"' in form and b'value="/p/study/"' in form
+    status, _, page = call(ui, "GET", "/login?next=/p/study/", token=None)  # the app's login route (a static page)
+    assert status == 200 and b'<div id="root">' in page
     # a wrong token is rejected and sets nothing
-    status, headers, body = call(ui, "POST", "/login", body="token=" + "w" * 40, token=None, headers=FORM)
+    status, headers, body = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": "w" * 40}), token=None, headers=JSON)
     assert status == 401 and "Set-Cookie" not in headers and b"not valid" in body
-    assert call(ui, "POST", "/login", body="token=", token=None, headers=FORM)[0] == 401
-    # the right one gives an opaque, HttpOnly, SameSite=Strict session id; open redirects are refused
-    status, headers, _ = call(ui, "POST", "/login", body=f"token={token}&next=//evil.example", token=None, headers=FORM)
-    assert status == 303 and headers["Location"] == "/"
+    assert call(ui, "POST", "/ui-api/login", body='{"token": ""}', token=None, headers=JSON)[0] == 401
+    assert call(ui, "POST", "/ui-api/login", body="nonsense", token=None, headers=JSON)[0] == 400
+    assert call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers={"Content-Type": "application/json"})[0] == 403  # no X-Cairn
+    assert call(ui, "POST", "/login", body=f"token={token}", token=None, headers={"Content-Type": "application/x-www-form-urlencoded"})[0] == 404
+    # the right one gives an opaque, HttpOnly, SameSite=Strict session id
+    status, headers, body = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=JSON)
+    assert status == 200
     cookie = headers["Set-Cookie"]
     assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and token not in cookie and "Secure" not in cookie  # secure_cookie=False
+    assert token.encode() not in body
     session = {"Cookie": cookie.split(";")[0]}
-    for path in ("/", "/p/study/"):
-        status, headers, body = get(ui, path, session)
+    for path in ("/", "/p/study/", "/ui-api/me"):
+        status, headers, body = get(ui, path, session, **X)
         assert status in (200, 404) and token.encode() not in body and token not in json.dumps(dict(headers))
     assert get(ui, "/", session)[0] == 200
+    assert get(ui, "/login?next=/p/study/", session)[1]["Location"] == "/p/study/"  # logged in already
+    assert get(ui, "/login?next=//evil.example", session)[1]["Location"] == "/"  # open redirects are refused
     forged = {"Cookie": "cairn_ui=" + "a" * 43}
-    assert get(ui, "/", forged)[0] == 303
+    assert get(ui, "/", forged)[0] == 303 and get(ui, "/ui-api/me", forged, **X)[0] == 401
     status, headers, _ = get(ui, "/logout", session)
     assert status == 303 and headers["Location"] == "/login" and "Max-Age=0" in headers["Set-Cookie"]
     assert get(ui, "/", session)[0] == 303  # the session is gone
 
 
+def test_the_api_needs_the_x_cairn_header(ui):
+    cookie = login(ui)
+    for path in ("me", "projects", "projects/study", "lineage?ref=study:x@v1"):
+        assert get(ui, "/ui-api/" + path, cookie)[0] == 403, path  # the session alone is not enough
+        assert get(ui, "/ui-api/" + path, cookie, **{"X-Cairn": "0"})[0] == 403
+    assert get(ui, "/ui-api/me", {}, **X)[0] == 401  # and the header alone is not a login
+    assert get(ui, "/ui-api/nope", cookie, **X)[0] == 404
+    assert data(ui, "me", cookie) == {"scope": "owner" if ui.kind == "folder" else "store", "project": None, "auth": True}
+
+
 def test_the_cookie_is_secure_by_default(server):
     httpd, ui = start(RemoteBackend(server.url, allow_http=False))
     try:
-        status, headers, _ = call(ui, "POST", "/login", body=f"token={server.token}", token=None, headers=FORM)
-        assert status == 303 and "Secure" in headers["Set-Cookie"] and "HttpOnly" in headers["Set-Cookie"]
+        status, headers, _ = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": server.token}), token=None, headers=JSON)
+        assert status == 200 and "Secure" in headers["Set-Cookie"] and "HttpOnly" in headers["Set-Cookie"]
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -113,18 +138,26 @@ def test_scoped_token_sees_only_its_project_and_revocation_ends_the_session(ui, 
     seed(ui.server)
     token = create_token(ui.server.root, "alpha", name="viewer")
     cookie = login(ui, token)
-    index = get(ui, "/", cookie)[2].decode()
-    assert "/p/alpha/" in index and "/p/beta/" not in index
-    assert get(ui, "/p/alpha/", cookie)[0] == 200 and get(ui, "/p/alpha/a/data", cookie)[0] == 200
-    assert get(ui, "/p/beta/", cookie)[0] == 403
-    assert get(ui, "/p/beta/a/data", cookie)[0] == 403
+    me = data(ui, "me", cookie)
+    assert me["scope"] == ("project" if ui.kind == "folder" else "store") and (me["project"] == "alpha" or ui.kind == "server")
+    assert [p["name"] for p in data(ui, "projects", cookie)] == ["alpha"]
+    assert data(ui, "projects/alpha", cookie)["project"]["name"] == "alpha"
+    assert data(ui, "projects/alpha/artifacts/data", cookie)["name"] == "data"
+    assert data(ui, "projects/alpha/artifacts/data/versions/1", cookie)["version"]["version"] == 1
+    assert data(ui, "lineage?ref=alpha:data@v1", cookie)["ref"] == "alpha:data@v1"
+    for path in ("projects/beta", "projects/beta/artifacts/data", "projects/beta/artifacts/data/versions/1", "lineage?ref=beta:data@v1"):
+        data(ui, path, cookie, expect=403)
     assert get(ui, "/p/beta/r/site.json", cookie)[0] == 403
     assert get(ui, "/files/beta/data@v1//x.txt", cookie)[0] == 403
     assert get(ui, "/files/alpha/data@v1//x.txt", cookie)[2] == b"alpha"
+    assert get(ui, "/p/beta/", cookie)[0] == 200  # the app route itself; its data calls are refused above
     revoke_token(ui.server.root, "viewer")
     status, headers, _ = get(ui, "/p/alpha/", cookie)
-    assert status == 303 and headers["Location"].startswith("/login")
-    assert call(ui, "POST", "/login", body=f"token={token}", token=None, headers=FORM)[0] == 401  # and cannot log in again
+    if ui.kind == "folder":  # a folder's tokens are checked at once; a store server answers 401 on the next call
+        assert status == 303 and headers["Location"].startswith("/login")
+    else:
+        assert get(ui, "/ui-api/projects", cookie, **X)[0] == 401
+    assert call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=JSON)[0] == 401  # and cannot log in again
 
 
 def test_a_scoped_token_hides_other_projects_in_inputs_and_consumers(ui, env):
@@ -132,10 +165,11 @@ def test_a_scoped_token_hides_other_projects_in_inputs_and_consumers(ui, env):
     r = remote(ui.server, project="beta")
     store.publish("beta:derived", folder(env, "d", {"r.txt": "r"}), inputs=["alpha:data@v1"], store=r)
     cookie = login(ui, create_token(ui.server.root, "alpha", name="viewer"))
-    page = get(ui, "/p/alpha/a/data", cookie)[2].decode()
-    assert "beta:derived@v1" not in page  # a consumer in a project this token cannot read
-    owner = get(ui, "/p/alpha/a/data", login(ui))[2].decode()
-    assert "/p/beta/a/derived@v1" in owner
+    assert data(ui, "projects/alpha/artifacts/data/versions/1", cookie)["consumers"] == ["beta:derived@v1"] or ui.kind == "server"
+    lineage = data(ui, "lineage?ref=alpha:data@v1&depth=2", cookie)
+    assert "beta:derived@v1" not in json.dumps(lineage)  # a consumer in a project this token cannot read
+    owner = data(ui, "lineage?ref=alpha:data@v1", login(ui))
+    assert owner["nodes"]["alpha:data@v1"]["consumers"] == ["beta:derived@v1"]
 
 
 def test_no_auth_ui_is_loopback_only_and_needs_no_login(server):
@@ -145,9 +179,11 @@ def test_no_auth_ui_is_loopback_only_and_needs_no_login(server):
         httpd, ui = start(backend, no_auth=True)
         try:
             status, _, body = call(ui, "GET", "/", token=None)
-            assert status == 200 and b"Log out" not in body
+            assert status == 200 and b'<div id="root">' in body
+            assert call(ui, "GET", "/ui-api/me", token=None)[0] == 403  # the header is needed without a login too
+            assert json.loads(call(ui, "GET", "/ui-api/me", token=None, headers=X)[2])["auth"] is False
             assert call(ui, "GET", "/login", token=None)[0] == 404
-            assert call(ui, "POST", "/login", body=f"token={server.token}", token=None, headers=FORM)[0] == 404
+            assert call(ui, "POST", "/ui-api/login", body=json.dumps({"token": server.token}), token=None, headers=JSON)[0] == 404
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -167,8 +203,8 @@ def test_no_auth_ui_over_a_no_auth_store_uses_no_token(tmp_path, env, monkeypatc
     store.publish("open", folder(env, "o", {"a.txt": "x"}))
     httpd, ui = start(RemoteBackend(url, False), no_auth=True)
     try:
-        status, _, page = call(ui, "GET", "/p/study/a/open", token=None)
-        assert status == 200 and b"open" in page
+        status, _, body = call(ui, "GET", "/ui-api/projects/study/artifacts/open", token=None, headers=X)
+        assert status == 200 and json.loads(body)["name"] == "open"
     finally:
         httpd.shutdown()
         store_httpd.shutdown()
@@ -185,29 +221,91 @@ def test_a_remote_ui_refuses_plain_http_to_a_non_local_store():
 # --------------------------------------------------------------------- pages
 
 
-def test_pages(ui, project, capsys):
+def test_the_app_routes_serve_the_built_index(ui):
+    cookie = login(ui)
+    index = (Path(ui_server.__file__).parent / "static" / "index.html").read_bytes()
+    for path in ("/", "/p/study/", "/p/study/a/data", "/p/study/a/reports/alpha@v1", "/p/anything/a/a/b/c@best", "/login"):
+        status, headers, body = get(ui, path, cookie)
+        if path == "/login":
+            assert status == 303  # logged in already
+            status, headers, body = call(ui, "GET", path, token=None)
+        assert status == 200 and body == index and headers["Cache-Control"] == "no-cache", path
+    assert get(ui, "/p/study", cookie)[0] == 301
+    assert get(ui, "/nope", cookie)[0] == 404
+    assets = re.findall(r'(?:src|href)="(/assets/[^"]+)"', index.decode())
+    assert len(assets) == 2
+    for asset in assets:  # served without a session, cached forever
+        status, headers, body = call(ui, "GET", asset, token=None)
+        assert status == 200 and "immutable" in headers["Cache-Control"] and body
+    assert call(ui, "GET", "/assets/..%2Findex.html", token=None)[0] == 404
+    assert call(ui, "GET", "/assets/nope.js", token=None)[0] == 404
+
+
+def test_api_returns_what_the_pages_need(ui, project, capsys):
     r = publish_reports(project, ui.server)
     store.publish("datasets/other", folder(project, "o", {"a.txt": "1"}), aliases=["best"], store=r)
     capsys.readouterr()
     cookie = login(ui)
-    index = get(ui, "/", cookie)[2].decode()
-    assert "/p/study/" in index and "<td>4</td>" in index  # descent, two reports, datasets/other
-    page = get(ui, "/p/study/", cookie)[2].decode()
-    assert "/p/study/r/alpha/" in page and "Alpha" in page and "active" in page and "The first report" in page
-    assert page.index("Alpha") < page.index("datasets/other")  # reports first, then the other artifacts
-    assert "/p/study/a/datasets/other" in page and "best" in page and "/p/study/a/descent" in page
-    # the artifact page: versions, files, metadata, inputs, consumers
-    art = get(ui, "/p/study/a/descent", cookie)[2].decode()
-    assert "/files/study/descent@v1//metrics.jsonl" in art and "/p/study/a/reports/alpha@v1" in art  # a consumer
-    assert "completed" in art and "latest" in art
-    rep = get(ui, "/p/study/a/reports/alpha", cookie)[2].decode()
-    assert "/p/study/a/descent@v1" in rep and "open report" in rep and "/p/study/r/alpha@v1/" in rep  # an input
-    assert '"title": "Alpha"' in rep.replace("&quot;", '"')
-    assert get(ui, "/p/study/a/descent@v9", cookie)[0] == 404
-    assert get(ui, "/p/study/a/nope", cookie)[0] == 404
-    assert get(ui, "/p/nope/", cookie)[0] == 404
-    assert get(ui, "/p/study", cookie)[0] == 301
-    assert get(ui, "/p/study/a/descent@best", cookie)[0] == 404  # no such alias
+    projects = data(ui, "projects", cookie)
+    assert [p["name"] for p in projects] == ["study"] and projects[0]["artifacts"] == 4  # descent, two reports, datasets/other
+    assert {"title", "description", "updated"} <= set(projects[0])
+    page = data(ui, "projects/study", cookie)
+    assert page["project"]["name"] == "study"
+    by_name = {a["name"]: a for a in page["artifacts"]}
+    assert set(by_name) == {"descent", "reports/alpha", "reports/beta", "datasets/other"}
+    alpha = by_name["reports/alpha"]
+    assert alpha["latest"] == 1 and alpha["metadata"]["title"] == "Alpha" and alpha["metadata"]["status"] == "active" and alpha["metadata"]["summary"].startswith("The first report")
+    assert by_name["datasets/other"]["aliases"]["best"] == 1 and alpha["updated"]
+    # an artifact: summary, versions (without file lists), aliases; the name may be one encoded segment or several
+    art = data(ui, "projects/study/artifacts/datasets%2Fother", cookie)
+    assert art == data(ui, "projects/study/artifacts/datasets/other", cookie)
+    assert art["summary"]["latest"] == 1 and art["aliases"] == {"latest": 1, "best": 1}
+    row = art["versions"][0]
+    assert row["version"] == 1 and row["status"] == "completed" and row["file_count"] == 1 and row["size"] == 1 and "files" not in row and "created" in row
+    # a version: the manifest with files, metadata, inputs and consumers; by number, v<n>, alias
+    for selector in ("1", "v1", "best", "latest"):
+        v = data(ui, f"projects/study/artifacts/datasets%2Fother/versions/{selector}", cookie)
+        assert v["version"]["version"] == 1 and [f["path"] for f in v["version"]["files"]] == ["a.txt"] and v["consumers"] == []
+    descent = data(ui, "projects/study/artifacts/descent/versions/1", cookie)
+    paths = {f["path"] for f in descent["version"]["files"]}
+    assert "metrics.jsonl" in paths and descent["consumers"] == ["study:reports/alpha@v1"]
+    report = data(ui, "projects/study/artifacts/reports%2Falpha/versions/1", cookie)
+    assert report["version"]["inputs"] == ["study:descent@v1"] and report["version"]["metadata"]["title"] == "Alpha"
+    assert any(f["path"].startswith("site/") for f in report["version"]["files"])
+    # errors are JSON
+    for path in ("projects/study/artifacts/descent/versions/9", "projects/study/artifacts/nope", "projects/nope", "projects/study/artifacts/descent/versions/zzz"):
+        assert "error" in data(ui, path, cookie, expect=404), path
+    assert data(ui, "lineage?ref=nope", cookie, expect=400)["error"]
+    assert data(ui, "lineage?ref=study:descent@v1&depth=9", cookie, expect=400)["error"]
+
+
+def test_lineage_levels(ui, tmp_path, env):
+    r = use_remote(env, ui.server)
+    store.publish("a", folder(env, "a", {"f": "1"}), store=r)
+    store.publish("b", folder(env, "b", {"f": "2"}), inputs=["study:a@v1"], store=r)
+    store.publish("c", folder(env, "c", {"f": "3"}), inputs=["study:b@v1"], store=r)
+    store.publish("d", folder(env, "d", {"f": "4"}), inputs=["study:c@v1"], store=r)
+    cookie = login(ui)
+    one = data(ui, "lineage?ref=study:b@latest", cookie)  # depth 1, an alias resolves to the exact version
+    assert one["ref"] == "study:b@v1" and one["depth"] == 1 and not one["truncated"]
+    assert one["nodes"] == {"study:b@v1": {"inputs": ["study:a@v1"], "consumers": ["study:c@v1"]},
+                            "study:a@v1": {"inputs": None, "consumers": None}, "study:c@v1": {"inputs": None, "consumers": None}}
+    two = data(ui, "lineage?ref=study:b@v1&depth=2", cookie)["nodes"]
+    assert two["study:a@v1"] == {"inputs": [], "consumers": None}  # ancestors expand through inputs, descendants through consumers
+    assert two["study:c@v1"] == {"inputs": None, "consumers": ["study:d@v1"]}
+    assert two["study:d@v1"] == {"inputs": None, "consumers": None}
+    deep = data(ui, "lineage?ref=study:d@v1&depth=3", cookie)["nodes"]
+    assert deep["study:a@v1"]["inputs"] is None and deep["study:b@v1"]["inputs"] == ["study:a@v1"]  # three levels reach a, not beyond
+
+
+def test_lineage_is_capped(ui, env, monkeypatch):
+    monkeypatch.setattr(ui_server, "MAX_LINEAGE_NODES", 4)
+    r = use_remote(env, ui.server)
+    store.publish("root", folder(env, "root", {"f": "0"}), store=r)
+    for number in range(6):
+        store.publish(f"leaf{number}", folder(env, f"leaf{number}", {"f": str(number)}), inputs=["study:root@v1"], store=r)
+    lineage = data(ui, "lineage?ref=study:root@v1", login(ui))
+    assert lineage["truncated"] and len(lineage["nodes"]) == 4
 
 
 def test_report_is_served_with_its_static_files(ui, project, capsys):
@@ -255,7 +353,8 @@ def test_report_versions_stay_viewable(ui, project, capsys):
     assert b"It still works" in get(ui, "/p/study/r/alpha/narrative.html", cookie)[2]
     assert b"It still works" not in get(ui, "/p/study/r/alpha@v1/narrative.html", cookie)[2]
     assert get(ui, "/p/study/r/alpha@latest/", cookie)[0] == 200
-    assert "/p/study/r/alpha@v1/" in get(ui, "/p/study/a/reports/alpha", cookie)[2].decode()  # the version picker
+    versions = data(ui, "projects/study/artifacts/reports%2Falpha", cookie)["versions"]  # the version picker's data
+    assert [v["version"] for v in versions] == [1, 2] and all(v["status"] == "completed" for v in versions)
 
 
 def test_data_panel_links_point_at_the_artifact_pages(ui, project, capsys):
@@ -265,13 +364,14 @@ def test_data_panel_links_point_at_the_artifact_pages(ui, project, capsys):
     assert "STORE_SERVED = !BUNDLE && /^\\/p\\/[^/]+\\/r\\//.test(location.pathname)" in script
     assert "STORE_SERVED && match ?" in script and "version.dataset.artifact = input.resolved" in script
     assert "/p/${encodeURIComponent(match[1])}/a/" in script  # /p/<project>/r/... -> /p/<project>/a/<name>@vN
-    data = json.loads(get(ui, "/p/study/r/alpha/report-data.json", cookie)[2])
-    exact = data["inputs"]["descent"]["resolved"]
+    report_data = json.loads(get(ui, "/p/study/r/alpha/report-data.json", cookie)[2])
+    exact = report_data["inputs"]["descent"]["resolved"]
     project_name, name_version = exact.split(":", 1)
     name, version = name_version.split("@")
     target = f"/p/{project_name}/a/{name}@{version}"  # what the script builds from the exact reference
-    status, _, body = get(ui, target, cookie)
-    assert status == 200 and b"metrics.jsonl" in body
+    assert get(ui, target, cookie)[2] == (Path(ui_server.__file__).parent / "static" / "index.html").read_bytes()  # an app route
+    detail = data(ui, f"projects/{project_name}/artifacts/{name}/versions/{version[1:]}", cookie)  # and the app's data for it
+    assert "metrics.jsonl" in {f["path"] for f in detail["version"]["files"]}
 
 
 # --------------------------------------------------------------------- files
@@ -395,15 +495,36 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
     middle = api(server, "GET", "/api/v2/lineage?ref=study:toy-fit@v1")
     assert middle["inputs"] == [chain[0]] and middle["consumers"] == [chain[2]]
     assert api(server, "GET", "/api/v2/lineage?ref=study:datasets%2Ftoy@v1")["consumers"] == [chain[1]]
-    # the same chain on the artifact pages of the UI, both ways
+    # the same chain in the UI's data, both ways
     cookie = login(ui)
-    toy = get(ui, "/p/study/a/datasets/toy", cookie)[2].decode()
-    assert "/p/study/a/toy-fit@v1" in toy
-    fit = get(ui, "/p/study/a/toy-fit", cookie)[2].decode()
-    assert "/p/study/a/datasets/toy@v1" in fit and "/p/study/a/reports/summary@v1" in fit
-    report = get(ui, "/p/study/a/reports/summary", cookie)[2].decode()
-    assert "/p/study/a/toy-fit@v1" in report
+
+    def version(name):
+        return data(ui, f"projects/study/artifacts/{name.replace('/', '%2F')}/versions/1", cookie)
+
+    assert version("datasets/toy")["consumers"] == [chain[1]]
+    assert version("toy-fit")["version"]["inputs"] == [chain[0]] and version("toy-fit")["consumers"] == [chain[2]]
+    assert version("reports/summary")["version"]["inputs"] == [chain[1]]
+    graph = data(ui, "lineage?ref=study:reports%2Fsummary@v1&depth=2", cookie)["nodes"]
+    assert set(graph) == set(chain) and graph[chain[1]]["inputs"] == [chain[0]]
     assert b"fit of 1,2,3" in get(ui, "/p/study/r/summary/narrative.html", cookie)[2]
     # the report data records its exact input for the Data panel
     assert json.loads(get(ui, "/p/study/r/summary/report-data.json", cookie)[2])["inputs"]["fit"]["resolved"] == chain[1]
     assert b"1,2,3" in get(ui, "/files/study/datasets/toy@v1//x.csv", cookie)[2]
+
+
+# ------------------------------------------------------------- the built app
+
+
+def test_the_built_app_ships_with_the_package():
+    static = Path(ui_server.__file__).parent / "static"
+    index = (static / "index.html").read_text()
+    scripts = re.findall(r'<script[^>]+src="/assets/([^"]+\.js)"', index)
+    styles = re.findall(r'<link[^>]+href="/assets/([^"]+\.css)"', index)
+    assert len(scripts) == 1 and len(styles) == 1 and '<div id="root">' in index
+    for name in (*scripts, *styles):
+        assert (static / "assets" / name).stat().st_size > 1000, name
+    assert sorted(path.name for path in (static / "assets").iterdir()) == sorted([*scripts, *styles])  # no stale builds
+    css = (static / "assets" / styles[0]).read_text()
+    for token in (".rail", ".hero", ".figure-card", ".image-copy", ".data-row", "--accent", "prefers-color-scheme:dark", ".graph-node"):
+        assert token in css, token  # report.css, report-extra.css and app.css are all in it
+    assert "/ui-api/" in (static / "assets" / scripts[0]).read_text()

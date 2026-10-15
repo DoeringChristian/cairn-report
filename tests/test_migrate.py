@@ -111,12 +111,12 @@ def test_migrated_store_is_served(old_hub, tmp_path, monkeypatch):
     threading.Thread(target=ui_httpd.serve_forever, daemon=True).start()
     served = SimpleNamespace(port=ui_httpd.server_address[1], token="")
     try:
-        _, headers, _ = call(served, "POST", "/login", body=f"token={token}", token=None,
-                             headers={"Content-Type": "application/x-www-form-urlencoded"})
+        _, headers, _ = call(served, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None,
+                             headers={"Content-Type": "application/json", "X-Cairn": "1"})
         cookie = {"Cookie": headers["Set-Cookie"].split(";")[0]}
         assert call(served, "GET", "/p/demo/r/overview/", token=None, headers=cookie)[0] == 200
-        status, _, page = call(served, "GET", "/p/demo/a/descent", token=None, headers=cookie)
-        assert status == 200 and b"3 versions" in page
+        status, _, page = call(served, "GET", "/ui-api/projects/demo/artifacts/descent", token=None, headers={**cookie, "X-Cairn": "1"})
+        assert status == 200 and len(json.loads(page)["versions"]) == 3
         assert call(served, "GET", "/p/demo/", token=None, headers=cookie)[0] == 200
     finally:
         ui_httpd.shutdown()

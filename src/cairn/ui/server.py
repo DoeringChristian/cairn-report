@@ -3,28 +3,32 @@
     cairn ui [--store URL|PATH] [--host 127.0.0.1] [--port 8801] [--no-auth] [--allow-http] [--insecure-cookies]
 
 It reaches the store only through the store interface (`RemoteStore` for a store server, `LocalStore` for
-a folder), so it runs next to the store or on a laptop against a remote one. Pages (see pages.py):
+a folder), so it runs next to the store or on a laptop against a remote one. It serves the React app
+(web/, built into static/) and a small JSON API for it:
 
-    /                                      projects
-    /p/<p>/                                the project: reports, then other artifacts
-    /p/<p>/a/<name>[@v<n>|@alias]          an artifact: versions, files, metadata, inputs, consumers
-    /p/<p>/r/<slug>[@v<n>]/...             a report version's built site (latest without @), its `_static/`
-                                           files and a generated `site.json` at /p/<p>/r/
-    /files/<p>/<name>@sel//<path>          the store's files, with Range (so videos seek)
+    /, /login, /p/<p>/, /p/<p>/a/<name>[@sel]   the app (index.html; the app routes on the client)
+    /assets/<file>                               the app's hashed scripts and styles
+    /ui-api/...                                  the app's JSON API (see `_api`), session-scoped
+    /p/<p>/r/<slug>[@v<n>]/...                   a report version's built site (latest without @), its `_static/`
+                                                 files and a generated `site.json` at /p/<p>/r/
+    /files/<p>/<name>@sel//<path>                the store's files, with Range (so videos seek)
 
 Reports are a UI concept: an artifact `reports/<slug>` whose files have `site/` and `source/`.
 
-Login: the user enters a store token on /login. The UI checks it against the store (a remote store: an
-authenticated API call; a folder: the folder's owner token file and tokens.jsonl), keeps it server-side in
-an in-memory session table, and gives the browser only a random session id (HttpOnly, SameSite=Strict
-cookie, Secure unless --insecure-cookies). Every request of a session uses its token, so a scoped token sees
-only its project. `--no-auth` (loopback only) skips the login and uses `CAIRN_STORE_TOKEN` / `[store]
-token_file` for a remote store, or the owner's full access to a folder.
+Login: the user enters a store token on /login (the app posts it to /ui-api/login). The UI checks it against
+the store (a remote store: an authenticated API call; a folder: the folder's owner token file and
+tokens.jsonl), keeps it server-side in an in-memory session table, and gives the browser only a random
+session id (HttpOnly, SameSite=Strict cookie, Secure unless --insecure-cookies). Every request of a session
+uses its token, so a scoped token sees only its project. Every /ui-api/ call also needs the header
+`X-Cairn: 1`, which a cross-site form or image cannot send (on top of SameSite=Strict). `--no-auth`
+(loopback only) skips the login and uses `CAIRN_STORE_TOKEN` / `[store] token_file` for a remote store, or
+the owner's full access to a folder.
 """
 
 from __future__ import annotations
 
 import hmac
+import html
 import json
 import mimetypes
 import os
@@ -46,13 +50,16 @@ from ..blobs import resolve_entry, valid_path
 from ..local import FileRead, Forbidden, Unauthorized
 from ..refs import Ref
 from ..tokens import OWNER, Principal, Tokens, read_token
-from . import pages
 
 COOKIE = "cairn_ui"
 SESSION_SECONDS = 30 * 86400
 MAX_SESSIONS = 1000
 LOGIN_DELAY = 1.0  # seconds a wrong token waits, which slows down guessing
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+STATIC = Path(__file__).parent / "static"  # the built app (web/ -> npm run build)
+MAX_LINEAGE_DEPTH = 3
+MAX_LINEAGE_NODES = 200
+MAX_LOGIN_BODY = 4096
 
 
 class HttpError(Exception):
@@ -130,6 +137,39 @@ def entry_type(path: str) -> str:
     return mimetypes.guess_type(path.rsplit("/", 1)[-1])[0] or "application/octet-stream"
 
 
+def is_report(name: str) -> bool:
+    return name.startswith("reports/") and name.count("/") == 1
+
+
+def can(principal: Principal | None, project: str | None) -> bool:
+    """Whether the viewer may see a project; no principal means the store itself decides (a remote store, or --no-auth)."""
+    return principal is None or principal.can(project)
+
+
+def message_page(title: str, text: str) -> bytes:
+    """A plain page for errors outside the app (the app shows its own for API errors)."""
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        f"<title>{html.escape(title)}</title></head><body style=\"font:16px/1.5 system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem\">"
+        f'<h1>{html.escape(title)}</h1><p>{html.escape(text)}</p><p><a href="/">Back to the store</a></p></body></html>'
+    ).encode()
+
+
+def app_route(segments: list[str]) -> bool:
+    """Whether a path (split on `/`) is a client-side route of the app."""
+    if segments == ["", ""] or segments == ["", "login"]:
+        return True
+    return len(segments) >= 4 and segments[1] == "p" and (segments[3] == "" and len(segments) == 4 or segments[3] == "a" and len(segments) > 4)
+
+
+def summarize_version(version: dict) -> dict:
+    """A version without its file list: the table of versions needs only counts."""
+    files = version.get("files", [])
+    slim = {key: value for key, value in version.items() if key not in ("files", "inputs")}
+    return {**slim, "input_count": len(version.get("inputs", [])), "file_count": len(files),
+            "size": sum(entry.get("size", 0) for entry in files)}
+
+
 class UIHandler(BaseHTTPRequestHandler):
     backend: LocalBackend | RemoteBackend
     sessions: dict
@@ -186,14 +226,22 @@ class UIHandler(BaseHTTPRequestHandler):
             if self.no_auth:
                 return self._error(401, "the store rejected the token from CAIRN_STORE_TOKEN or [store] token_file")
             self._drop()
+            if self._is_api() or urlparse(self.path).path.startswith("/files/"):
+                return self._send(401, json.dumps({"error": "log in first"}).encode(), "application/json",
+                                  {"Set-Cookie": self._cookie_header("", 0), "Cache-Control": "no-store"})
             self._send(303, b"", headers={"Location": "/login?next=" + quote(self.path), "Set-Cookie": self._cookie_header("", 0)})
         except (StoreError, ValueError) as error:
             self._error(400, str(error))
         except OSError as error:
             self._error(502, f"cannot reach the store: {error}")
 
+    def _is_api(self) -> bool:
+        return urlparse(self.path).path.startswith("/ui-api/")
+
     def _error(self, status: int, message: str) -> None:
-        self._send(status, pages.message_page(f"Error {status}", message), "text/html; charset=utf-8")
+        if self._is_api():
+            return self._json(status, {"error": message})
+        self._send(status, message_page(f"Error {status}", message), "text/html; charset=utf-8")
 
     def do_GET(self):
         self._run(self._get)
@@ -208,29 +256,149 @@ class UIHandler(BaseHTTPRequestHandler):
     def _get(self) -> None:
         url = urlparse(self.path)
         path, query = url.path, parse_qs(url.query)
-        if path == "/login" and not self.no_auth:
-            return self._send(200, pages.login_page(safe_target(query.get("next", ["/"])[0])), "text/html; charset=utf-8")
+        segments = self._segments(path)
+        if path.startswith("/assets/"):
+            return self._asset(path[len("/assets/"):])
+        if path == "/login":
+            if self.no_auth:
+                raise HttpError(404, "no such page")
+            if self._session() is not None:
+                return self._send(303, b"", headers={"Location": safe_target(query.get("next", ["/"])[0])})
+            return self._app()
         if path == "/logout":
             self._drop()
             return self._send(303, b"", headers={"Location": "/" if self.no_auth else "/login", "Set-Cookie": self._cookie_header("", 0)})
+        if self._is_api():
+            return self._api(url, query)
         session = self._session()
         if session is None:
             if path.startswith("/files/"):
                 raise HttpError(401, "log in first")
             return self._send(303, b"", headers={"Location": "/login?next=" + quote(self.path)})
-        segments = self._segments(path)
-        if path == "/":
-            return self._send(200, pages.index_page(session.store, session.principal, logout=not self.no_auth), "text/html; charset=utf-8")
+        if path != "/" and segments[1] == "p" and len(segments) == 3 and segments[2]:
+            return self._send(301, b"", headers={"Location": url.path + "/"})  # /p/<p> -> /p/<p>/
+        if app_route(segments):
+            return self._app()
         if segments[1] == "files":
             return self._files(session, path, query)
-        if segments[1] == "p" and len(segments) >= 3:
-            return self._pages(session, segments, url)
+        if segments[1] == "p" and len(segments) >= 5 and segments[3] == "r":
+            self._allow(session, segments[2])
+            refs.valid_project(segments[2])
+            return self._report(session, segments[2], segments[4:], url)
         raise HttpError(404, "no such page")
 
     @staticmethod
     def _allow(session: Session, project: str) -> None:
-        if not pages.can(session.principal, project):
+        if not can(session.principal, project):
             raise Forbidden(f"this token cannot read project {project!r}")
+
+    # ------------------------------------------------------------------ the app
+
+    def _app(self) -> None:
+        index = STATIC / "index.html"
+        if not index.is_file():
+            return self._send(503, message_page("The UI is not built", "Run `npm ci && npm run build` in web/ (a released package ships the built app)."),
+                              "text/html; charset=utf-8")
+        self._send(200, index.read_bytes(), "text/html; charset=utf-8", {"Cache-Control": "no-cache"})
+
+    def _asset(self, name: str) -> None:
+        file = (STATIC / "assets" / name).resolve()
+        if "/" in name or not file.is_file() or file.parent != (STATIC / "assets").resolve():
+            raise HttpError(404, "no such file")
+        self._send(200, file.read_bytes(), entry_type(name), {"Cache-Control": "public, max-age=31536000, immutable"})
+
+    # ------------------------------------------------------------------ JSON API
+
+    def _api(self, url, query: dict) -> None:
+        """The app's data, as the session's store handle sees it (never the store's folders). Needs the session and `X-Cairn: 1`."""
+        if self.headers.get("X-Cairn") != "1":
+            raise HttpError(403, "missing X-Cairn header")
+        session = self._session()
+        if session is None:
+            raise Unauthorized()
+        store, principal = session.store, session.principal
+        match [unquote(part) for part in url.path.split("/")[2:]]:
+            case ["me"]:
+                scope = "project" if principal and principal.project else "owner" if principal else "store"
+                return self._json(200, {"scope": scope, "project": principal.project if principal else None, "auth": not self.no_auth})
+            case ["projects"]:
+                found = [item for item in store.overviews() if can(principal, item["name"])]
+                return self._json(200, sorted(found, key=lambda item: item["updated"], reverse=True))
+            case ["projects", project]:
+                self._allow(session, project)
+                record = store.get_project(project)
+                return self._json(200, {"project": record, "artifacts": store.summaries(project)})
+            case ["projects", project, "artifacts", *rest] if rest:
+                self._allow(session, project)
+                if len(rest) >= 3 and rest[-2] == "versions":
+                    return self._json(200, self._version_api(store, project, "/".join(rest[:-2]), rest[-1]))
+                return self._json(200, self._artifact_api(store, project, "/".join(rest)))
+            case ["lineage"]:
+                ref = refs.parse(query.get("ref", [""])[0])
+                if not ref.project:
+                    raise ValueError("the reference needs a project: project:name[@selector]")
+                self._allow(session, ref.project)
+                depth = int(query.get("depth", ["1"])[0])
+                if not 1 <= depth <= MAX_LINEAGE_DEPTH:
+                    raise ValueError(f"depth must be between 1 and {MAX_LINEAGE_DEPTH}")
+                return self._json(200, self._lineage_api(session, ref, depth))
+        raise HttpError(404, "no such API route")
+
+    @staticmethod
+    def _artifact_api(store, project: str, name: str) -> dict:
+        versions = store.versions(project, name)
+        if not versions:
+            raise NotFound(f"no artifact {project}:{name}")
+        return {"project": project, "name": name, "summary": store.summary(project, name),
+                "versions": [summarize_version(version) for version in versions], "aliases": store.aliases(project, name)}
+
+    def _version_api(self, store, project: str, name: str, selector: str) -> dict:
+        """One manifest (files, metadata, inputs) with its consumers; `selector` is a number, `v<n>`, an alias or a label."""
+        chosen = f"v{selector}" if selector.isdigit() else selector
+        version = self._version(store, project, name, chosen)
+        consumers = store.lineage(refs.exact(project, name, version["version"]))["consumers"] if version["status"] == "completed" else []
+        return {"project": project, "name": name, "version": version, "consumers": consumers}
+
+    def _lineage_api(self, session: Session, ref: Ref, depth: int) -> dict:
+        """Inputs to the left and consumers to the right of a version, `depth` levels each way, from one-level lineage calls.
+
+        `nodes` maps each reference to its `inputs` and `consumers` when they were looked up (null: not looked
+        up, so the app may offer to expand it). Ancestors are expanded through their inputs only, descendants
+        through their consumers only. References in projects the session may not read are left out."""
+        store, principal = session.store, session.principal
+        first = store.lineage(ref)
+        _, _, version = store.resolve(ref)
+        root = refs.exact(ref.project, ref.name, version["version"])
+        nodes: dict[str, dict] = {root: {"inputs": None, "consumers": None}}
+        truncated = False
+
+        def visible(items: list[str]) -> list[str]:
+            return [item for item in items if can(principal, refs.parse(item).project)]
+
+        for side, other in (("inputs", "consumers"), ("consumers", "inputs")):
+            frontier = [root]
+            for level in range(depth):
+                following: list[str] = []
+                for current in frontier:
+                    if level == 0 and current == root:
+                        found = visible(first[side])
+                    else:
+                        try:
+                            found = visible(store.lineage(current)[side])
+                        except (NotFound, StoreError, Forbidden):
+                            found = []
+                    kept = []
+                    for item in found:
+                        if item not in nodes:
+                            if len(nodes) >= MAX_LINEAGE_NODES:
+                                truncated = True
+                                continue
+                            nodes[item] = {"inputs": None, "consumers": None}
+                            following.append(item)
+                        kept.append(item)
+                    nodes[current][side] = kept
+                frontier = following
+        return {"ref": root, "depth": depth, "nodes": nodes, "truncated": truncated}
 
     # ------------------------------------------------------------------ files
 
@@ -280,31 +448,11 @@ class UIHandler(BaseHTTPRequestHandler):
             return store.get_version(project, name, int(selector[1:]))
         return store.resolve(Ref(project, name, selector))[2]
 
-    def _pages(self, session: Session, segments: list[str], url) -> None:
-        project, store = segments[2], session.store
-        self._allow(session, project)
-        refs.valid_project(project)
-        if len(segments) == 3:
-            store.get_project(project)
-            return self._send(301, b"", headers={"Location": url.path + "/"})
-        kind = segments[3]
-        if kind == "" and len(segments) == 4:
-            return self._send(200, pages.project_page(store, project), "text/html; charset=utf-8")
-        if kind == "a":
-            name, at, selector = "/".join(segments[4:]).rstrip("/").partition("@")
-            if not name:
-                raise HttpError(404, "no such page")
-            chosen = self._version(store, project, name, selector) if at else None
-            return self._send(200, pages.artifact_page(store, session.principal, project, name, chosen), "text/html; charset=utf-8")
-        if kind == "r":
-            return self._report(session, project, segments[4:], url)
-        raise HttpError(404, "no such page")
-
     def _report(self, session: Session, project: str, rest: list[str], url) -> None:
         store = session.store
         first = rest[0] if rest else ""
         if first == "":
-            return self._send(303, b"", headers={"Location": pages.project_href(project)})
+            return self._send(303, b"", headers={"Location": f"/p/{quote(project)}/"})
         if first == "site.json" and len(rest) == 1:
             return self._json(200, self._site(store, project))
         if first == "_static" and len(rest) == 2:
@@ -337,7 +485,7 @@ class UIHandler(BaseHTTPRequestHandler):
             found = None
             for summary in store.summaries(project):
                 name = summary["name"]
-                for version in reversed(store.versions(project, name)) if pages.is_report(name) else ():
+                for version in reversed(store.versions(project, name)) if is_report(name) else ():
                     if version["status"] == "completed" and resolve_entry(version["files"], f"site/_static/{file}"):
                         found = (name, version["version"], resolve_entry(version["files"], f"site/_static/{file}.gz") is not None)
                         break
@@ -357,7 +505,7 @@ class UIHandler(BaseHTTPRequestHandler):
         reports = []
         for summary in store.summaries(project):
             name = summary["name"]
-            if pages.is_report(name) and summary["latest"]:
+            if is_report(name) and summary["latest"]:
                 slug, meta = name.split("/", 1)[1], summary["metadata"]
                 reports.append({"key": slug, "title": meta.get("title") or slug, "subtitle": "", "status": meta.get("status", ""),
                                 "summary": meta.get("summary", ""), "href": f"{slug}/", "updated": summary["updated"]})
@@ -367,15 +515,18 @@ class UIHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------ login
 
     def _post(self) -> None:
-        if urlparse(self.path).path != "/login" or self.no_auth:
+        if urlparse(self.path).path != "/ui-api/login" or self.no_auth:
             raise HttpError(404, "no such page")
-        form = parse_qs(self._body(4096).decode())
-        given = form.get("token", [""])[0].strip()
-        target = safe_target(form.get("next", ["/"])[0])
+        if self.headers.get("X-Cairn") != "1":
+            raise HttpError(403, "missing X-Cairn header")
+        try:
+            given = str(json.loads(self._body(MAX_LOGIN_BODY) or b"{}").get("token", "")).strip()
+        except (ValueError, AttributeError):
+            raise ValueError("expected a JSON object with a token")
         session = self.backend.login(given) if given else None
         if session is None:
             time.sleep(LOGIN_DELAY)
-            return self._send(401, pages.login_page(target, failed=True), "text/html; charset=utf-8")
+            return self._json(401, {"error": "That token is not valid."})
         session.expires = time.time() + SESSION_SECONDS
         identifier = secrets.token_urlsafe(32)
         with self.lock:
@@ -385,7 +536,7 @@ class UIHandler(BaseHTTPRequestHandler):
             if len(self.sessions) >= MAX_SESSIONS:
                 del self.sessions[min(self.sessions, key=lambda key: self.sessions[key].expires)]
             self.sessions[identifier] = session
-        self._send(303, b"", headers={"Location": target, "Set-Cookie": self._cookie_header(identifier, SESSION_SECONDS)})
+        self._send(200, b'{"ok":true}', "application/json", {"Set-Cookie": self._cookie_header(identifier, SESSION_SECONDS), "Cache-Control": "no-store"})
 
     # ------------------------------------------------------------------- I/O
 

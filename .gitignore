@@ -12,3 +12,6 @@ wheels/
 # build and test output
 generated/
 .pytest_cache/
+
+# web app
+web/node_modules/

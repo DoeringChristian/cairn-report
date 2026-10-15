@@ -398,20 +398,36 @@ cairn ui --store /srv/store                # a store folder
 
 The UI opens the store only through its interface (a store server's API, or a folder's store
 code), so it needs no access to the store's files and does no work in the store server. It prints
-`UI: <url> (store: <url or folder>)` and serves:
+`UI: <url> (store: <url or folder>)` and serves a React app (built files in the package, no Node
+needed) in the look of the reports (their stylesheet, tokens and class names; dark mode follows the
+system):
 
-- `/` projects (artifacts, last update);
-- `/p/<project>/` its reports (title, status, summary, latest version), then its other artifacts;
-- `/p/<project>/r/<slug>[@vN]/` a report version's built page (a report is an artifact
+- `/` projects (title, description, artifacts, last update);
+- `/p/<project>/` the project: a search box (names, titles, status, aliases), then the tabs
+  "Reports" (title, status, summary, latest version, an Open report link) and "Artifacts" (latest,
+  aliases, versions, updated), sorted by update;
+- `/p/<project>/a/<name>[@vN|@alias]` an artifact: its versions (status, label, aliases, source
+  host) with a version picker, and for the chosen version a copyable reference and `cairn pull`
+  command, the files (download, inline preview of images, video, text and JSON, a file
+  reference to copy), the metadata, the inputs and the consumers, and the lineage graph (inputs on
+  the left, the version in the middle, consumers on the right; click a node to open it, `+` to
+  expand one more level). A report artifact has an Open report button;
+- `/p/<project>/r/<slug>[@vN]/` a report version's built page, as before (a report is an artifact
   `reports/<slug>` with `site/` and `source/`); its Data panel links each input to the artifact page
-  of the exact version;
-- `/p/<project>/a/<name>[@vN]` an artifact: versions, the files of one version, its metadata, its
-  inputs and its consumers (the back-trace view);
+  of the exact version, and its brand link returns to the project in the app;
 - `/files/<project>/<name>@vN//<path>` the store's files, with Range (videos seek).
+
+The app talks to the UI process through `/ui-api/` (GET unless noted), a session-scoped passthrough
+to the store interface: `me` (scope: `owner`, `project`, or `store` when a remote store decides),
+`projects`, `projects/<p>`, `projects/<p>/artifacts/<name>` (summary, versions, aliases),
+`projects/<p>/artifacts/<name>/versions/<n>` (manifest with files, consumers; `<n>` may also be an
+alias or label), `lineage?ref=<project:name@sel>[&depth=1..3]` (inputs and consumers, assembled from
+one-level lookups, capped at 200 nodes), and `POST login`. Every call needs the session and the
+header `X-Cairn: 1` (a cross-site request cannot send it); a name may be one URL-encoded segment.
 
 **Login.** By default the UI asks for a store token on `/login` (the owner token or a scoped one) and
 checks it against the store: a store server is asked with it, a store folder's owner token file and
-`tokens.jsonl` are checked. The token stays in the UI process, in an in-memory session table; the
+`tokens.jsonl` are checked. The app's login page posts the token to `/ui-api/login`; it stays in the UI process, in an in-memory session table; the
 browser gets only a random session id (HttpOnly, SameSite=Strict cookie, `Secure` unless
 `--insecure-cookies`, for plain-HTTP tunnels), and the token is never in a URL or a page. Each
 session acts with its own token, so a scoped token sees only its project, and a revoked token ends
@@ -421,6 +437,23 @@ its session. Sessions last 30 days and are forgotten when the UI restarts.
 `[store] token_file` against a store server (none against a `--no-auth` store), or the owner's full
 access to a folder. `--allow-http` permits plain HTTP to a non-local store server, as for `publish`.
 A report page runs in the UI's origin: give write tokens to people whose reports you trust.
+
+#### Developing the UI
+
+The app's source is `web/` (React 18, TypeScript, Vite; it imports
+`src/cairn/template/report.css` and `report-extra.css` so the look has one source, plus a small
+`web/src/app.css`). The built files in `src/cairn/ui/static/` are committed, so `pip install` needs
+no Node.
+
+```bash
+cairn ui --store /srv/store --insecure-cookies    # a UI to talk to, on 127.0.0.1:8801
+cd web && npm ci && npm run dev                   # http://localhost:5173, proxying /ui-api, /files and reports to it
+npm run build                                     # type-checks, then writes src/cairn/ui/static/ (commit it)
+```
+
+`CAIRN_UI_URL` points the dev proxy at another UI address. `tests/browser_check.py` walks the UI
+in headless Chrome and writes screenshots (`taskpolicy -b uv run --with playwright python
+tests/browser_check.py`).
 
 ### Migrating from the hub
 
