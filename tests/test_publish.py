@@ -111,7 +111,7 @@ def test_inputs_pulled_by_the_command_are_recorded(env, capsys, monkeypatch):
     main(["publish", str(data), "datasets/toy"])
     capsys.readouterr()
     out = env / "out"
-    monkeypatch.setenv("CAIRN_INPUTS", str(out / ".cairn-inputs.jsonl"))
+    monkeypatch.delenv("CAIRN_INPUTS", raising=False)  # publish --watch points the command at the folder itself
     script = (f"from cairn_report import store; import pathlib; pathlib.Path({str(out)!r}).mkdir(exist_ok=True); "
               "store.pull('datasets/toy@v1'); (pathlib.Path(" + repr(str(out)) + ") / 'r.txt').write_text('r')")
     with pytest.raises(SystemExit) as exit:

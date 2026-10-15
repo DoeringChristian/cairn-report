@@ -11,6 +11,7 @@ stopped without a command, and fails otherwise, so `latest` never moves to a bro
 from __future__ import annotations
 
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -97,7 +98,9 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
     pub = Publication(name, folder, metadata=meta, aliases=aliases, label=label, store=artifacts.open_store(config))
     pub.start()
     print(f"publishing {folder} as {pub.name}@v{pub.version} (running) every {interval:g} s", flush=True)
-    process = subprocess.Popen(command) if command else None
+    # what the command pulls is recorded in the folder it writes, unless the caller chose a file
+    env = os.environ | {artifacts.INPUTS_ENV: os.environ.get(artifacts.INPUTS_ENV) or str(Path(folder).resolve() / artifacts.INPUTS_FILE)}
+    process = subprocess.Popen(command, env=env) if command else None
     failures, seen, changed_at = 0, None, 0.0
     last = time.monotonic()
     synced = None  # the signature of the folder at the last good sync
