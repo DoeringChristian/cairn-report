@@ -15,3 +15,5 @@ generated/
 
 # web app
 web/node_modules/
+examples/*/runs/
+examples/*/.cairn/

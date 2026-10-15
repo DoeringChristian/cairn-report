@@ -48,6 +48,9 @@ The final error is {{ error }}.
 
 `cairn build` makes the page, `cairn publish reports/<slug>` stores it with its pinned inputs.
 
+A complete small project (dataset → run → report, with lineage) is in
+[`examples/descent/`](examples/descent/README.md); `./run_example.sh` runs it end to end.
+
 ### Coming from cairn-report
 
 Cairn is the next version of cairn-report (0.13.0 is the first release under the new names):
@@ -465,6 +468,7 @@ cairn sync                                                 # send them now, and 
 cairn pull datasets/crops@paper --offline                  # never ask the server (see below)
 cairn prune [--older-than 30d] [--max-size 20G]            # trim the cache by last pull
 cairn verify [REF | --cache | --store [ROOT] | --all] [--repair]   # re-hash what is stored (see Integrity)
+cairn alias datasets/crops@v3 best                       # point an alias at a version (latest moves by itself)
 cairn delete datasets/crops@v2 --reason "..."             # a tombstone; see Deleting and garbage collection
 cairn gc --dry-run                                         # retention rules and unreferenced blobs
 ```

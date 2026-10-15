@@ -1,0 +1,3 @@
+# The example project: everything Cairn writes goes into .cairn/ (a local store; no server needed).
+[store]
+project = "descent-example"

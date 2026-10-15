@@ -1,4 +1,4 @@
-"""Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | delete | retention |
+"""Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | alias | delete | retention |
 gc | sync | status | prune | verify | server | ui | token | migrate | export-metadata | finalize-study`.
 
 Every command that talks to the store first tries to send this machine's pending versions for it (quietly,
@@ -216,6 +216,13 @@ def cmd_delete(args) -> None:
         result = _store_errors(lambda: store.version(args.ref).delete(force=args.force, reason=args.reason))
     for ref in result["deleted"]:
         print(f"deleted {ref}")
+
+
+def cmd_alias(args) -> None:
+    store = open_objects(args)
+    version = _store_errors(lambda: store.version(args.ref))
+    _store_errors(lambda: version.artifact.alias(args.alias, version))
+    print(f"{version.artifact.name}@{args.alias} -> v{version.number}")
 
 
 def cmd_project_delete(args) -> None:
@@ -534,6 +541,10 @@ def main(argv: list[str] | None = None) -> None:
     show.add_argument("ref", help="[project:]name[@vN|@uid|@alias|@label]")
     show.add_argument("--offline", action="store_true", help="answer from the cache only")
     show.set_defaults(run=cmd_show)
+    alias = commands.add_parser("alias", help="point an alias (best, paper, ...) at a completed version; latest moves by itself")
+    alias.add_argument("ref", help="[project:]name@vN (or @uid, @label, @another-alias)")
+    alias.add_argument("alias", help="the alias to set or move")
+    alias.set_defaults(run=cmd_alias)
     delete = commands.add_parser("delete", help="delete a version (a tombstone: its number and uid are never used again) or a whole artifact")
     delete.add_argument("ref", nargs="?", help="[project:]name@vN (or @uid, @alias, @label)")
     delete.add_argument("--artifact", metavar="NAME", help="delete every version of this artifact ([project:]name)")
