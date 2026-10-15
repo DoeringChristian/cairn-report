@@ -29,7 +29,7 @@ crosses the arrows below.
 
 ```text
 src/cairn/
-├── __init__.py   the light API: pull, publish, alias, versions, lineage, Publication, open_store (client names load lazily)
+├── __init__.py   the light API: connect (Store, Project, Artifact, Version), pull, publish, alias, versions, lineage, Publication, open_store (client names load lazily)
 ├── cli.py        argument parsing only; every command imports its part lazily
 ├── __main__.py
 ├── config.py     cairn.toml (leaf: imports nothing from cairn)
@@ -37,8 +37,10 @@ src/cairn/
 ├── formats.py    readers for the logger's JSON Lines files (leaf)
 ├── _version.py   __version__ (leaf)
 ├── migrate.py    the one-off conversion of an old hub (knows the old report layout)
-├── store/        core, no HTTP: refs, local (LocalStore), blobs, tokens, cache (pull), errors, inputs
-├── client/       http (Client, scan/hash/upload), remote (RemoteStore), publishing (publish, Publication, --watch), open (open_store)
+├── store/        core, no HTTP: refs, uids (UUIDv7), local (LocalStore), blobs, tokens, cache (pull, uid-keyed, NFS-safe), errors, inputs
+├── client/       http (Client, scan/hash/upload), remote (RemoteStore), objects (connect, Store, Project, Artifact, Version),
+│                 publishing (publish, Publication, --watch), outbox (offline publishing), offline (offline resolution),
+│                 state (cached store uids and resolutions), open (open_store)
 ├── server/       app (handler + routes), auth, files (/files, Range, ETag), spawn (UI child); exports make_server, serve_store
 ├── ui/           server (UI HTTP server + /ui-api), sessions, backends (Local/RemoteBackend), static/ (built app)
 ├── reports/      build, serve, share, publishing (report -> artifact), template/
@@ -114,6 +116,8 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
        created on the server when it can be reached, and completion or failure is queued;
      - a file that changes before upload is re-hashed, so a version is uploaded exactly as
        published or not at all.
+   - *Done (on `artifact-store`):* the ref syntax for uids is a format check, not a prefix: a selector in
+     the canonical lowercase UUIDv7 form is a uid, and aliases and labels may not take that form.
    - **Version identity:**
      - every version gets a UID (ULID/UUIDv7) where it is created, on the client or in the outbox,
        and the server keeps it; every store gets a store UID;

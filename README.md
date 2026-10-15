@@ -3,7 +3,8 @@
 An artifact store for research projects that keep their evidence in plain run folders, with
 reports on top of it. Three parts live in this package:
 
-- the **client**: a light Python API (`cairn.pull`, `cairn.publish`, lineage) and the `cairn`
+- the **client**: a light Python API (`cairn.connect()` with projects, artifacts, and versions as
+  objects; `cairn.pull`, `cairn.publish`, lineage; an offline outbox) and the `cairn`
   command, the **report builder** that turns single-page Markdown reports into a static site
   (reading numbers and figures from the artifacts each report declares as inputs), a **run
   logger** that writes evidence to fixed places in a run folder (files only; `cairn publish
@@ -314,7 +315,16 @@ slash path (`descent`, `datasets/crops`); reports are the artifacts `reports/<sl
 version is immutable once completed and records its files (by content hash), metadata,
 the exact versions it consumed (`inputs`), and where it was published from. Aliases
 (`latest` moves by itself; `best`, `paper` by hand) and labels select versions:
-`[project:]name[@v3|@alias|@label][//file]`.
+`[project:]name[@v3|@uid|@alias|@label][//file]`.
+
+Every version also has a **uid**, a UUIDv7 made where the version is created (by the store, or by
+the client's outbox, and kept by the server): `datasets/crops@0192f3a4-5b6c-7d8e-9f01-23456789abcd`
+names that version as exactly as `@v3`. A selector in the canonical lowercase UUIDv7 form is always a
+uid, so no alias or label may take that form (nor `v<n>`). `v<n>` stays the readable name; the uid is
+what the cache, the outbox, and offline pulls key on. Every store has a uid too (`store.json` at
+its root). A store made before uids existed is upgraded as it is read: each version gets a uid
+derived from the store and the version (the same in every process), and the root gets its
+`store.json`.
 
 A project works offline against a store folder (`.store` by default, `[store] path`). To share
 it, serve a folder over HTTP and point projects at the server. The two halves are separate:
@@ -372,16 +382,105 @@ cairn pull datasets/crops@paper                            # print the local, re
 cairn pull x@latest --into DIR [--no-record]               # copy it into DIR instead
 ```
 
-```python
-import cairn
-crops = cairn.pull("datasets/crops@v3")      # works with a local and a remote store alike
+```bash
+cairn project list                                         # projects, artifact counts, last update
+cairn project create my-study --title "My study" [--description ...]
+cairn project show my-study                                # its title, description, and artifacts
+cairn project edit my-study --description "..."
+cairn artifacts [--prefix reports/] [--project other]      # latest version, version count, aliases
+cairn versions datasets/crops                              # number, status, label, created, uid, size
+cairn show datasets/crops@paper                            # metadata, files, inputs, consumers
+cairn status                                               # versions waiting in the outbox
+cairn sync                                                 # send them now
+cairn pull datasets/crops@paper --offline                  # never ask the server (see below)
 ```
 
-`exclude` takes gitignore-style globs on project paths: `*` and `?` stay within a folder, `**`
-spans folders, a leading `/` anchors to the project root. Pulled copies live in
-`~/.cache/cairn/artifacts/`, with a blob cache beside them, so a file is downloaded once.
+All of them work the same against a store folder and a store server.
 
-The server's API lives under `/api/v2/` and its files under `/files/<project>/<name>@vN//<path>`
+### The Python API
+
+`cairn.connect()` opens the store `[store]` names (or `cairn.connect("https://...", token=...)`, or
+`cairn.connect("path/to/store")`; `project=` sets the default project). Objects are thin and lazy:
+they fetch on first access and keep what they fetched.
+
+```python
+import cairn
+
+store = cairn.connect()
+project = store.project()                       # the configured project; store.project("other"), store.projects()
+project.update(description="Denoising study")   # store.create_project("new", title="New")
+crops = project.artifact("datasets/crops")      # project.artifacts(prefix="datasets/")
+
+v3 = crops.version(3)                           # or "v3", an alias, a label, or a uid; crops.latest, crops.versions()
+v3.ref, v3.uid, v3.label, v3.status, v3.created, v3.metadata, v3.inputs, v3.consumers
+[(f.path, f.size, f.sha256) for f in v3.files]
+with v3.open("tables/cases.csv") as handle:     # streams one file without pulling the version; recorded as an input
+    header = handle.readline()
+folder = v3.pull()                              # the whole version, read-only, from the cache; recorded as an input
+
+fit = project.artifact("models/fit")
+v = fit.publish("outputs/fit", metadata={"loss": 0.1}, aliases=["best"], inputs=[v3.ref])   # -> Version
+fit.alias("paper", v)
+with fit.publishing("outputs/live") as running:    # a running version that follows a folder while a job writes it
+    ...
+    running.sync()
+```
+
+The functions `cairn.pull`, `cairn.publish`, `cairn.alias`, `cairn.versions`, `cairn.lineage`, and
+`cairn.Publication` stay, as shortcuts on top of these objects (`cairn.publish` returns the
+version number, or None while the version waits in the outbox).
+
+### Offline
+
+Publishing to a store server first commits the version to a local **outbox**
+(`<cache>/outbox/<store-uid>/<version-uid>.json`: manifest, label, metadata, inputs, aliases), with
+the contents it needs cloned (copy-on-write where the filesystem can) or copied into the blob cache,
+so the upload never reads the source folder again: a file changed after `publish` returns does not
+change the queued version. Then it uploads. If the server does not answer, `publish` returns a
+**pending** version (its uid is set, its number is None until the server assigns it) and says it is
+queued. The outbox is sent in order by a background thread (in long-lived processes, once something
+is queued or `connect()` finds something queued), by `cairn sync`, and at the start of every `cairn`
+command that uses the store; `cairn status` lists what waits. Sending is idempotent: every request
+carries the version's uid, and the server answers a uid it already has with that version. A version
+the server refuses stays in the outbox as `rejected` (shown by `cairn status`, skipped by every
+flush; delete its file to drop it).
+
+`cairn publish --watch -- cmd` always starts the command: the running version is created in the
+outbox and, as soon as the server answers, on the server under the same uid; its files follow as
+they are synced, and completion or failure is queued like any publish. A job that dies leaves its
+version running only until the next flush on that host (`cairn sync`, any `cairn` command) marks it failed. A local store
+(`[store] path`) is written directly, with no outbox.
+
+Pulls work offline too. An exact reference (`name@vN` this machine has seen, or `name@<uid>`)
+whose version is in the cache comes from the cache without asking the server at all. When the
+server does not answer, an alias, label, or `latest` falls back to its last known resolution (kept in
+`<cache>/resolved/<store-uid>.json`) with a warning naming the version, and that exact version is
+recorded as the input. `cairn pull --offline` and `cairn.pull(..., offline=True)` force the
+fallback; a report build resolves its `inputs:` the same way.
+
+### The cache
+
+`<cache>` is `$CAIRN_CACHE_DIR`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`:
+
+```text
+<cache>/versions/<uid>/       pulled versions, read-only, one folder per version uid
+<cache>/blobs/<aa>/<sha256>   downloaded and staged file contents (a file is downloaded once)
+<cache>/outbox/<store-uid>/   versions waiting for a store server
+<cache>/resolved/, stores.json   the last answers, for offline pulls
+```
+
+Versions are keyed by uid, never by project, name, and number, so two stores never collide in
+one cache. The cache may be shared by many jobs, also on NFS: a version folder or a blob is written
+under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place, and whoever
+loses a race discards its copy; there are no file locks. On a cluster, point `CAIRN_CACHE_DIR` at
+node-local scratch (for example `export CAIRN_CACHE_DIR=$TMPDIR/cairn` in the job script) so pulls
+read from a local disk.
+
+`exclude` takes gitignore-style globs on project paths: `*` and `?` stay within a folder, `**`
+spans folders, a leading `/` anchors to the project root.
+
+The server's API lives under `/api/v2/` (`GET /api/v2/store` answers its uid and version) and its
+files under `/files/<project>/<name>@vN//<path>` (or `@<uid>`)
 (ETag, Range, `Content-Security-Policy: sandbox`); the routes are listed in
 `cairn/server/__init__.py`. Besides publishing and resolving it answers what a viewer needs:
 projects with their artifact count and last update, an artifact's summary with its latest version and
