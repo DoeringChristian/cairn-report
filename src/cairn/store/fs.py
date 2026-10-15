@@ -133,12 +133,11 @@ _CLONE = _clonefile()
 FICLONE = 0x40049409
 
 
-def clone_or_copy(source: Path | str, target: Path | str) -> bool:
-    """Copy `source` to the new file `target` as a copy-on-write clone where the filesystem has them (APFS
-    `clonefile`, Btrfs/XFS `FICLONE`), else as a plain copy. True if it was a clone (costs no space until
-    either side changes). `target` must not exist."""
-    if _CLONE is not None and _CLONE(os.fsencode(source), os.fsencode(target), 0) == 0:
-        return True
+def clone(source: Path | str, target: Path | str) -> bool:
+    """Make `target` (which must not exist) a copy-on-write clone of `source` (APFS `clonefile`, Btrfs/XFS
+    `FICLONE`). False, leaving nothing behind, where the filesystem or the pair of paths cannot clone."""
+    if _CLONE is not None:
+        return _CLONE(os.fsencode(source), os.fsencode(target), 0) == 0
     if sys.platform.startswith("linux"):
         try:
             import fcntl
@@ -148,5 +147,14 @@ def clone_or_copy(source: Path | str, target: Path | str) -> bool:
             return True
         except (OSError, ImportError):
             Path(target).unlink(missing_ok=True)
+    return False
+
+
+def clone_or_copy(source: Path | str, target: Path | str) -> bool:
+    """Copy `source` to the new file `target` as a copy-on-write clone where the filesystem has them (APFS
+    `clonefile`, Btrfs/XFS `FICLONE`), else as a plain copy. True if it was a clone (costs no space until
+    either side changes). `target` must not exist."""
+    if clone(source, target):
+        return True
     shutil.copyfile(source, target)
     return False

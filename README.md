@@ -434,6 +434,7 @@ cairn status [--all]                                       # this machine's vers
 cairn sync                                                 # send them now, and refresh the known aliases
 cairn pull datasets/crops@paper --offline                  # never ask the server (see below)
 cairn prune [--older-than 30d] [--max-size 20G]            # trim the cache by last pull
+cairn verify [REF | --cache | --store [ROOT] | --all] [--repair]   # re-hash what is stored (see Integrity)
 ```
 
 All of them work the same against a store folder and a store server.
@@ -545,6 +546,56 @@ replica. Either root may be shared by many jobs, also on NFS: a version folder o
 under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place, and whoever
 loses a race discards its copy. The layout before the replica (`<cache>/outbox/`, `resolved/`,
 `stores.json`) is converted on first use and removed.
+
+### Integrity
+
+**Manifest digest.** Every completed version has a `digest`: `sha256:` plus the hex SHA-256 of its
+canonical file list, and nothing else. The list has one object per entry, `{"path", "sha256", "size"}`
+for a file or `{"link", "path"}` for a symlink, sorted by `path` (code point order, which equals UTF-8
+byte order), each object with its keys sorted. It is serialized as compact JSON (no whitespace, `,` and
+`:` only, non-ASCII written as UTF-8 rather than `\uXXXX`) and hashed as UTF-8 bytes. Metadata, label,
+inputs, source, timestamps, and `mtime` are not part of it, so two versions with the same files have the
+same digest. In Python:
+
+```python
+json.dumps(sorted(items, key=lambda item: item["path"]), sort_keys=True,
+           separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+```
+
+`cairn.store.digest` documents the form and implements it. The store computes the digest when a version
+completes and keeps it in the manifest (stores written before digests existed get theirs the first time
+they are opened); a client computes it for a version it is about to upload, so a pending version knows it
+before the server does, and the server recomputes it and answers 409 if a digest the client sent does not
+match the files. `Version.digest`, `cairn show`, and the UI's artifact page (copyable) show it.
+
+**Verified pulls.** Materializing a version hashes every file as it is placed and compares it with the
+manifest (hash and size), then compares the digest of what was placed with the version's digest. On any
+mismatch the pull fails with an error naming the file, and the half-built folder is removed; a damaged
+blob in the cache is not silently reused (`cairn verify --cache --repair` drops it so the next pull
+downloads it again).
+
+**Copy-on-write pulls.** Pulled files are copy-on-write clones of the blobs where the filesystem has them
+(APFS `clonefile`, Btrfs/XFS `FICLONE`): they cost no space, are files of their own, and editing one
+(after a `chmod`) cannot touch the blob. Where cloning is unsupported, files are hard-linked and always
+read-only (`0444`): a hard link shares the blob's inode, so writing through a writable one would corrupt
+the blob and every version that shares it. If hard links fail too (another filesystem), they are copied.
+
+**`cairn verify`** re-hashes and exits 1 on any problem it cannot fix:
+
+```bash
+cairn verify datasets/crops@v3     # one version: its digest, its cached or pending copy, the blobs held for it
+cairn verify --cache               # every cached version against its manifest and digest, every cache blob
+                                   #   against its name, and this machine's pending versions (the default)
+cairn verify --store [ROOT]        # a local store: each blob against its name, every blob a version references
+                                   #   exists, every completed version's digest matches its files
+cairn verify --all                 # the cache, pending versions, and the configured local store
+cairn verify --cache --repair      # remove broken cached versions and blobs; the next pull downloads them
+```
+
+`--repair` touches the cache only: pending versions and stores may hold the only copy, so they are
+reported, never changed. The object API returns the same as a report: `cairn.connect().verify(ref=None,
+cache=False, store=False, all=False, repair=False)` gives a `Report` with `.ok`, `.problems` (kind, path,
+message), and `.summary()`.
 
 ### Clusters (Slurm)
 

@@ -134,7 +134,7 @@ def manifest_of(record: dict) -> dict:
     status = "pending" if record["status"] == "completed" else record["status"]
     return {"version": record.get("number"), "uid": record["uid"], "label": record.get("label"), "status": status,
             "created": record["created"], "files": record["files"], "metadata": record.get("metadata") or {},
-            "inputs": record.get("inputs") or [], "source": record.get("source"), "pending": True, "sync": record["sync"],
+            "inputs": record.get("inputs") or [], "source": record.get("source"), "digest": record.get("digest"), "pending": True, "sync": record["sync"],
             "aliases": record.get("aliases") or []}
 
 
@@ -179,7 +179,7 @@ def pending_files(uid: str) -> Path | None:
         return source
 
     try:
-        link_files(record["files"], build, blob)
+        link_files(record["files"], build, blob, record.get("digest"), f"{record['project']}:{record['name']}@{uid}")
         try:
             os.rename(build, target)
         except OSError:
@@ -272,7 +272,8 @@ def promote(record: dict, manifest: dict, store_uid: str | None) -> None:
 def record_files(record: dict, target: Path) -> None:
     build = scratch(target)
     try:
-        link_files(record["files"], build, lambda entry: blob_source(entry["sha256"]) or _gone(record, entry))
+        link_files(record["files"], build, lambda entry: blob_source(entry["sha256"]) or _gone(record, entry),
+                   record.get("digest"), f"{record['project']}:{record['name']}@{record['uid']}")
         os.rename(build, target)
     finally:
         if build.exists():

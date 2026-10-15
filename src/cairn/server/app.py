@@ -20,8 +20,8 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
       GET  /api/v2/projects/<p>/artifacts/<name>/versions/<n>    one manifest (<n>: a number or a uid)   .../files  {files: [entries]}
       GET  /api/v2/projects/<p>/artifacts/<name>/aliases         {alias: version}
       POST /api/v2/projects/<p>/artifacts/<name>/versions        {uid?, label?, metadata?, source?} -> {version, uid} (running)
-      POST .../versions/<n>/files {entries}   (409 + `missing` when blobs are absent)   .../complete {inputs?}   .../fail
-      POST /api/v2/projects/<p>/artifacts/<name>/publish         {uid?, entries, label?, metadata?, inputs?, aliases?, source?}
+      POST .../versions/<n>/files {entries}   (409 + `missing` when blobs are absent)   .../complete {inputs?, digest?}   .../fail
+      POST /api/v2/projects/<p>/artifacts/<name>/publish         {uid?, entries, label?, metadata?, inputs?, aliases?, source?, digest?}
                                                                  -> {version, uid, created}  (created=false: nothing changed,
                                                                  or this uid was published already)
       POST /api/v2/projects/<p>/artifacts/<name>/aliases         {alias, version}
@@ -54,6 +54,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import signal
 import socket
 import sys
@@ -68,6 +69,7 @@ from .._version import __version__
 from ..store import BadRange, Conflict, LocalStore, NotFound, Ref, StoreError, refs
 from ..store.blobs import SHA256, clean_entries
 from ..store.db import ServerLock
+from ..store.digest import PREFIX as DIGEST_PREFIX
 from ..store.fs import network_filesystem
 from ..store.tokens import Principal, Tokens, init_root, read_token
 from ..store.uids import UID, valid_uid
@@ -87,6 +89,7 @@ else:
 MAX_JSON = 64 * 1024 * 1024
 UPLOAD_PIECE = 4 << 20  # uploads are hashed and written in pieces this large, in worker threads
 WORKERS = int(os.environ.get("CAIRN_SERVER_THREADS", "32"))  # worker threads for store work and file I/O
+DIGEST = re.compile(re.escape(DIGEST_PREFIX) + r"[0-9a-f]{64}")
 METHODS = ("GET", "POST", "PATCH", "PUT")
 
 
@@ -371,7 +374,8 @@ class StoreApp:
                     store.add_files(project, name, number, entries)
                     return _json(200, {"files": len(entries)})
                 if action == "complete":
-                    store.complete_version(project, name, number, self._inputs(principal, project, payload.get("inputs")))
+                    store.complete_version(project, name, number, self._inputs(principal, project, payload.get("inputs")),
+                                           digest=self._digest(payload))
                     return _json(200, {"version": number})
                 if action == "fail":
                     store.fail_version(project, name, number)
@@ -390,7 +394,7 @@ class StoreApp:
                 before = store.last_number(project, name)
                 number = store.publish(project, name, entries, label=payload.get("label"), metadata=payload.get("metadata"),
                                        inputs=self._inputs(principal, project, payload.get("inputs")), aliases=aliases,
-                                       source=payload.get("source"), uid=self._uid(payload))
+                                       source=payload.get("source"), uid=self._uid(payload), digest=self._digest(payload))
                 created = number > before  # new versions are numbered after every existing one
                 return _json(201 if created else 200, {"version": number, "uid": store.get_version(project, name, number)["uid"],
                                                        "created": created})
@@ -412,6 +416,14 @@ class StoreApp:
                     raise ValueError(f"{key} must be text")
             return _json(200, self.store.update_project(project, payload.get("title"), payload.get("description")))
         raise HttpError(404, "no such API route")
+
+    @staticmethod
+    def _digest(payload: dict) -> str | None:
+        """The manifest digest a client supplies (digest.py); the store checks it against the files (409 if it differs)."""
+        digest = payload.get("digest")
+        if digest is not None and not (isinstance(digest, str) and DIGEST.fullmatch(digest)):
+            raise ValueError("digest must look like sha256:<64 hex digits>")
+        return digest
 
     @staticmethod
     def _uid(payload: dict) -> str | None:

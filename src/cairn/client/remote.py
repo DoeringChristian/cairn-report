@@ -191,17 +191,24 @@ class RemoteStore:
         for start in range(0, len(entries), BATCH):
             self._call("POST", f"{self._artifact(project, name)}/versions/{version}/files", {"entries": entries[start:start + BATCH]})
 
-    def complete_version(self, project: str, name: str, version: int, inputs=None) -> None:
-        self._call("POST", f"{self._artifact(project, name)}/versions/{version}/complete", {"inputs": [str(item) for item in inputs or []]})
+    def complete_version(self, project: str, name: str, version: int, inputs=None, digest: str | None = None) -> None:
+        """Complete the version; a `digest` (store.digest) of its files makes the server check them (409 on a mismatch)."""
+        body = {"inputs": [str(item) for item in inputs or []]}
+        if digest is not None:
+            body["digest"] = digest
+        self._call("POST", f"{self._artifact(project, name)}/versions/{version}/complete", body)
 
     def fail_version(self, project: str, name: str, version: int) -> None:
         self._call("POST", f"{self._artifact(project, name)}/versions/{version}/fail", {})
 
     def publish(self, project: str, name: str, entries: list[dict], label: str | None = None, metadata: dict | None = None,
-                inputs=None, aliases=(), source: dict | None = None, uid: str | None = None) -> int:
-        answer = self._call("POST", f"{self._artifact(project, name)}/publish", {
-            "entries": entries, "label": label, "metadata": metadata, "inputs": [str(item) for item in inputs or []],
-            "aliases": list(aliases), "source": source, "uid": uid}, expect=(200, 201))
+                inputs=None, aliases=(), source: dict | None = None, uid: str | None = None,
+                digest: str | None = None) -> int:
+        body = {"entries": entries, "label": label, "metadata": metadata, "inputs": [str(item) for item in inputs or []],
+                "aliases": list(aliases), "source": source, "uid": uid}
+        if digest is not None:
+            body["digest"] = digest
+        answer = self._call("POST", f"{self._artifact(project, name)}/publish", body, expect=(200, 201))
         return answer["version"]
 
     def set_alias(self, project: str, name: str, alias: str, version: int) -> None:

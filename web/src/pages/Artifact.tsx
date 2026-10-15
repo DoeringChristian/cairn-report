@@ -134,6 +134,7 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             <ul>
               <li className="data-row"><span className="data-name">Version</span><span className="data-version">{exact(project, name, number)}</span><span className="data-files" /><CopyButton text={exact(project, name, number)} label="Copy exact version" done="Version copied" /></li>
               <li className="data-row"><span className="data-name">Pull</span><span className="data-version">cairn pull {exact(project, name, number)}</span><span className="data-files" /><CopyButton text={`cairn pull ${exact(project, name, number)}`} label="Copy pull command" done="Command copied" /></li>
+              {manifest.digest && <li className="data-row"><span className="data-name">Digest</span><span className="data-version mono">{manifest.digest}</span><span className="data-files" /><CopyButton text={manifest.digest} label="Copy digest" done="Digest copied" /></li>}
             </ul>
           </section>
 

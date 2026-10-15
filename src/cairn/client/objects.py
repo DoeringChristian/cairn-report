@@ -117,6 +117,18 @@ class Store:
             return []
         return [Version.from_record(self, record) for record in self.replica.records()]
 
+    def verify(self, ref: str | None = None, *, cache: bool = False, store: bool = False, all: bool = False,
+               repair: bool = False):
+        """Re-hash what this machine holds and return a `Report` (`.ok`, `.problems`, `.summary()`; `cairn verify`).
+
+        `ref`: one version (its digest, its cached or pending copy, its blobs). `cache`: the pull cache and the
+        pending versions (also the default when nothing else is asked). `store`: this store's own blobs and
+        versions, when it is a local folder. `all`: everything. `repair` (cache only): remove broken cached
+        versions and blobs, so the next pull downloads them again."""
+        from .verify import verify
+
+        return verify(self.backend, ref, cache=cache, local_store=store, everything=all, repair=repair)
+
     def sync(self, report=None, refresh: bool = True) -> dict:
         """Send the pending versions now (`Replica.flush`), then learn the current aliases of the artifacts this
         machine has versions of (`refreshed`: how many; skipped while the server does not answer)."""
@@ -383,6 +395,7 @@ class Version:
     metadata = property(lambda self: dict(self.manifest.get("metadata") or {}))
     inputs = property(lambda self: list(self.manifest.get("inputs") or []))
     source = property(lambda self: self.manifest.get("source"))
+    digest = property(lambda self: self.manifest.get("digest"))  # `sha256:<hex>` of the file list (store/digest.py); None while running
 
     @property
     def files(self) -> list[File]:

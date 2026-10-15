@@ -30,6 +30,7 @@ from pathlib import Path
 
 from ..config import Config, load_config
 from ..store import INPUTS_ENV, INPUTS_FILE, LocalStore, StoreError, read_inputs, refs
+from ..store.digest import manifest_digest
 from ..store.errors import Unreachable
 from .http import HashCache, entries_for, scan  # noqa: F401
 from .open import as_store, open_store, versions_of
@@ -208,7 +209,8 @@ class Publication:
         self.sync()
         merged = [*read_inputs(self.local), *(str(item) for item in self.inputs or [])]
         if self._replica is not None:
-            self._entry.update(sync="pending", status="completed", inputs=merged, aliases=list(self.aliases))
+            self._entry.update(sync="pending", status="completed", inputs=merged, aliases=list(self.aliases),
+                               digest=manifest_digest(self._entry["files"]))
             self._save()
             self._stop_beating()
             if not self._push():

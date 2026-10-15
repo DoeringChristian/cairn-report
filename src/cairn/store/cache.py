@@ -37,7 +37,9 @@ from pathlib import Path
 from ..config import cairn_base, protect
 from . import refs
 from .blobs import now
+from .digest import manifest_digest, sha256_file
 from .errors import NotFound, StoreError
+from .fs import clone
 from .inputs import record_input
 
 CACHE_ENV = "CAIRN_CACHE_DIR"
@@ -216,21 +218,54 @@ def touch(folder: Path, record: dict | None = None) -> None:
         pass
 
 
-def link_files(entries: list[dict], target: Path, blob) -> None:
-    """Fill `target` with the entries' files: `blob(entry)` gives each content's path, hard-linked when it can be."""
+def place_file(source: Path, path: Path) -> str:
+    """Make `path` (new) a read-only file with `source`'s contents, sharing storage where that is safe: a
+    copy-on-write clone (APFS `clonefile`, Btrfs/XFS `FICLONE`) when the filesystem has them; else a hard link;
+    else a copy. Returns "clone", "link" or "copy".
+
+    A clone or a copy is a file of its own: editing it (after a `chmod`) never changes the blob. A hard link
+    shares the blob's inode, so writing through it WOULD corrupt the blob and every other version using it;
+    that is why a hard-linked file is always made read-only (0444) and why links are only the fallback for
+    filesystems that cannot clone. (The blob itself becomes read-only too: it is the same inode.)"""
+    if clone(source, path):
+        how = "clone"
+    else:
+        try:
+            os.link(source, path)
+            how = "link"
+        except OSError:
+            shutil.copyfile(source, path)
+            how = "copy"
+    os.chmod(path, 0o444)
+    return how
+
+
+def link_files(entries: list[dict], target: Path, blob, digest: str | None = None, label: str = "version") -> None:
+    """Fill `target` with the entries' files: `blob(entry)` gives each content's path; the file is placed with
+    `place_file` (clone, else read-only hard link, else copy).
+
+    The pull is verified: each placed file is hashed and must match its entry's sha256 and size, and the
+    manifest digest (digest.py) of what was placed must equal `digest` (when the version has one). A mismatch
+    raises a StoreError naming the file; the caller removes the partial folder."""
     target.mkdir(parents=True, exist_ok=True)
+    placed = []
     for entry in entries:
         path = target / entry["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
         if "link" in entry:
             os.symlink(entry["link"], path)
+            placed.append(entry)
             continue
         source = blob(entry)
-        try:
-            os.link(source, path)
-        except OSError:
-            shutil.copyfile(source, path)
-        os.chmod(path, 0o444)
+        place_file(source, path)
+        sha, size = sha256_file(path)
+        if sha != entry["sha256"] or size != entry["size"]:
+            raise StoreError(f"{label}: {entry['path']} does not match its manifest (expected sha256 {entry['sha256'][:16]}..., "
+                             f"{entry['size']} bytes; the stored copy {source} has {sha[:16]}..., {size} bytes): the stored copy is "
+                             "damaged; `cairn verify --cache --repair` removes it so the next pull downloads it again")
+        placed.append({"path": entry["path"], "sha256": sha, "size": size})
+    if digest is not None and manifest_digest(placed) != digest:
+        raise StoreError(f"{label}: the files pulled hash to {manifest_digest(placed)}, not the manifest digest {digest}")
 
 
 def install(build: Path, folder: Path) -> None:
@@ -252,9 +287,10 @@ def install(build: Path, folder: Path) -> None:
 def materialize_version(store, project: str, name: str, version: dict, cache_root: Path | str) -> Path:
     """Write a resolved version's files into the cache (once) and return its `files/` folder.
 
-    Files are hard-linked from the store's blobs (a remote store keeps them in the blob cache) when both
-    are on one filesystem, else copied, and made read-only (a hard link shares its blob, so the blob is
-    protected too). The folder is built under a scratch name and renamed into place (see the module doc).
+    Files are cloned (copy-on-write) from the store's blobs (a remote store keeps them in the blob cache),
+    else hard-linked when both are on one filesystem, else copied, and always made read-only (see `place_file`:
+    a hard link shares its blob). Each file and the manifest digest are verified (`link_files`); a mismatch fails
+    the pull and removes the partial folder. The folder is built under a scratch name and renamed into place (see the module doc).
     """
     uid = version.get("uid")
     if not uid:
@@ -268,7 +304,8 @@ def materialize_version(store, project: str, name: str, version: dict, cache_roo
     build = scratch(folder)
     try:
         build.mkdir()
-        link_files(version["files"], build / FILES, lambda entry: store.blob_file(project, name, version["version"], entry, cache_root))
+        link_files(version["files"], build / FILES, lambda entry: store.blob_file(project, name, version["version"], entry, cache_root),
+                   version.get("digest"), refs.exact(project, name, version["version"]))
         write_json(build / RECORD, {"uid": uid, "sync": "synced", "store": getattr(store, "uid", None), "project": project,
                                     "name": name, "version": version["version"], "manifest": version, "accessed": now(),
                                     "accessed_at": time.time()})

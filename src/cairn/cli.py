@@ -1,9 +1,5 @@
 """Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | sync | status |
-<<<<<<< HEAD
-server | ui | token | migrate | export-metadata | finalize-study`.
-=======
-prune | server | ui | token | migrate | finalize-study`.
->>>>>>> replica
+prune | verify | server | ui | token | migrate | export-metadata | finalize-study`.
 
 Every command that talks to the store first tries to send this machine's pending versions for it (quietly,
 and only when something is pending); `sync` does that by hand, says what happened, and refreshes what the
@@ -175,6 +171,7 @@ def cmd_show(args) -> None:
     print(f"ref          {version.ref}")
     print(f"uid          {version.uid}")
     print(f"status       {version.status}")
+    print(f"digest       {version.digest or '-'}")
     print(f"label        {version.label or ''}")
     print(f"created      {version.created or ''}")
     if aliases:
@@ -269,6 +266,29 @@ def cmd_prune(args) -> None:
     verb = "would remove" if args.dry_run else "removed"
     print(f"{verb} {len(result['versions'])} versions and {result['blobs']} blobs ({describe_size(result['freed'])}); "
           f"the cache holds {describe_size(result['size'])}")
+
+
+def cmd_verify(args) -> None:
+    from .store import LocalStore, StoreError
+
+    if sum(bool(item) for item in (args.ref, args.cache, args.store is not None, args.all)) > 1:
+        raise SystemExit("verify takes one of REF, --cache, --store, --all")
+    if args.repair and (args.store is not None or args.ref):
+        raise SystemExit("--repair only repairs the cache (--cache or --all)")
+    try:
+        if args.store:  # a store root given: no configuration needed
+            if not (args.store / "store.json").is_file():
+                raise SystemExit(f"{args.store} is not a store root (no store.json)")
+            report = LocalStore(args.store, network_warning=False).verify()
+        else:
+            report = open_objects(args).verify(args.ref, cache=args.cache, store=args.store is not None, all=args.all, repair=args.repair)
+    except (StoreError, ValueError) as error:
+        raise SystemExit(f"error: {error}") from None
+    for line in report.lines():
+        print(line)
+    print(report.summary(), file=sys.stderr if not report.ok else sys.stdout)
+    if not report.ok:
+        raise SystemExit(1)
 
 
 def cmd_server(args) -> None:
@@ -426,6 +446,16 @@ def main(argv: list[str] | None = None) -> None:
                              "send the pending versions kept there")
     for command in (artifacts, versions, show, sync, status):
         command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
+
+    verify = commands.add_parser("verify", help="re-hash cached and pending versions, or a local store's blobs and versions; exit 1 on any problem")
+    verify.add_argument("ref", nargs="?", help="[project:]name[@vN|@uid|@alias|@label]: one version")
+    verify.add_argument("--cache", action="store_true", help="the pull cache and the pending versions (the default)")
+    verify.add_argument("--store", nargs="?", const="", default=None, type=Path,
+                        help="a local store: its blobs and versions (give the store root, or none for the configured local store)")
+    verify.add_argument("--all", action="store_true", help="the cache, the pending versions, and the configured local store")
+    verify.add_argument("--repair", action="store_true", help="cache only: remove broken cached versions and blobs, so the next pull downloads them again")
+    verify.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
+    verify.set_defaults(run=cmd_verify)
 
     store_serve = commands.add_parser("server", help="serve a store folder (a new one gets an owner token); put an HTTPS reverse proxy in front")
     store_serve.add_argument("root", type=Path)

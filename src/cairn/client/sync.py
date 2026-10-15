@@ -41,6 +41,7 @@ from ..store import INPUTS_FILE
 from ..store.blobs import now
 from ..store.cache import hostname, place, scratch
 from ..store.fs import clone_or_copy
+from ..store.digest import manifest_digest
 from ..store.errors import NotFound, StoreError, Unreachable
 from ..store.uids import new_uid
 from . import replica
@@ -142,6 +143,8 @@ class Replica:
                   "project": project, "name": name, "label": label, "metadata": metadata or {}, "inputs": list(inputs),
                   "aliases": list(aliases), "source": source, "files": list(files), "created": now(),
                   "owner": {"host": hostname(), "pid": os.getpid()}, "number": None, "pushed": {}, "error": None}
+        if record["status"] == "completed":
+            record["digest"] = manifest_digest(record["files"])  # known before anything is uploaded
         folder = replica.folder_of(record["uid"])
         build = scratch(folder)
         build.mkdir(parents=True)
@@ -175,12 +178,14 @@ class Replica:
         Raises Unreachable when the server does not answer, and StoreError when it refuses."""
         remote, project, name = self.remote, record["project"], record["name"]
         remote.create_project(project)
+        if record["status"] == "completed":
+            record["digest"] = manifest_digest(record["files"])  # the server recomputes it from the files and refuses a mismatch
         manifest = {key: record.get(key) for key in ("label", "metadata", "source")}
         if record["kind"] == "publish":
             self._upload(record["files"])
             replica.refresh_claim(claimed)
             record["number"] = remote.publish(project, name, record["files"], inputs=record["inputs"], aliases=record["aliases"],
-                                              uid=record["uid"], **manifest)
+                                              uid=record["uid"], digest=record["digest"], **manifest)
             return self._done(record)
         if record["number"] is None:
             record["number"] = remote.start_version(project, name, uid=record["uid"], **manifest)
@@ -196,7 +201,7 @@ class Replica:
             if record["status"] == "running":
                 return False
             if record["status"] == "completed":
-                remote.complete_version(project, name, record["number"], record["inputs"])
+                remote.complete_version(project, name, record["number"], record["inputs"], digest=record["digest"])
                 for alias in record["aliases"]:
                     remote.set_alias(project, name, alias, record["number"])
             else:

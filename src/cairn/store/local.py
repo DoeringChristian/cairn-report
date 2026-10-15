@@ -40,6 +40,7 @@ from ..ranges import byte_range
 from . import refs
 from .blobs import CHUNK, BlobStore, BlobWriter, clean_entries, now, resolve_entry
 from .db import Database, ServerLock, export
+from .digest import manifest_digest
 from .errors import BadRange, Conflict, Forbidden, NotFound, StoreError, Unauthorized  # noqa: F401
 from .fs import network_filesystem
 from .refs import Ref
@@ -72,11 +73,16 @@ class FileRead:
         self.chunks.close()
 
 
-def _same(version: dict, files: list[dict], inputs: list[str], metadata: dict) -> bool:
-    def strip(entries):
-        return [(entry["path"], entry.get("sha256"), entry.get("link")) for entry in entries]
+def _same(version: dict, digest: str, inputs: list[str], metadata: dict) -> bool:
+    """Whether a completed version has these files (by manifest digest), inputs, and metadata."""
+    return (version.get("digest") or manifest_digest(version["files"])) == digest and \
+        sorted(version["inputs"]) == sorted(inputs) and version["metadata"] == metadata
 
-    return strip(version["files"]) == strip(files) and sorted(version["inputs"]) == sorted(inputs) and version["metadata"] == metadata
+
+def _check_digest(given: str | None, actual: str, what: str) -> None:
+    """A client's digest of the files it sent must be the one the store computes from them (Conflict, a 409, if not)."""
+    if given is not None and given != actual:
+        raise Conflict(f"{what}: the manifest digest {given} does not match the files received ({actual})")
 
 
 def store_uid(root: Path) -> str:
@@ -142,7 +148,28 @@ class LocalStore:
         self._served = served
         self.uid = store_uid(self.root)
         self._db = Database(self.root, self.uid)
+        self._add_digests()
         self._listings: dict[str, tuple[int, list[dict]]] = {}
+
+    def _add_digests(self) -> None:
+        """Give every completed version that has no manifest digest its digest, once per root, in one transaction
+        (a root written before digests existed). Idempotent and deterministic, so racing processes agree."""
+        if Database.meta(self._db.connection(), "digests") == "done":
+            return
+        try:
+            with self._db.write() as connection:
+                if Database.meta(connection, "digests") == "done":
+                    return
+                rows = connection.execute("SELECT project, name, number, manifest FROM versions WHERE status = 'completed'").fetchall()
+                for project, name, number, text in rows:
+                    state = json.loads(text)
+                    if not state.get("digest"):
+                        state["digest"] = manifest_digest(state["files"])
+                        connection.execute("UPDATE versions SET manifest = ? WHERE project = ? AND name = ? AND number = ?",
+                                           (json.dumps(state), project, name, number))
+                connection.execute("INSERT OR REPLACE INTO meta VALUES ('digests', 'done')")
+        except sqlite3.OperationalError:  # a read-only root: the digests are added by the first writer that opens it
+            pass
 
     def _writing(self) -> None:
         """Warn once if this root lies on a network filesystem (several writers there can corrupt it, see fs.py)."""
@@ -166,6 +193,13 @@ class LocalStore:
             raise StoreError(f"{self.root} is served by `cairn server`: change it through the server's URL "
                              "(a second writer beside the server is refused)")
         return self._db.write()
+
+    def verify(self):
+        """Re-hash the store (store/verify.py): every blob against its name, every version's blobs present, every
+        completed version's manifest digest against its files; returns a `verify.Report`."""
+        from .verify import verify_store
+
+        return verify_store(self)
 
     def export_metadata(self, folder: Path | str) -> dict[str, int]:
         """Readable JSON Lines copies of the metadata (db.export); returns the row count per file."""
@@ -515,13 +549,16 @@ class LocalStore:
             self._check(connection, project, name)
             self._save(connection, project, name, self._merged(self._running(connection, project, name, version), entries))
 
-    def complete_version(self, project: str, name: str, version: int, inputs=None) -> None:
-        """Freeze a version and move `latest` to it; `inputs` are the references it consumed."""
+    def complete_version(self, project: str, name: str, version: int, inputs=None, digest: str | None = None) -> None:
+        """Freeze a version and move `latest` to it; `inputs` are the references it consumed. The version's manifest
+        digest is computed from its files; a `digest` the client supplies must equal it (else Conflict, and nothing changes)."""
         with self._write() as connection:
             self._check(connection, project, name)
             state = self._running(connection, project, name, version)
             exact = self._exact_inputs(connection, inputs)
-            self._save(connection, project, name, {**state, "status": "completed", "completed": now(), "inputs": exact})
+            actual = manifest_digest(state["files"])
+            _check_digest(digest, actual, f"{project}:{name}@v{version}")
+            self._save(connection, project, name, {**state, "status": "completed", "completed": now(), "inputs": exact, "digest": actual})
             self._completed(connection, project, name, version, exact)
 
     def fail_version(self, project: str, name: str, version: int) -> None:
@@ -531,12 +568,14 @@ class LocalStore:
             self._save(connection, project, name, {**state, "status": "failed", "completed": now()})
 
     def publish(self, project: str, name: str, entries: list[dict], label: str | None = None, metadata: dict | None = None,
-                inputs=None, aliases=(), source: dict | None = None, uid: str | None = None) -> int:
+                inputs=None, aliases=(), source: dict | None = None, uid: str | None = None,
+                digest: str | None = None) -> int:
         """Start, fill, and complete a version in one step, in one transaction (all of it is stored, or none).
 
         When the latest completed version already has these files, inputs, and metadata, no version
         is created and its number is returned (the aliases are still applied). With `uid`, publishing
-        the same version again returns its number; a known uid with other content is a Conflict.
+        the same version again returns its number; a known uid with other content is a Conflict. A `digest` the
+        client supplies must equal the manifest digest of the entries (digest.py), else Conflict.
         """
         clean = sorted(clean_entries(entries), key=lambda entry: entry["path"])
         _check_tree(clean)
@@ -545,6 +584,8 @@ class LocalStore:
             raise StoreError(f"{len(missing)} blobs are not in the store yet, e.g. {missing[0]}")
         for alias in aliases:
             refs.valid_word(alias, "alias")
+        actual = manifest_digest(clean)
+        _check_digest(digest, actual, f"{project}:{name}")
         with self._write() as connection:
             self._check(connection, project, name)
             exact = self._exact_inputs(connection, inputs)
@@ -553,14 +594,15 @@ class LocalStore:
                                       (project, name)).fetchone()
             state = self._state(connection, project, name, head[0]) if head else None
             if known is not None:
-                if known[:2] != (project, name) or known[2]["status"] != "completed" or not _same(known[2], clean, exact, metadata or {}):
+                if known[:2] != (project, name) or known[2]["status"] != "completed" or not _same(known[2], actual, exact, metadata or {}):
                     raise Conflict(f"uid {uid} already names {refs.exact(known[0], known[1], known[2]['version'])} with other content")
                 version = known[2]["version"]
-            elif state is not None and _same(state, clean, exact, metadata or {}):
+            elif state is not None and _same(state, actual, exact, metadata or {}):
                 version = state["version"]
             else:
                 record = self._new(connection, project, name, label, metadata, source, uid)
-                record = {**record, "files": clean, "status": "completed", "completed": now(), "inputs": exact}
+                record = {**record, "files": clean, "status": "completed", "completed": now(), "inputs": exact,
+                          "digest": actual}
                 self._save(connection, project, name, record, created=True)
                 version = record["version"]
                 self._completed(connection, project, name, version, exact)
