@@ -3,7 +3,7 @@
 - A version published on this machine and still pending is usable at once: `name@<uid>` names it,
   and an alias it was published with, its label, or `latest` resolve to it when it is newer than what
   the server (or the last known answer) has; a warning says it is pending. Its read-only folder is in
-  the state root, and a pull records `project:name@<uid>` as the input (the server turns that into
+  the data root, and a pull records `project:name@<uid>` as the input (the server turns that into
   `@v<n>` when the consumer is sent, after the input: records go in uid order).
 - An exact reference (`name@v<n>` whose uid this machine has seen, or `name@<uid>`) whose version is in the
   cache is answered from the cache without asking the server at all.
@@ -115,7 +115,7 @@ def _warn(line: str) -> None:
 
 
 def local_folder(store, project: str, name: str, version: dict) -> Path:
-    """The read-only folder of a resolved version: a pending one's in the state root, else the cache's (made once)."""
+    """The read-only folder of a resolved version: a pending one's in the data root, else the cache's (made once)."""
     if version.get("pending"):
         folder = replica.pending_files(version["uid"])
         if folder is not None:

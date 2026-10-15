@@ -1,16 +1,16 @@
 """The local replica: every version this machine knows, one record per version uid, in two roots.
 
-    <state>/versions/<uid>/manifest.json            a version the server does not have yet (sync pending | running | rejected)
-    <state>/versions/<uid>/files/                   its files, read-only (made on first use: what `pull` returns)
-    <state>/versions/<uid>/heartbeat                a running version's owner: {"time", "host", "pid"}, rewritten every sync
-    <state>/versions/<uid>/.flushing-<host>-<pid>   a flusher's claim on it: {"time", "host", "pid"}
-    <state>/blobs/<aa>/<sha256>                     the contents those versions need
-    <state>/stores/<store-uid>.json                 one store server: {"url", "uid", "contact", "artifacts":
+    <data>/versions/<uid>/manifest.json            a version the server does not have yet (sync pending | running | rejected)
+    <data>/versions/<uid>/files/                   its files, read-only (made on first use: what `pull` returns)
+    <data>/versions/<uid>/heartbeat                a running version's owner: {"time", "host", "pid"}, rewritten every sync
+    <data>/versions/<uid>/.flushing-<host>-<pid>   a flusher's claim on it: {"time", "host", "pid"}
+    <data>/blobs/<aa>/<sha256>                     the contents those versions need
+    <data>/stores/<store-uid>.json                 one store server: {"url", "uid", "contact", "artifacts":
                                                     {"project:name": {selector: {"uid", "version"}}}} (last known answers)
     <cache>/versions/<uid>/manifest.json, files/    a synced version (store/cache.py), with its last access time
     <cache>/blobs/<aa>/<sha256>                     downloaded contents
 
-`<state>` (`$CAIRN_STATE_DIR`, else `$XDG_STATE_HOME/cairn`, else `~/.local/state/cairn`) is durable:
+`<data>` (`$CAIRN_DATA_DIR`, else `<project>/.cairn`, else `~/.local/share/cairn`; see store/cache.py) is durable:
 what only this machine has lives there, never only in the cache. `<cache>` (`$CAIRN_CACHE_DIR`) is
 throwaway: it can be node-local scratch, deleted at any time, or trimmed by `cairn prune`.
 
@@ -30,13 +30,14 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 from ..store.blobs import now
-from ..store.cache import (FILES, RECORD, blob_cache, cache_root, files_folder, hostname, install, link_files, place, read_json,
-                           read_record, remove, scratch, state_root, version_folder, write_json)
+from ..store.cache import (FILES, RECORD, blob_cache, cache_root, data_root, files_folder, hostname, install, link_files,
+                           old_state_root, place, read_json, read_record, remove, scratch, version_folder, write_json)
 from ..store.errors import StoreError
 from ..store.refs import Ref
 
@@ -69,11 +70,11 @@ def epoch(stamp: str | None) -> float:
 
 
 def folder_of(uid: str) -> Path:
-    return version_folder(state_root(), uid)
+    return version_folder(data_root(), uid)
 
 
 def load(uid: str) -> dict | None:
-    """The state record of a version uid (None if this machine has none: never made here, or synced)."""
+    """The local record of a version uid (None if this machine has none: never made here, or synced)."""
     ensure_layout()
     record = read_record(folder_of(uid))
     return record if record and record.get("sync") != "synced" else None
@@ -84,10 +85,10 @@ def save(record: dict) -> None:
 
 
 def records() -> list[dict]:
-    """Every state record (any store), oldest first (by uid)."""
+    """Every local record (any store), oldest first (by uid)."""
     ensure_layout()
     found = []
-    base = state_root() / "versions"
+    base = data_root() / "versions"
     if not base.is_dir():
         return found
     for folder in base.iterdir():
@@ -139,13 +140,13 @@ def exact_ref(project: str, name: str, manifest: dict) -> str:
     return str(Ref(project, name, f"v{number}" if number is not None else manifest["uid"]))
 
 
-def state_blob(sha: str) -> Path:
-    return blob_cache(state_root(), sha)
+def data_blob(sha: str) -> Path:
+    return blob_cache(data_root(), sha)
 
 
 def blob_source(sha: str) -> Path | None:
-    """A local copy of a content: the state's, else the cache's."""
-    for root in (state_root(), cache_root()):
+    """A local copy of a content: the data root's, else the cache's."""
+    for root in (data_root(), cache_root()):
         path = blob_cache(root, sha)
         if path.is_file():
             return path
@@ -153,11 +154,11 @@ def blob_source(sha: str) -> Path | None:
 
 
 def pending_files(uid: str) -> Path | None:
-    """The read-only `files/` folder of a state record, made from the state's blobs on first use (None if the record left)."""
+    """The read-only `files/` folder of a local record, made from the data root's blobs on first use (None if the record left)."""
     record = load(uid)
     if record is None:
         return None
-    target = files_folder(state_root(), uid)
+    target = files_folder(data_root(), uid)
     if target.is_dir():
         return target
     build = scratch(target)
@@ -165,7 +166,7 @@ def pending_files(uid: str) -> Path | None:
     def blob(entry):
         source = blob_source(entry["sha256"])
         if source is None:
-            raise StoreError(f"{record['project']}:{record['name']}@{uid}: the contents of {entry['path']} left {state_root()}")
+            raise StoreError(f"{record['project']}:{record['name']}@{uid}: the contents of {entry['path']} left {data_root()}")
         return source
 
     try:
@@ -182,15 +183,15 @@ def pending_files(uid: str) -> Path | None:
 
 
 def needed() -> set[str]:
-    """The contents some state record still needs."""
+    """The contents some local record still needs."""
     return {item["sha256"] for record in records() for item in record.get("files", []) if "sha256" in item}
 
 
 def drop_blobs(shas, keep_in_cache: bool) -> None:
-    """Remove state blobs no record needs any more (moved to the cache when it shares the filesystem)."""
+    """Remove data-root blobs no record needs any more (moved to the cache when it shares the filesystem)."""
     keep = needed()
     for sha in set(shas) - keep:
-        blob = state_blob(sha)
+        blob = data_blob(sha)
         if not blob.is_file():
             continue
         if keep_in_cache:
@@ -207,23 +208,23 @@ def drop_blobs(shas, keep_in_cache: bool) -> None:
 def same_filesystem() -> bool:
     try:
         (cache_root() / "versions").mkdir(parents=True, exist_ok=True)
-        (state_root() / "versions").mkdir(parents=True, exist_ok=True)
-        return os.stat(cache_root() / "versions").st_dev == os.stat(state_root() / "versions").st_dev
+        (data_root() / "versions").mkdir(parents=True, exist_ok=True)
+        return os.stat(cache_root() / "versions").st_dev == os.stat(data_root() / "versions").st_dev
     except OSError:
         return False
 
 
 def same_root() -> bool:
-    return os.path.realpath(cache_root()) == os.path.realpath(state_root())
+    return os.path.realpath(cache_root()) == os.path.realpath(data_root())
 
 
 def promote(record: dict, manifest: dict, store_uid: str | None) -> None:
-    """A version the server now has: from the state root into the cache (the record keeps its uid).
+    """A version the server now has: from the data root into the cache (the record keeps its uid).
 
     The record is marked synced first, so a concurrent flusher skips it. When both roots share a
     filesystem, the version folder is renamed into the cache (its files and blobs stay hard links, no
-    copy); otherwise the state copy is dropped and the cache downloads the version on its next pull.
-    Blobs no other state record needs leave the state root either way."""
+    copy); otherwise the data-root copy is dropped and the cache downloads the version on its next pull.
+    Blobs no other local record needs leave the data root either way."""
     uid = record["uid"]
     folder = folder_of(uid)
     synced = {"uid": uid, "sync": "synced", "store": store_uid, "project": record["project"], "name": record["name"],
@@ -274,7 +275,7 @@ def _gone(record, entry):
 
 
 def drop(record: dict) -> None:
-    """Forget a state record (a failed version the server now has, or one it already had)."""
+    """Forget a local record (a failed version the server now has, or one it already had)."""
     folder = folder_of(record["uid"])
     write_json(folder / RECORD, {**record, "sync": "synced"})
     remove(folder)
@@ -349,7 +350,7 @@ def _stale(path: Path, timeout: float) -> bool:
 
 
 def claim(uid: str, timeout: float) -> Path | None:
-    """Claim a state record for sending: exclusively create `.flushing-<host>-<pid>` (a timestamp in it).
+    """Claim a local record for sending: exclusively create `.flushing-<host>-<pid>` (a timestamp in it).
 
     None when another live claim exists (stale ones, older than `timeout` or of a dead pid on this host, are
     ignored) or the record left. Two flushers that claim at the same moment both see both claims and back
@@ -406,14 +407,14 @@ def store_key(url: str) -> str:
 
 
 def _store_path(key: str) -> Path:
-    return state_root() / "stores" / f"{key}.json"
+    return data_root() / "stores" / f"{key}.json"
 
 
 def known_uid(url: str) -> str | None:
     """The uid of the server at `url`, if it ever answered."""
     ensure_layout()
     url = url.rstrip("/")
-    folder = state_root() / "stores"
+    folder = data_root() / "stores"
     if not folder.is_dir():
         return None
     for path in folder.glob("*.json"):
@@ -482,7 +483,7 @@ def remember_aliases(key: str | None, project: str, name: str, aliases: dict[str
 
 
 def stores() -> list[dict]:
-    folder = state_root() / "stores"
+    folder = data_root() / "stores"
     return [read_json(path) or {} for path in sorted(folder.glob("*.json"))] if folder.is_dir() else []
 
 
@@ -493,10 +494,14 @@ _checked: set[tuple[str, str]] = set()
 
 def ensure_layout() -> None:
     """Convert the layout before the replica, once per process and pair of roots (see the module doc)."""
-    roots = (str(cache_root()), str(state_root()))
+    roots = (str(cache_root()), str(data_root()))
     if roots in _checked:
         return
     _checked.add(roots)
+    try:
+        move_old_state()
+    except OSError:
+        pass
     cache = cache_root()
     if (cache / LAYOUT).is_file() or not cache.is_dir():
         return
@@ -505,6 +510,48 @@ def ensure_layout() -> None:
         write_json(cache / LAYOUT, 2)
     except OSError:
         _checked.discard(roots)
+
+
+def move_old_state() -> list[str]:
+    """Move pending records from the data root's predecessor (`$XDG_STATE_HOME/cairn`, else
+    `~/.local/state/cairn`) into the data root, with their blobs and store files; returns what was moved.
+    The old folder is removed once empty. (Nothing moves when `$CAIRN_STATE_DIR` named the old folder: it
+    is the data root then.)"""
+    old, new = old_state_root(), data_root()
+    if not (old / "versions").is_dir() or os.path.realpath(old) == os.path.realpath(new):
+        return []
+    moved = []
+    for folder in sorted((old / "versions").iterdir()):
+        record = read_record(folder)
+        if ".tmp-" in folder.name or not record:
+            continue
+        target = version_folder(new, record["uid"])
+        if target.exists():
+            remove(folder)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.rename(folder, target)
+        except OSError:
+            shutil.copytree(folder, target, symlinks=True)
+            remove(folder)
+        for item in record.get("files", []):
+            if "sha256" in item and blob_cache(old, item["sha256"]).is_file() and not data_blob(item["sha256"]).is_file():
+                _copy_blob(blob_cache(old, item["sha256"]), data_blob(item["sha256"]))
+        moved.append(record["uid"])
+    for path in sorted((old / "stores").glob("*.json")) if (old / "stores").is_dir() else []:
+        if not (new / "stores" / path.name).exists():
+            (new / "stores").mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, new / "stores" / path.name)
+    for name in ("versions", "blobs", "stores"):
+        shutil.rmtree(old / name, ignore_errors=True)
+    try:
+        old.rmdir()
+    except OSError:
+        pass
+    if moved:
+        print(f"cairn: moved {len(moved)} pending versions from {old} to {new}", file=sys.stderr)
+    return moved
 
 
 def migrate(cache: Path) -> list[str]:
@@ -543,10 +590,10 @@ def migrate(cache: Path) -> list[str]:
             if isinstance(entry, dict) and entry.get("uid") and not load(entry["uid"]):
                 save(_converted(entry, file.parent.name))
                 for item in entry.get("files", []):
-                    if "sha256" in item and not state_blob(item["sha256"]).is_file():
+                    if "sha256" in item and not data_blob(item["sha256"]).is_file():
                         source = blob_cache(cache, item["sha256"])
                         if source.is_file():
-                            _copy_blob(source, state_blob(item["sha256"]))
+                            _copy_blob(source, data_blob(item["sha256"]))
                 done.append(f"queued {entry['uid']}")
             file.unlink(missing_ok=True)
         shutil.rmtree(outbox, ignore_errors=True)
@@ -592,7 +639,7 @@ def _copy_blob(source: Path, target: Path) -> None:
 
 
 def _converted(entry: dict, key: str) -> dict:
-    """An outbox entry as a state record."""
+    """An outbox entry as a local record."""
     old = entry.get("state")
     sync = {"pending": "pending", "completed": "pending", "failed": "pending", "running": "running", "rejected": "rejected"}.get(old, "pending")
     status = {"failed": "failed", "running": "running"}.get(old, "completed")

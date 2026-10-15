@@ -1,8 +1,8 @@
 """Sending the replica's pending versions to their store server, and learning what it knows.
 
-A publish to a store server first commits the version to the replica (replica.py): a state record
+A publish to a store server first commits the version to the replica (replica.py): a local record
 with the manifest entries, label, metadata, inputs, aliases, and source, and the contents it needs
-cloned (copy-on-write, `clonefile` / `FICLONE`) or copied from the source folder into the state's
+cloned (copy-on-write, `clonefile` / `FICLONE`) or copied from the source folder into the data root's
 blobs and hashed again there, so the upload never reads the source folder: a file that changes after
 publishing does not change the pending version, and a file that changed between hashing and staging
 is published as staged. (A hard link would share the source's inode, so a job rewriting a file in
@@ -21,7 +21,7 @@ Kinds and sync states:
 
 Sending is idempotent because every request carries the version's uid: the server answers a version
 it already has with that version, so a record sent twice (a crash after the server's answer, two hosts
-flushing one shared state root) creates one version. To avoid the double work, a flusher claims a
+flushing one shared data root) creates one version. To avoid the double work, a flusher claims a
 record first (`replica.claim`: an exclusively created `.flushing-<host>-<pid>` with a timestamp; stale
 claims are ignored). Records are sent in uid order, which is creation order, so a pending version that
 consumed another pending version (its input is `project:name@<uid>`) follows it, and the server turns
@@ -94,8 +94,8 @@ def _digest(path: Path) -> tuple[str, int]:
 
 
 def _stage_one(entry: dict, source: Path, cache: HashCache) -> bool:
-    """Clone one file into the state's blobs (False if it left meanwhile); fixes the entry if the file changed."""
-    target = replica.state_blob(entry["sha256"])
+    """Clone one file into the data root's blobs (False if it left meanwhile); fixes the entry if the file changed."""
+    target = replica.data_blob(entry["sha256"])
     if target.is_file():
         return True
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -106,7 +106,7 @@ def _stage_one(entry: dict, source: Path, cache: HashCache) -> bool:
         if sha != entry["sha256"]:  # the file changed after it was hashed: publish what was staged
             cache.forget(source)
             entry.update(sha256=sha, size=size)
-            target = replica.state_blob(sha)
+            target = replica.data_blob(sha)
             target.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(temporary, 0o444)
         place(temporary, target)
@@ -118,7 +118,7 @@ def _stage_one(entry: dict, source: Path, cache: HashCache) -> bool:
 
 
 def stage(local: Path, config, cache: HashCache) -> tuple[list[dict], dict[str, Path]]:
-    """Manifest entries for a folder (its inputs record excluded), each blob kept in the state root.
+    """Manifest entries for a folder (its inputs record excluded), each blob kept in the data root.
 
     Returns (entries, {sha: source file}) — the sources let `restage` put back a blob that a concurrent
     flush dropped before the record naming it was saved."""
@@ -140,7 +140,7 @@ def stage(local: Path, config, cache: HashCache) -> tuple[list[dict], dict[str, 
 def restage(entries: list[dict], sources: dict[str, Path], cache: HashCache) -> None:
     """After the record is saved: any blob a concurrent flush removed in between is staged again."""
     for entry in entries:
-        if "sha256" in entry and not replica.state_blob(entry["sha256"]).is_file():
+        if "sha256" in entry and not replica.data_blob(entry["sha256"]).is_file():
             sha = entry["sha256"]
             if not _stage_one(entry, sources[sha], cache) or entry["sha256"] != sha:
                 raise StoreError(f"{sources[sha]} changed while it was published; publish again")
@@ -159,7 +159,7 @@ class Replica:
     # ------------------------------------------------------------ records
 
     def records(self) -> list[dict]:
-        """This server's state records, oldest first (by uid)."""
+        """This server's local records, oldest first (by uid)."""
         uid = replica.known_uid(self.remote.url) or self.remote._uid
         return [record for record in replica.records() if replica.belongs(record, self.remote.url, uid)]
 
@@ -191,14 +191,14 @@ class Replica:
     # ------------------------------------------------------------- sending
 
     def _upload(self, files: list[dict]) -> None:
-        """Upload the blobs the server lacks, from the state root (or the cache)."""
+        """Upload the blobs the server lacks, from the data root (or the cache)."""
         sources = {}
         missing = set(self.remote.missing(files)) if any("sha256" in item for item in files) else set()
         for item in files:
             if item.get("sha256") in missing:
                 blob = replica.blob_source(item["sha256"])
                 if blob is None:
-                    raise StoreError(f"the staged contents of {item['path']} ({item['sha256'][:12]}) left {replica.state_root()}")
+                    raise StoreError(f"the staged contents of {item['path']} ({item['sha256'][:12]}) left {replica.data_root()}")
                 sources[item["sha256"]] = (blob, item["size"])
         if sources:
             self.remote.upload(sources, None, quiet=True)
@@ -396,7 +396,7 @@ def start_uploader(remote: RemoteStore, first_delay: float = 1.0, max_delay: flo
 
 
 def has_pending(url: str) -> bool:
-    """Whether anything is pending or running for this server (a look at the state root only, no network)."""
+    """Whether anything is pending or running for this server (a look at the data root only, no network)."""
     uid = replica.known_uid(url)
     return any(record["sync"] in ("pending", "running") and replica.belongs(record, url, uid) for record in replica.records())
 
@@ -415,7 +415,7 @@ def quick(remote: RemoteStore, timeout: float = 10) -> RemoteStore:
 def flush_configured(config, report=None, timeout: float = 10) -> dict | None:
     """Send what is pending for the configured store server, if anything is (the start of every store command).
 
-    Looks at the state root first, so a command with nothing pending makes no request. Never raises for a
+    Looks at the data root first, so a command with nothing pending makes no request. Never raises for a
     server that does not answer: what is left stays pending."""
     url = (config.store.get("url") or "").rstrip("/")
     if not url or not has_pending(url):

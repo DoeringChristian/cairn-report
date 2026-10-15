@@ -3,8 +3,8 @@
 Synced versions (`<cache>/versions/<uid>/`) go, least recently used first, when their `accessed` time
 (written into the record by pulls, not the filesystem's atime) is older than `older_than`, and then until
 the cache is under `max_size`. Blobs no remaining cached version references go too, except those a
-state record (pending, running, rejected) needs, and except blobs written in the last hour (a pull may
-be about to link them). Pending and running versions live in the state root and are never pruned; when
+local record (pending, running, rejected) needs, and except blobs written in the last hour (a pull may
+be about to link them). Pending and running versions live in the data root and are never pruned; when
 both roots are the same folder, their records are skipped as well. Leftover scratch names
 (`.tmp-<host>-<pid>-...`) older than a day are removed.
 """
@@ -57,7 +57,7 @@ def prune(older_than: float | None = None, max_size: int | None = None, dry_run:
 
     Returns {"versions": [uids removed], "blobs": count, "freed": bytes, "size": bytes left}."""
     root = cache_root()
-    keep = replica.needed()  # contents a state record needs
+    keep = replica.needed()  # contents a local record needs
     versions, inodes = [], {}  # (accessed, uid, folder, shas); inode -> [size, paths left]
     for record in replica.synced_records():
         folder = root / "versions" / record["uid"]

@@ -4,13 +4,15 @@
                                            "version", "manifest", "accessed"}
     <cache>/versions/<uid>/files/          the version's files, read-only: what `pull` returns
     <cache>/blobs/<aa>/<sha256>            file contents downloaded from a store server
-    <state>/...                            versions not on the server yet (cairn.client.replica)
+    <data>/...                             versions not on the server yet (cairn.client.replica)
 
 `<cache>` is throwaway: `$CAIRN_CACHE_DIR`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`; on a
-cluster it may be node-local scratch, and `cairn prune` trims it. `<state>` is durable: `$CAIRN_STATE_DIR`,
-else `$XDG_STATE_HOME/cairn`, else `~/.local/state/cairn`; it holds what only this machine has (pending
-versions and their blobs) and must sit on persistent storage. A version's folder is named by its uid,
-never by project, name, and number, so two stores never collide.
+cluster it may be node-local scratch, and `cairn prune` trims it. `<data>` is durable (the data root):
+`$CAIRN_DATA_DIR`, else `$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`. It holds what only this
+machine has (pending versions and their blobs; real data, not a cache) and must sit on persistent
+storage with room for it: on a cluster with a small home quota, point `CAIRN_DATA_DIR` at a project or
+work filesystem. A version's folder is named by its uid, never by project, name, and number, so two
+stores never collide.
 
 Either root may sit on NFS and be filled by many jobs at once, so nothing locks: a folder, a blob, or a
 record is written under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place in
@@ -25,6 +27,7 @@ import os
 import secrets
 import shutil
 import socket
+import sys
 import time
 from pathlib import Path
 
@@ -34,10 +37,19 @@ from .errors import NotFound, StoreError
 from .inputs import record_input
 
 CACHE_ENV = "CAIRN_CACHE_DIR"
-STATE_ENV = "CAIRN_STATE_DIR"
+DATA_ENV = "CAIRN_DATA_DIR"
+LEGACY_STATE_ENV = "CAIRN_STATE_DIR"  # read for one release, with a warning
 RECORD = "manifest.json"  # a version folder's record; the folder counts only once it exists
 FILES = "files"
 ACCESS_EVERY = 60.0  # seconds: how stale `accessed` may get before a pull rewrites it
+
+_override: dict[str, Path | None] = {"data": None}
+_warned: set[str] = set()
+
+
+def use_data_dir(path: Path | str | None) -> None:
+    """Use this folder as the data root, whatever the environment says (`cairn sync --data-dir`); None resets."""
+    _override["data"] = Path(path).expanduser().resolve() if path else None
 
 
 def cache_root() -> Path:
@@ -47,10 +59,24 @@ def cache_root() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "cairn"
 
 
-def state_root() -> Path:
-    """`$CAIRN_STATE_DIR`, else `$XDG_STATE_HOME/cairn`, else `~/.local/state/cairn`."""
-    if os.environ.get(STATE_ENV):
-        return Path(os.environ[STATE_ENV]).expanduser()
+def data_root() -> Path:
+    """`--data-dir`, else `$CAIRN_DATA_DIR`, else `$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`.
+
+    The deprecated `$CAIRN_STATE_DIR` is read (with a warning) when `$CAIRN_DATA_DIR` is not set."""
+    if _override["data"] is not None:
+        return _override["data"]
+    if os.environ.get(DATA_ENV):
+        return Path(os.environ[DATA_ENV]).expanduser()
+    if os.environ.get(LEGACY_STATE_ENV):
+        if LEGACY_STATE_ENV not in _warned:
+            _warned.add(LEGACY_STATE_ENV)
+            print(f"warning: {LEGACY_STATE_ENV} is deprecated: rename it to {DATA_ENV}", file=sys.stderr)
+        return Path(os.environ[LEGACY_STATE_ENV]).expanduser()
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "cairn"
+
+
+def old_state_root() -> Path:
+    """Where earlier releases kept pending versions: `$XDG_STATE_HOME/cairn`, else `~/.local/state/cairn`."""
     return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "cairn"
 
 

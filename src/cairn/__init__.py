@@ -27,7 +27,7 @@ along as the version's `inputs`, which is how lineage is recorded without any fr
 
 Every version has a uid (UUIDv7), and `name@<uid>` names it as exactly as `name@v<n>`. Publishing to a
 store server goes through a local replica, so it works while the server is down: the version is pending
-in the durable state root (`$CAIRN_STATE_DIR`, else `~/.local/state/cairn`), usable at once by its uid,
+in the durable data root (`$CAIRN_DATA_DIR`, else `~/.local/share/cairn`), usable at once by its uid,
 and sent later (`cairn status`, `cairn sync`). Pulls of exact versions, or of aliases by their last known
 resolution, work from the throwaway cache root (`$CAIRN_CACHE_DIR`, else `~/.cache/cairn`).
 

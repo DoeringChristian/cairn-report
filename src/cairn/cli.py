@@ -405,6 +405,9 @@ def main(argv: list[str] | None = None) -> None:
     prune.add_argument("--max-size", help="then remove the least recently pulled until the cache is under this, e.g. 20G")
     prune.add_argument("--dry-run", action="store_true", help="only say what would be removed")
     prune.set_defaults(run=cmd_prune)
+    for command in (sync, status):
+        command.add_argument("--data-dir", type=Path, help="the data root to use (default: $CAIRN_DATA_DIR, else ~/.local/share/cairn): "
+                             "send the pending versions kept there")
     for command in (artifacts, versions, show, sync, status):
         command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
 
@@ -454,6 +457,9 @@ def main(argv: list[str] | None = None) -> None:
     args.command = command
     if command and args.run is not cmd_publish:
         parser.error("only `publish` takes a command after --")
+    from .store import cache
+
+    cache.use_data_dir(getattr(args, "data_dir", None))
     if args.run in (cmd_publish, cmd_pull, cmd_project, cmd_artifacts, cmd_versions, cmd_show, cmd_status, cmd_build):
         flush_first(args)
     args.run(args)

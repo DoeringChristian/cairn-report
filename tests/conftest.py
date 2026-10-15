@@ -70,10 +70,15 @@ def make_run(project: Path, status: str = "completed") -> Path:
 
 @pytest.fixture(autouse=True)
 def isolated_roots(tmp_path, monkeypatch):
-    """Every test gets its own replica state root (and no inherited root overrides)."""
+    """Every test gets its own replica data root and cache (and no inherited root overrides)."""
+    from cairn.store import cache
+
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path / "data"))  # tests that check the default delete this
     monkeypatch.delenv("CAIRN_STATE_DIR", raising=False)
+    cache.use_data_dir(None)
     monkeypatch.delenv("CAIRN_CACHE_DIR", raising=False)
 
 

@@ -9,7 +9,7 @@ the final sync must succeed. The version completes when the command exits 0, or 
 stopped without a command, and fails otherwise, so `latest` never moves to a broken run.
 
 On a store server both go through the local replica (replica.py, sync.py): a running version is a
-state record first (sync `running`) and is created on the server (under its uid) as soon as the server
+local record first (sync `running`) and is created on the server (under its uid) as soon as the server
 answers, so a job starts and finishes while the server is down; its completion or failure turns it
 pending and is sent like any publish. While it runs, a heartbeat thread rewrites its `heartbeat`
 (time, host, pid) every few seconds; a flusher on any host fails the version once the heartbeat is

@@ -39,7 +39,7 @@ src/cairn/
 ├── migrate.py    the one-off conversion of an old hub (knows the old report layout)
 ├── store/        core, no HTTP: refs, uids (UUIDv7), local (LocalStore), blobs, tokens, cache (the two roots, pull, uid-keyed, NFS-safe), errors, inputs
 ├── client/       http (Client, scan/hash/upload), remote (RemoteStore), objects (connect, Store, Project, Artifact, Version),
-│                 publishing (publish, Publication, --watch), replica (the local replica: state and cache roots,
+│                 publishing (publish, Publication, --watch), replica (the local replica: data and cache roots,
 │                 records, claims, heartbeats, store files, migration), sync (sending pending versions), prune,
 │                 offline (resolution through the replica), open (open_store)
 ├── server/       app (handler + routes), auth, files (/files, Range, ETag), spawn (UI child); exports make_server, serve_store
@@ -108,8 +108,8 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
      `cairn versions <name>`, `cairn show <ref>` (metadata, files, lineage). They work the same way
      against local and remote stores.
    - **Offline publishing:**
-     - every publish commits first to the local replica (pending, in the state root
-       `~/.local/state/cairn/`): manifest, blob references, inputs;
+     - every publish commits first to the local replica (pending, in the data root
+       `~/.local/share/cairn/`, or `$CAIRN_DATA_DIR`): manifest, blob references, inputs;
      - a background uploader sends it when the server answers; the server assigns the version
        number at upload, and until then the version is pending;
      - `cairn sync` sends the pending versions by hand, and `cairn status` shows what is pending;
@@ -136,8 +136,11 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
        records that version as the input;
      - `--offline` forces the fallback.
    - **The local replica** (owner-approved, replaces the outbox; on branch `replica`):
-     - two roots: `CAIRN_STATE_DIR` (durable, default `~/.local/state/cairn`) holds pending and running
-       versions and their blobs; `CAIRN_CACHE_DIR` (throwaway, may be node-local scratch) holds synced
+     - two roots: `CAIRN_DATA_DIR` (durable, default `~/.local/share/cairn`; on a cluster point it at a
+       persistent project filesystem, since home quotas are small) holds pending and running versions and
+       their blobs, like W&B's offline runs; `CAIRN_STATE_DIR` is read for one release with a warning and
+       old `~/.local/state/cairn` records are moved over on first use; `cairn sync --data-dir PATH` flushes
+       a given data root from a login node; `CAIRN_CACHE_DIR` (throwaway, may be node-local scratch) holds synced
        versions and downloads; pending data never lives only in the cache;
      - one record per version, `versions/<uid>/manifest.json` (sync `synced | pending | rejected |
        running`), files under `versions/<uid>/files/` (what `pull` returns); `stores/<store-uid>.json`

@@ -6,7 +6,7 @@ It offers what `cairn` and `Publication` use: projects, blob upload, versions, a
 
 A server that does not answer raises `Unreachable` (a StoreError), which publishing (the replica's
 pending versions) and offline pulls catch. `uid` is the server's store uid (`GET /api/v2/store`),
-remembered in the replica's state root so it is known offline too.
+remembered in the replica's data root so it is known offline too.
 """
 
 from __future__ import annotations

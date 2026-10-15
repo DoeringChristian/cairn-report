@@ -407,7 +407,7 @@ class Version:
             record_input(self.ref)
 
     def pull(self, *, record: bool = True) -> Path:
-        """The whole version, read-only (`<cache>/versions/<uid>/files/`, or `<state>/versions/<uid>/files/` while it
+        """The whole version, read-only (`<cache>/versions/<uid>/files/`, or `<data>/versions/<uid>/files/` while it
         is pending); recorded as an input."""
         self._usable()
         folder = fallback.local_folder(self.artifact.backend, self.artifact.project.name, self.artifact.name, self.manifest)

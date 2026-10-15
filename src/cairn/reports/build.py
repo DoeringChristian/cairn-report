@@ -52,7 +52,7 @@ from ..config import Config, load_config
 from ..formats import METRICS, fold_scalars, read_jsonl
 from ..client.offline import local_folder, resolve_version
 from ..client.replica import exact_ref
-from ..store import StoreError, default_root, refs, state_root
+from ..store import StoreError, default_root, refs, data_root
 
 PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
@@ -362,7 +362,7 @@ class Guard:
     def __init__(self, build: "Build", line):
         self.build, self.line, self.busy = build, line, False
         self.allowed = build.allowed_roots()
-        self.watched = [real(PROJECT), real(default_root()), real(state_root()),
+        self.watched = [real(PROJECT), real(default_root()), real(data_root()),
                         *([real(build.store_root)] if build.store_root else [])]
         self.environment = environment_roots()
         self.violations: list[str] = []
