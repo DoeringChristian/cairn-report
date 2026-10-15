@@ -99,7 +99,7 @@ def test_a_draft_published_while_the_server_is_down_is_pending(configured, env):
         (run.path / "a.txt").write_text("a")
     version = run.version
     assert version.pending and version.number is None and version.uid == run.uid
-    assert not run.path.exists()  # its files are in the replica now
+    assert not run.path.exists()  # its files are in the repo's blobs now
     assert (cairn.pull(version.ref) / "a.txt").read_text() == "a"
     configured.start()
     store.sync()
