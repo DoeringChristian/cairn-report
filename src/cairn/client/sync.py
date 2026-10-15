@@ -37,7 +37,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..store import INPUTS_FILE
+from ..store import drop_inputs
 from ..store.blobs import now
 from ..store.cache import hostname, place, scratch
 from ..store.fs import clone_or_copy
@@ -92,7 +92,7 @@ def stage(local: Path, config, cache: HashCache) -> tuple[list[dict], dict[str, 
     Returns (entries, {sha: source file}) — the sources let `restage` put back a blob that a concurrent
     flush dropped before the record naming it was saved."""
     files = scan(local, "", config, exclude=config.store.get("exclude", []))
-    files.pop(INPUTS_FILE, None)
+    drop_inputs(files)
     entries, _ = entries_for(files, cache)
     kept, sources = [], {}
     for entry in entries:

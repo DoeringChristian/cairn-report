@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 
 from ..config import Config, load_config
-from ..store import INPUTS_ENV, INPUTS_FILE, LocalStore, StoreError, read_inputs, refs
+from ..store import INPUTS_ENV, INPUTS_FILE, LocalStore, StoreError, drop_inputs, read_inputs, refs
 from ..store.digest import manifest_digest
 from ..store.errors import Unreachable
 from .http import HashCache, entries_for, scan  # noqa: F401
@@ -53,7 +53,7 @@ def _target(name: str, store: LocalStore | RemoteStore) -> tuple[str, str]:
 def stage_local(store: LocalStore, local: Path, config: Config, cache: HashCache) -> list[dict]:
     """Entries for a folder's files (its inputs record excluded) with their blobs put in a local store."""
     files = scan(local, "", config, exclude=config.store.get("exclude", []))
-    files.pop(INPUTS_FILE, None)
+    drop_inputs(files)
     entries, sources = entries_for(files, cache)
     cache.save()
     for sha in store.missing(entries):
@@ -62,10 +62,12 @@ def stage_local(store: LocalStore, local: Path, config: Config, cache: HashCache
 
 
 def publish(name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-            inputs=None, store: LocalStore | RemoteStore | Path | str | None = None, config: Config | None = None) -> int | None:
+            inputs=None, store: LocalStore | RemoteStore | Path | str | None = None, config: Config | None = None,
+            allow_incomplete: bool = False) -> int | None:
     """Store a folder as the next version of artifact `name`; returns the version number (`Artifact.publish`).
 
-    A symlinked folder is followed (the label defaults to the resolved folder's name). When nothing
+    A symlinked folder is followed (the label defaults to the resolved folder's name). A folder whose
+    `run.json` is not `completed` is refused unless `allow_incomplete` (then `metadata.run_status` records it). When nothing
     changed since the latest version, no version is created and its number is returned. None means the
     store server did not answer: the version is pending in the local replica (`cairn status`), usable here
     by its uid, and uploaded later.
@@ -75,7 +77,8 @@ def publish(name: str, folder: Path | str, *, metadata: dict | None = None, alia
     backend = as_store(store)
     project, artifact = _target(name, backend)
     version = Store(backend).project(project).artifact(artifact).publish(folder, metadata=metadata, aliases=aliases,
-                                                                          label=label, inputs=inputs, config=config)
+                                                                          label=label, inputs=inputs, config=config,
+                                                                          allow_incomplete=allow_incomplete)
     return version.number
 
 
@@ -267,14 +270,16 @@ def describe(version: dict) -> str:
     return f"{len(version['files'])} files, {size / 1e6:.1f} MB"
 
 
-def publish_folder(config: Config, folder: Path, name: str, label: str | None, aliases: list[str], meta: dict) -> None:
+def publish_folder(config: Config, folder: Path, name: str, label: str | None, aliases: list[str], meta: dict,
+                   allow_incomplete: bool = False) -> None:
     """Publish one folder and print what happened."""
     store = open_store(config)
     try:
         before = max((v["version"] for v in versions_of(store, name)), default=0)
     except StoreError:  # also a server that does not answer: the version stays pending below
         before = 0
-    number = publish(name, folder, metadata=meta, aliases=aliases, label=label, store=store, config=config)
+    number = publish(name, folder, metadata=meta, aliases=aliases, label=label, store=store, config=config,
+                    allow_incomplete=allow_incomplete)
     target = refs.parse(name)
     if number is None:
         return print(f"pending {target.name}: the store does not answer; `cairn status` lists it, `cairn sync` sends it", flush=True)
@@ -285,7 +290,7 @@ def publish_folder(config: Config, folder: Path, name: str, label: str | None, a
         print(f"published {target.name}@v{number} ({describe(state)})", flush=True)
 
 
-def publish_mappings(config: Config, label: str | None, aliases: list[str], meta: dict) -> None:
+def publish_mappings(config: Config, label: str | None, aliases: list[str], meta: dict, allow_incomplete: bool = False) -> None:
     mappings = config.store.get("publish", [])
     if not mappings:
         raise SystemExit("nothing to publish: give FOLDER NAME or add [store] publish = [{ folder = ..., name = ... }] to cairn.toml")
@@ -294,7 +299,7 @@ def publish_mappings(config: Config, label: str | None, aliases: list[str], meta
         if not folder.is_dir():
             print(f"skipping {mapping['name']}: {mapping['folder']} does not exist", flush=True)
             continue
-        publish_folder(config, folder, mapping["name"], label, aliases, meta)
+        publish_folder(config, folder, mapping["name"], label, aliases, meta, allow_incomplete)
 
 
 def signature(folder: Path, config: Config) -> dict:

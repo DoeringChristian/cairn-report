@@ -23,9 +23,28 @@ def record_input(exact: str) -> None:
 
 
 def read_inputs(folder: Path) -> list[str]:
-    """The distinct references a folder's `.cairn-inputs.jsonl` recorded, in order."""
+    """The distinct references recorded by every `.cairn-inputs.jsonl` inside a folder (the folder's own first,
+    then those of its subfolders in name order, such as one per multirun trial), in order."""
     found: list[str] = []
-    for row in read_jsonl(folder / INPUTS_FILE):
-        if row.get("ref") and row["ref"] not in found:
-            found.append(row["ref"])
+    for directory, folders, files in os.walk(folder):
+        folders.sort()
+        if INPUTS_FILE in files:
+            for row in read_jsonl(Path(directory) / INPUTS_FILE):
+                if row.get("ref") and row["ref"] not in found:
+                    found.append(row["ref"])
     return found
+
+
+def drop_inputs(files: dict) -> None:
+    """Remove the inputs records (at any depth) from a scanned file map: they become inputs, never files."""
+    for path in [path for path in files if path.rsplit("/", 1)[-1] == INPUTS_FILE]:
+        del files[path]
+
+
+def run_status(folder: Path) -> str | None:
+    """The `status` in the folder's `run.json`, or None when there is no readable one."""
+    try:
+        status = json.loads((Path(folder) / "run.json").read_text(encoding="utf-8")).get("status")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return status if isinstance(status, str) else None

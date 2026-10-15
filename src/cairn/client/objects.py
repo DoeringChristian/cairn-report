@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import Config, load_config
-from ..store import LocalStore, StoreError, read_inputs, record_input, refs
+from ..store import IncompleteRun, LocalStore, StoreError, read_inputs, record_input, refs, run_status
 from ..store.blobs import resolve_entry
 from ..store.cache import cache_root
 from ..store.errors import Deleted, MissingBlobs, NotFound, Unreachable
@@ -290,17 +290,26 @@ class Artifact:
     # ------------------------------------------------------------ publishing
 
     def publish(self, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                inputs=None, config: Config | None = None) -> "Version":
+                inputs=None, config: Config | None = None, allow_incomplete: bool = False) -> "Version":
         """Store a folder as the next version; when nothing changed since the latest, that version is returned.
 
         A symlinked folder is followed (the label defaults to the resolved folder's name). The folder's
         `.cairn-inputs.jsonl` and `inputs` become the version's inputs. On a store server the version is
         committed to the local replica first; if the server does not answer, a pending Version is returned
         (usable at once) and uploaded in the background (and by `cairn sync` or the next cairn command).
+
+        A folder whose `run.json` says the run is not `completed` is refused unless `allow_incomplete`;
+        then the status is recorded as `metadata.run_status`.
         """
         local = Path(folder).resolve()
         if not local.is_dir():
             raise ValueError(f"{folder} is not a folder")
+        status = run_status(local)
+        if status not in (None, "completed"):
+            if not allow_incomplete:
+                raise IncompleteRun(f"{folder}/run.json says {status}; publish completed runs, or pass --allow-incomplete"
+                                 " (allow_incomplete=True)")
+            metadata = {**(metadata or {}), "run_status": status}
         config = config or load_config()
         cache = HashCache(config.project)
         merged = [*read_inputs(local), *(str(item) for item in inputs or [])]

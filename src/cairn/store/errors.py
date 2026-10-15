@@ -7,6 +7,10 @@ class StoreError(ValueError):
     pass
 
 
+class IncompleteRun(StoreError):
+    """The folder's run.json says the run is not completed."""
+
+
 class NotFound(StoreError, LookupError):
     pass
 

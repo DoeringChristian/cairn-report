@@ -1,23 +1,52 @@
 # Cairn
 
-An artifact store for research projects that keep their evidence in plain run folders, with
-reports on top of it. Three parts live in this package:
+Cairn is an artifact store for research projects that keep their evidence in plain folders. It
+has five parts:
 
-- the **client**: a light Python API (`cairn.connect()` with projects, artifacts, and versions as
-  objects; `cairn.pull`, `cairn.publish`, lineage; a local replica that works offline) and the `cairn`
-  command, the **report builder** that turns single-page Markdown reports into a static site
-  (reading numbers and figures from the artifacts each report declares as inputs), a **run
-  logger** that writes evidence to fixed places in a run folder (files only; `cairn publish
-  --watch` syncs a running job's folder to the store), and **run bookkeeping** for Hydra projects
-  (each run's `run.json`, the `latest` link, study completion, a source snapshot per run);
-- the **server** (`cairn server`): the artifact store, API only: named, versioned folders
-  (datasets, run outputs, reports) in a local folder or on a token-protected server, with
-  `publish`, `pull`, and lineage;
-- the **UI** (`cairn ui`): explores a store, local or remote, in a browser.
+- the **store**: named, versioned folders (datasets, run outputs, reports) with aliases, metadata,
+  and lineage, in a local folder or on a token-protected **server** (`cairn server`) that many jobs
+  and clusters share;
+- the **UI** (`cairn ui`), which explores a store, local or remote, in a browser;
+- **single-page reports**: Markdown pages that read numbers and figures from the artifacts they
+  declare as `inputs:`, built into a static site and published as artifacts themselves;
+- a **run logger** that writes evidence into fixed places of a run folder;
+- **Hydra helpers**: each run's `run.json`, the `latest` link, study completion, a source snapshot.
 
 Cairn provides mechanisms only. How reports are organised, which sections they have, and what
-counts as evidence is up to the project (for agents, the `standalone-research-project` skill
-decides that).
+counts as evidence is up to the project.
+
+## Quick start
+
+```bash
+pip install git+https://github.com/DoeringChristian/cairn-report.git   # see Install for extras
+cd my-project                       # any folder with a pixi.toml, pyproject.toml or cairn.toml
+cairn publish runs/fit/latest fit   # a folder becomes version v1 of the artifact "fit" in .cairn/store
+cairn pull fit@latest               # prints the path of a read-only local copy
+cairn ui                            # explore projects, versions, files and lineage in the browser
+```
+
+With no `[store] url` the store is a local folder, `.cairn/store`; nothing needs to run. A job
+that pulls an artifact records the exact version it read, and `cairn publish` carries that along
+as the new version's `inputs`. A report is a folder `reports/<slug>/report.md` that pins what it
+reads:
+
+```markdown
+---
+title: Fit quality
+inputs:
+  fit: fit@latest
+---
+
+```python exec hide
+error = read_scalars(inputs.fit)["rmse"]
+```
+
+The final error is {{ error }}.
+
+![errors](input:fit/figures/errors.png)
+```
+
+`cairn build` makes the page, `cairn publish reports/<slug>` stores it with its pinned inputs.
 
 ### Coming from cairn-report
 
@@ -72,8 +101,8 @@ Without the extra, `cairn server` stops with a message saying to install it.
 
 A report is one page: a folder `reports/<slug>/` (the slug is lower-case letters,
 digits, `-` and `_`) with a `report.md` and, optionally, an `assets/` folder and
-a `data/` folder. There is no nesting and no root report: a project holds
-several flat reports, one per research direction. A `report.md` anywhere else
+a `data/` folder. Reports are flat: a project holds
+several, one per research direction. A `report.md` anywhere else
 (`reports/report.md`, `reports/a/b/report.md`) fails the build with "reports are
 single pages: move it to reports/<slug>/".
 
@@ -161,7 +190,7 @@ The read helpers raise a build error for any other path. While a `python exec`
 block (or a `{{ }}` value) runs, an audit hook also fails the build when the
 code opens a file (or lists a folder) inside the project or the store cache that
 is neither in the report folder nor in a declared input, for example
-`open("outputs/run/metrics.jsonl")`. The error names the file and the report
+`open("runs/fit/metrics.jsonl")`. The error names the file and the report
 line and says to declare it under `inputs:`. Paths elsewhere (the standard
 library, site-packages, temporary files, font caches) and writes into the
 report's generated output stay allowed. Known gaps: code that reads through a
@@ -274,8 +303,8 @@ adds new and changed files to one running version of the artifact `x` every
 `[store] interval` seconds, then completes it (or marks it failed when the command fails).
 
 **Watching a job.** `--watch` follows the folder as it exists when it starts. A Hydra run
-creates a new timestamped folder (`outputs/<name>/<timestamp>`), so either publish it after it
-finishes (`cairn publish outputs/x/latest x`) or have the job write to a fixed folder.
+creates a new timestamped folder (`runs/<name>/<timestamp>`), so either publish it after it
+finishes (`cairn publish runs/x/latest x`) or have the job write to a fixed folder.
 
 ## Hydra runs
 
@@ -295,8 +324,8 @@ run:
   name: feasibility            # a short lowercase slug
   description: What the run tests.
 hydra:
-  run: {dir: "outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}"}
-  sweep: {dir: "outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}", subdir: "${hydra.job.num}"}
+  run: {dir: "runs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}"}
+  sweep: {dir: "runs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}", subdir: "${hydra.job.num}"}
   callbacks:
     source_snapshot: {_target_: cairn.runs.snapshot.SourceSnapshotCallback}
     study_completion: {_target_: cairn.runs.hydra.StudyCompletion}   # multiruns
@@ -305,7 +334,7 @@ hydra:
 - `run_experiment` writes `run.json` (`running`, then `completed` or `failed`
   with the error), requires the source snapshot, instantiates `cfg.experiment`,
   and calls its `run(output_dir)`.
-- A completed single run becomes `outputs/<name>/latest`, a relative symlink;
+- A completed single run becomes `runs/<name>/latest`, a relative symlink;
   a failed run stays for diagnosis and never moves it.
 - `StudyCompletion` writes a multirun study's `run.json` after the last trial
   (completed only when every trial completed) and then moves `latest` to the
@@ -314,7 +343,7 @@ hydra:
   secrets and data files excluded) in each run's `provenance/`: in `git` mode
   (default) the commit, the diff, and untracked sources; in `tree` mode a full
   copy. It also records the runtime environment.
-- `cairn finalize-study outputs/<name>/<timestamp>` completes a study
+- `cairn finalize-study runs/<name>/<timestamp>` completes a study
   whose launcher died, by the same rule, once every trial job has ended.
 
 ## Store
@@ -416,6 +445,7 @@ heartbeat_timeout = 600                           # seconds without a heartbeat 
 
 ```bash
 cairn publish data/crops datasets/crops --alias paper      # a folder becomes the next version (none if unchanged)
+cairn publish runs/x/latest x --allow-incomplete           # publish although run.json is not completed
 cairn publish runs/x/latest x --watch -- python run.py     # sync a running job; complete (or fail) with it
 cairn publish reports/alpha                                # build a report and publish reports/alpha
 cairn pull datasets/crops@paper                            # print the local, read-only copy's path
@@ -441,6 +471,17 @@ cairn gc --dry-run                                         # retention rules and
 
 All of them work the same against a store folder and a store server.
 
+**Lineage.** `pull` appends the exact version it returned to `.cairn-inputs.jsonl` in the working
+directory (or the file `$CAIRN_INPUTS` names). Publishing a folder merges every `.cairn-inputs.jsonl`
+found anywhere inside it, one per Hydra multirun trial for example, into the new version's `inputs`
+(deduplicated); none of them becomes a file of the version.
+
+**Incomplete runs.** If the published folder (or the folder `latest` resolves to) has a `run.json`
+whose `status` is not `completed`, `cairn publish` refuses: "run.json says running/failed; publish
+completed runs, or pass --allow-incomplete". `--allow-incomplete` (`allow_incomplete=True` in
+`publish()` and `Artifact.publish()`) publishes anyway and records `metadata.run_status`. `--watch`
+is exempt: it publishes a running job by design.
+
 ### The Python API
 
 `cairn.connect()` opens the store `[store]` names (or `cairn.connect("https://...", token=...)`, or
@@ -463,9 +504,9 @@ with v3.open("tables/cases.csv") as handle:     # streams one file without pulli
 folder = v3.pull()                              # <cache>/versions/<uid>/files/, read-only; recorded as an input
 
 fit = project.artifact("models/fit")
-v = fit.publish("outputs/fit", metadata={"loss": 0.1}, aliases=["best"], inputs=[v3.ref])   # -> Version
+v = fit.publish("runs/fit", metadata={"loss": 0.1}, aliases=["best"], inputs=[v3.ref])   # -> Version
 fit.alias("paper", v)
-with fit.publishing("outputs/live") as running:    # a running version that follows a folder while a job writes it
+with fit.publishing("runs/live") as running:    # a running version that follows a folder while a job writes it
     ...
     running.sync()
 ```
@@ -613,8 +654,7 @@ fallback; a report build resolves its `inputs:` the same way.
 Versions are keyed by uid, never by project, name, and number, so two stores never collide in one
 replica. Either root may be shared by many jobs, also on NFS: a version folder or a blob is written
 under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place, and whoever
-loses a race discards its copy. The layout before the replica (`<cache>/outbox/`, `resolved/`,
-`stores.json`) is converted on first use and removed.
+loses a race discards its copy.
 
 ### Integrity
 
@@ -789,7 +829,7 @@ cairn migrate /srv/hub /srv/store      # the old folder is only read; blobs are 
 Each old project becomes a project. Each `<run>/<timestamp>` becomes a version of the artifact
 `<run>` (label: the timestamp; `failed` unless its `run.json` says `completed`). Only the latest
 old report version is migrated, split into one `reports/<slug>` artifact per report folder
-(`a/b` becomes `a-b`, the root report `overview`), stored as it was and not rebuilt. Reports that
+(`a/b` becomes `a-b`; a top-level report becomes `overview`), stored as it was and not rebuilt. Reports that
 read runs with `run:` must be rewritten by hand to declare `inputs:`. Running it again adds
 nothing. `cairn server /srv/store` then gives the new folder an owner token if it has none.
 

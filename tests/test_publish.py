@@ -1,3 +1,4 @@
+import json
 import sys
 import textwrap
 
@@ -133,3 +134,49 @@ def test_publication_context_manager(env):
         with store.Publication("job", out):
             raise RuntimeError
     assert [v["status"] for v in store.versions("job")] == ["completed", "failed"]
+
+
+def test_study_folder_merges_every_trial_inputs_record(env, capsys):
+    main(["publish", str(folder(env, "d1", {"x": "1"})), "data"])
+    main(["publish", str(folder(env, "d2", {"x": "2"})), "data"])
+    capsys.readouterr()
+    project = store.open_store().project
+    study = folder(env, "runs/study", {"0/metrics.csv": "a", "1/metrics.csv": "b", "summary.txt": "s"})
+    row = lambda ref: json.dumps({"ref": f"{project}:{ref}", "time": "t"}) + "\n"
+    (study / "0" / ".cairn-inputs.jsonl").write_text(row("data@v1"))
+    (study / "1" / ".cairn-inputs.jsonl").write_text(row("data@v2") + row("data@v1"))
+    main(["publish", str(study), "sweep"])
+    [version] = store.versions("sweep")
+    assert version["inputs"] == [f"{project}:data@v1", f"{project}:data@v2"]
+    assert sorted(e["path"] for e in version["files"]) == ["0/metrics.csv", "1/metrics.csv", "summary.txt"]
+
+
+@pytest.mark.parametrize("status", ["running", "failed"])
+def test_incomplete_run_is_refused_unless_allowed(env, capsys, status):
+    run_dir = folder(env, "runs/a", {"run.json": json.dumps({"status": status}), "m.csv": "1"})
+    with pytest.raises(SystemExit) as refused:
+        main(["publish", str(run_dir), "fit"])
+    assert f"run.json says {status}" in str(refused.value) and "--allow-incomplete" in str(refused.value)
+    assert store.versions("fit") == []
+    with pytest.raises(ValueError, match="allow_incomplete"):
+        store.publish("fit", run_dir)
+    main(["publish", str(run_dir), "fit", "--allow-incomplete"])
+    [version] = store.versions("fit")
+    assert version["metadata"]["run_status"] == status
+
+
+def test_completed_run_publishes_and_latest_link_is_checked(env, capsys):
+    folder(env, "runs/ok", {"run.json": json.dumps({"status": "completed"}), "m.csv": "1"})
+    folder(env, "runs/bad", {"run.json": json.dumps({"status": "running"})})
+    main(["publish", "runs/ok", "fit"])
+    (env / "runs" / "latest").symlink_to("bad")
+    with pytest.raises(SystemExit):
+        main(["publish", "runs/latest", "fit2"])
+    assert "run_status" not in store.versions("fit")[0]["metadata"]
+
+
+def test_watch_publishes_a_running_job(env, capsys):
+    out = folder(env, "out", {"run.json": json.dumps({"status": "running"})})
+    with pytest.raises(SystemExit) as exit:
+        main(["publish", str(out), "live", "--interval", "0.5", "--", sys.executable, "-c", "pass"])
+    assert exit.value.code == 0 and len(store.versions("live")) == 1

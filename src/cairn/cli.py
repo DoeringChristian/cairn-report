@@ -35,6 +35,7 @@ def cmd_share(args) -> None:
 def cmd_publish(args) -> None:
     from .client.publishing import parse_meta, publish_folder, publish_mappings, watch_folder
     from .reports.publishing import is_report_folder, publish_report
+    from .store import IncompleteRun
 
     config = with_options(load_config(args.project), args)
     meta, command = parse_meta(args.meta), args.command or None
@@ -47,11 +48,14 @@ def cmd_publish(args) -> None:
     if args.folder is None:
         if args.watch or command:
             raise SystemExit("--watch and -- command need FOLDER NAME")
-        return publish_mappings(config, args.label, args.alias, meta)
+        return publish_mappings(config, args.label, args.alias, meta, args.allow_incomplete)
     folder = Path(args.folder)
     if args.watch or command:
         raise SystemExit(watch_folder(config, folder, args.name, args.label, args.alias, meta, command, args.interval))
-    publish_folder(config, folder, args.name, args.label, args.alias, meta)
+    try:
+        publish_folder(config, folder, args.name, args.label, args.alias, meta, args.allow_incomplete)
+    except IncompleteRun as error:
+        raise SystemExit(f"error: {error}")
 
 
 def with_options(config, args):
@@ -484,6 +488,8 @@ def main(argv: list[str] | None = None) -> None:
     publish.add_argument("--alias", action="append", default=[], help="alias to point at the version (repeatable)")
     publish.add_argument("--meta", action="append", default=[], metavar="KEY=VALUE", help="metadata (repeatable)")
     publish.add_argument("--watch", action="store_true", help="sync the folder into one running version until stopped, then complete it")
+    publish.add_argument("--allow-incomplete", action="store_true",
+                         help="publish a folder whose run.json says the run is not completed (records metadata.run_status)")
     publish.add_argument("--interval", type=float, help=argparse.SUPPRESS)
     publish.set_defaults(run=cmd_publish)
 
