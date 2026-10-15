@@ -479,3 +479,207 @@ def test_listings_with_3000_versions_and_500_pending_entries(tmp_path):
     pending = listing_times(offline, "500 pending outbox entries, remote refuses", names, env)
     assert pending["ui project warm"] < 1.0 and pending["ui artifact warm"] < 1.0
 
+# ====================================================================== remotes: a real `cairn server`, and a faulty one
+
+
+class RealServer:
+    """`cairn server <root> --port <port> --no-ui` as a process of its own (SIGKILL-able), started and stopped at will."""
+
+    def __init__(self, root: Path, port: int | None = None):
+        from cairn.store.tokens import init_root
+
+        self.root, self.port = root, port or free_port()
+        if not (root / "token").exists():
+            init_root(root)
+        self.token = (root / "token").read_text().strip()
+        self.url = f"http://127.0.0.1:{self.port}"
+        self.process = None
+
+    def start(self, env=None) -> "RealServer":
+        self.process = spawn(self.root.parent, "-m", "cairn", "server", self.root, "--port", self.port, "--no-ui", env=env)
+        wait_port(self.port, self.process)
+        return self
+
+    def stop(self, kill: bool = False) -> None:
+        if self.process is not None:
+            self.process.send_signal(signal.SIGKILL if kill else signal.SIGTERM)
+            self.process.wait(timeout=60)
+            self.process = None
+
+    def versions(self, name: str, project: str = "study") -> list[dict]:
+        try:
+            return LocalRepo(self.root).versions(project, name)
+        except cairn.NotFound:
+            return []
+
+
+class FaultProxy:
+    """A TCP proxy on its own port in front of `upstream` (a port), whose `mode` can change at any time:
+    forward, hang (accept, read, never answer), error (HTTP 500), slow (wait `delay` s, then forward), refuse (close
+    at once, like a server that restarts)."""
+
+    def __init__(self, upstream: int | None = None, mode: str = "forward", delay: float = 5.0):
+        self.upstream, self.mode, self.delay = upstream, mode, delay
+        self.listener = socket.socket()
+        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(64)
+        self.port = self.listener.getsockname()[1]
+        self.url = f"http://127.0.0.1:{self.port}"
+        self.held, self.connections, self.closed = [], 0, False
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        while not self.closed:
+            try:
+                client, _ = self.listener.accept()
+            except OSError:
+                return
+            self.connections += 1
+            threading.Thread(target=self._serve, args=(client, self.mode), daemon=True).start()
+
+    def _serve(self, client: socket.socket, mode: str) -> None:
+        self.held.append(client)  # closed with the proxy at the latest
+        if mode == "hang":
+            return  # never answered
+        if mode == "refuse":
+            client.close()
+            return
+        if mode == "error":
+            try:
+                client.settimeout(5)
+                client.recv(65536)
+                client.sendall(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            except OSError:
+                pass
+            client.close()
+            return
+        if mode == "slow":
+            time.sleep(self.delay)
+        try:
+            upstream = socket.create_connection(("127.0.0.1", self.upstream), timeout=5)
+        except OSError:
+            client.close()
+            return
+        self.held.append(upstream)
+        upstream.settimeout(None)
+        client.settimeout(None)
+
+        def pipe(source, target):
+            try:
+                while data := source.recv(1 << 16):
+                    target.sendall(data)
+            except OSError:
+                pass
+            finally:
+                for end in (source, target):
+                    try:
+                        end.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                    end.close()
+
+        threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
+        pipe(client, upstream)
+
+    def close(self) -> None:
+        self.closed = True
+        self.listener.close()
+        for client in self.held:
+            client.close()
+
+
+# ====================================================================== 6. a remote added later, with a version running
+
+LONG_RUN = """
+import pathlib, sys, time, cairn
+run = cairn.init(name="train", config={"lr": 0.1}, code=False, system=False)
+data = cairn.use("data@best")
+run.add({"loss": 1.0, "step": 0})
+pathlib.Path("started").write_text(run.uid)
+while not pathlib.Path("go").exists():
+    time.sleep(0.05)
+with cairn.draft("model") as model:
+    model.add_json("weights", {"w": [1, 2, 3]})
+print(run.uid, model.version.uid, flush=True)
+"""
+
+MADE_LOCALLY = """
+import json, pathlib, cairn
+repo = cairn.connect()
+data = repo.project().artifact("data")
+made = {}
+for index in range(4):
+    folder = pathlib.Path(f"d{index}")
+    folder.mkdir()
+    (folder / "x.txt").write_text(f"data {index}")
+    made[f"data{index}"] = data.publish(folder, aliases=["best"] if index == 2 else ()).uid
+data.version(4).delete(reason="a bad one", force=True)
+with cairn.draft("fit") as fit:
+    fit.add_json("uses", {"data": cairn.use("data@v1").ref})
+made["fit"] = fit.version.uid
+print(json.dumps(made))
+"""
+
+
+def test_a_remote_added_while_a_version_runs_takes_over_everything_once(tmp_path):
+    server = RealServer(tmp_path / "remote").start()
+    env = base_env(CAIRN_TOKEN=server.token)
+    other = project_at(tmp_path, "other", server.url)  # the remote already has versions of data and runs/train
+    for index in range(2):
+        data = other / f"o{index}"
+        data.mkdir()
+        (data / "x.txt").write_text(f"other {index}")
+        assert cli(other, "publish", str(data), "data", env=env).returncode == 0
+        assert cli(other, "publish", str(data), "runs/train", env=env).returncode == 0
+
+    project = project_at(tmp_path, "study")  # no remote yet
+    script(project, "made.py", MADE_LOCALLY)
+    made = subprocess.run([sys.executable, "made.py"], cwd=project, capture_output=True, text=True, env=base_env())
+    assert made.returncode == 0, made.stderr
+    made = json.loads(made.stdout)
+    script(project, "long.py", LONG_RUN)
+    running = spawn(project, "long.py", env=env)  # started without a remote: its run is numbered by the repo
+    deadline = time.time() + 60
+    while not (project / "started").exists():
+        assert time.time() < deadline and running.poll() is None, finish(running)
+        time.sleep(0.05)
+    with open(project / "cairn.toml", "a") as handle:  # now the project gets a remote, while the run runs
+        handle.write(f'remote = "{server.url}"\n')
+    first = cli(project, "sync", env=env)
+    print("\nfirst sync:", first.returncode, first.stdout, first.stderr)
+    status = cli(project, "status", env=env)
+    assert status.stdout.startswith("running\tstudy:runs/train\t-\t"), status.stdout  # the run the remote has not yet
+    (project / "go").write_text("")
+    out, err = finish(running, 120)
+    assert running.returncode == 0, err
+    run_uid, model_uid = out.split()
+    second = cli(project, "sync", env=env)
+    print("second sync:", second.returncode, second.stdout, second.stderr)
+    assert second.returncode == 0, second.stdout + second.stderr
+
+    remote = LocalRepo(server.root)
+    check_numbers(remote)
+    data = {version["uid"]: version for version in remote.versions("study", "data")}
+    assert [data[made[f"data{index}"]]["version"] for index in range(3)] == [3, 4, 5]  # oldest first, after other's
+    assert made["data3"] not in data  # deleted before the remote came: its files are gone, never sent
+    assert remote.aliases("study", "data")["best"] == 5
+    runs = {version["uid"]: version for version in remote.versions("study", "runs/train")}
+    assert runs[run_uid]["status"] == "completed" and runs[run_uid]["inputs"] == ["study:data@v5"]
+    model = remote.get_version("study", "model", model_uid)
+    # its draft opened after the remote was added, so it went to the remote while its run was the repo's: it says so
+    assert model["inputs"] == [] and "gets no run input" in err
+    fit = remote.get_version("study", "fit", made["fit"])
+    [fit_run] = fit["inputs"]
+    assert remote.resolve(fit_run)[2]["inputs"] == ["study:data@v3"]
+    local = LocalRepo(project / ".cairn")
+    assert local.local_versions() == []
+    for name in ("data", "runs/train", "model", "fit"):  # the repo took the remote's numbers over
+        mine = {v["uid"]: v["version"] for v in local.versions("study", name)}
+        theirs = {v["uid"]: v["version"] for v in remote.versions("study", name)}
+        assert all(theirs[uid] == number for uid, number in mine.items()), name
+    assert "nothing pending" in cli(project, "status", env=env).stdout
+    verify_clean(project, env)
+    again = cli(project, "sync", env=env)
+    assert again.returncode == 0 and len(remote.versions("study", "data")) == 5
+    server.stop()

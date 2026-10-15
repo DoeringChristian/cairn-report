@@ -969,6 +969,12 @@ class SyncedRepo(ProjectRepo):
     def status(self) -> dict:
         entries = [{**record, "heartbeat": self.outbox.last_beat(record)} if record["sync"] == "running" else record
                    for record in self.records()]
+        sent = {record["uid"] for record in entries}
+        for project, name, state in self.copies.local_versions():  # numbered here before the repo had a remote: not sent yet
+            if state["uid"] not in sent and state["status"] != "deleted":
+                entries.append({**state, "project": project, "name": name, "number": None, "owner": {},
+                                "sync": "running" if state["status"] == "running" else "pending",
+                                "error": None if state["status"] != "failed" else state.get("error")})
         return {"remote": self.url, "entries": entries, "reaped": list(getattr(self.copies, "reaped", []))}
 
     # ------------------------------------------------------------------ maintenance
