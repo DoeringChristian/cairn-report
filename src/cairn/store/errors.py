@@ -33,3 +33,25 @@ class Conflict(StoreError):
 
 class Unreachable(StoreError, OSError):
     """The store server did not answer (refused, timed out, or a proxy said 502/503/504)."""
+
+
+class Deleted(NotFound):
+    """The version was deleted: its tombstone keeps the number and uid, never reused (HTTP 410)."""
+
+
+class Protected(Conflict):
+    """A deletion refused because versions are protected (HTTP 409); `protected` lists {ref, reasons}."""
+
+    def __init__(self, message: str, protected=()):
+        super().__init__(message)
+        self.protected = list(protected)
+
+
+class MissingBlobs(Conflict):
+    """A version names blobs the store does not have (never uploaded, or removed by garbage collection since the
+    client checked): upload them and send the version again (HTTP 409 with `missing`)."""
+
+    def __init__(self, missing=(), message: str | None = None):
+        self.missing = sorted(missing)
+        super().__init__(message or f"{len(self.missing)} blobs are not in the store (yet), e.g. "
+                         f"{self.missing[0] if self.missing else '?'}: upload them first")

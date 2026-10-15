@@ -25,7 +25,7 @@ export function CopyButton({ text, label = "Copy", done = "Copied" }: { text: st
 
 export function Pill({ status }: { status: string }) {
   const bad = status === "failed" || status === "interrupted" || status === "running";
-  return <span className={"pill" + (bad ? " tentative" : "")}>{status}</span>;
+  return <span className={"pill" + (status === "deleted" ? " deleted" : bad ? " tentative" : "")}>{status}</span>;
 }
 
 export function Loading({ what = "Loading" }: { what?: string }) {

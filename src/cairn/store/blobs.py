@@ -1,6 +1,6 @@
 """Content-addressed blobs and the entry format every version manifest uses.
 
-    <root>/blobs/<aa>/<sha256-rest>     file contents, written once and verified
+    <root>/blobs/<aa>/<sha256-rest>     file contents, written once and verified; removed only by `gc` (gc.py)
     <root>/projects/                    one folder per project (see local.py)
     <root>/tmp/                         uploads in progress
 """
@@ -230,6 +230,7 @@ class BlobStore:
         temporary = self.tmp / f"{sha}.{secrets.token_hex(6)}"
         try:
             clone_or_copy(source, temporary)
+            os.utime(temporary)  # a clone keeps the source's times; the blob's age (gc.py's grace period) starts now
             digest = hashlib.sha256()
             with open(temporary, "rb", buffering=0) as handle:
                 while chunk := handle.read(CHUNK):

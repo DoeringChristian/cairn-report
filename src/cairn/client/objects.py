@@ -12,6 +12,8 @@
     folder = v3.pull()                            # the whole version, read-only, from the cache
     fit = project.artifact("fit").publish("outputs/fit", metadata={"loss": 0.1}, aliases=["best"])
     fit.ref                                       # "study:fit@v4"; a pending version: number None, ref by uid
+    v3.delete(reason="bad crop")                  # a tombstone; refused for protected versions unless force=True
+    project.retention = [{"prefix": "runs/", "keep_last": 5}]   # applied by store.gc(dry_run=False)
 
 Objects are thin and lazy: a `Project` reads its record, an `Artifact` its summary, and a `Version` its
 manifest on first access and keep them. Publishing to a store server goes through the local replica
@@ -32,7 +34,8 @@ from ..config import Config, load_config
 from ..store import LocalStore, StoreError, read_inputs, record_input, refs
 from ..store.blobs import resolve_entry
 from ..store.cache import cache_root
-from ..store.errors import NotFound, Unreachable
+from ..store.errors import Deleted, MissingBlobs, NotFound, Unreachable
+from ..store.gc import GRACE
 from ..store.refs import Ref
 from ..store.uids import UID
 from . import offline as fallback, replica
@@ -143,6 +146,11 @@ class Store:
                 pass
         return result
 
+    def gc(self, dry_run: bool = True, grace: float | str = GRACE) -> dict:
+        """Apply the retention rules and remove unreferenced blobs older than `grace` (LocalStore.gc; on a server,
+        the owner token only). `dry_run` (the default) only says what would go."""
+        return self.backend.gc(dry_run=dry_run, grace=grace)
+
 
 class Project:
     def __init__(self, store: Store, name: str, record: dict | None = None):
@@ -181,6 +189,26 @@ class Project:
 
     def artifact(self, name: str) -> "Artifact":
         return Artifact(self, refs.valid_name(name))
+
+    @property
+    def retention(self) -> list[dict]:
+        """The retention rules, [{prefix, keep_last, keep_days, keep_aliased}]; they act when `Store.gc` runs."""
+        return self.store.backend.retention(self.name)
+
+    @retention.setter
+    def retention(self, rules: list[dict]) -> None:
+        self.store.backend.set_retention(self.name, rules)
+
+    def set_retention(self, prefix: str = "", *, keep_last: int | None = None, keep_days: float | None = None,
+                      keep_aliased: bool = True) -> list[dict]:
+        """Add or replace the rule for one artifact-name prefix ("" for the whole project); returns every rule."""
+        rules = [rule for rule in self.retention if rule["prefix"] != prefix]
+        rules.append({"prefix": prefix, "keep_last": keep_last, "keep_days": keep_days, "keep_aliased": keep_aliased})
+        return self.store.backend.set_retention(self.name, rules)
+
+    def delete(self, *, force: bool = False, reason: str | None = None) -> dict:
+        """Delete the project: refused while it has versions that are not deleted, unless `force` (owner only on a server)."""
+        return self.store.backend.delete_project(self.name, reason=reason, force=force)
 
 
 class Artifact:
@@ -249,6 +277,12 @@ class Artifact:
                              " (or pass aliases= to publish)")
         self.backend.set_alias(self.project.name, self.name, name, version.number)
 
+    def delete(self, *, force: bool = False, reason: str | None = None) -> dict:
+        """Delete every version (all or none, under the rules of `Version.delete`); returns {deleted, skipped}."""
+        result = self.backend.delete_artifact(self.project.name, self.name, reason=reason, force=force)
+        self._summary = None
+        return result
+
     def lineage(self, version: "Version | int | str") -> dict[str, list[str]]:
         version = version if isinstance(version, Version) else self.version(version)
         return {"inputs": version.inputs, "consumers": version.consumers}
@@ -276,9 +310,15 @@ class Artifact:
             from .publishing import stage_local
 
             backend.create_project(project)
-            entries = stage_local(backend, local, config, cache)
-            number = backend.publish(project, self.name, entries, label=label, metadata=metadata, inputs=merged,
-                                     aliases=aliases, source=_source(local))
+            for attempt in range(3):
+                entries = stage_local(backend, local, config, cache)
+                try:
+                    number = backend.publish(project, self.name, entries, label=label, metadata=metadata, inputs=merged,
+                                             aliases=aliases, source=_source(local))
+                    break
+                except MissingBlobs:  # garbage collection removed a blob since staging: stage it again
+                    if attempt == 2:
+                        raise
             return Version(self, backend.get_version(project, self.name, number))
         from .sync import restage, stage, start_uploader
 
@@ -388,6 +428,25 @@ class Version:
     def pending(self) -> bool:
         return bool(self.manifest.get("pending"))
 
+    @property
+    def deleted(self) -> bool:
+        """A tombstone: `deleted_at`, `deleted_by`, and `reason` are in its manifest, its files are gone."""
+        return self.manifest["status"] == "deleted"
+
+    def delete(self, *, force: bool = False, reason: str | None = None) -> dict:
+        """Delete this version: it becomes a tombstone (number and uid never used again), `latest` moves back, and
+        its blobs go at the next `Store.gc` unless other versions name them. Refused (Protected) when an alias
+        other than `latest` points at it, a version that is not deleted consumed it, or it is running, unless
+        `force` (the owner token on a server)."""
+        if self.number is None:
+            raise StoreError(f"{self.ref} is pending (not on the store server): nothing to delete there")
+        number = self.number
+        result = self.artifact.backend.delete_version(self.artifact.project.name, self.artifact.name, number, reason=reason, force=force)
+        self._manifest = self.artifact.backend.get_version(self.artifact.project.name, self.artifact.name, number)  # the tombstone
+        if self.artifact.store.remote:
+            fallback.forget(self._manifest["uid"], self._manifest)
+        return result
+
     label = property(lambda self: self.manifest.get("label"))
     status = property(lambda self: self.manifest["status"])
     created = property(lambda self: self.manifest.get("created"))
@@ -411,6 +470,8 @@ class Version:
     # ------------------------------------------------------------- reading
 
     def _usable(self) -> None:
+        if self.deleted:
+            raise Deleted(f"{self.ref} was deleted: its files are gone")
         if self.pending and (self.status != "pending" or self.manifest.get("sync") != "pending"):
             what = {"running": "still running", "failed": "failed"}.get(self.status, self.manifest.get("sync"))
             raise StoreError(f"{self.ref} is {what} on this machine and not on the store server: it cannot be read")

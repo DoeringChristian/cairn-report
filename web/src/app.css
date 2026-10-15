@@ -126,3 +126,11 @@ main { margin-block: 0; align-self: start; }
    be stretched or centred by the body grid (the sticky box is one window tall, its row is the page). */
 .rail { align-self: start; position: sticky; top: 0; height: 100vh; height: 100dvh; }
 @media (max-width: 760px) { .rail { position: relative; height: auto; } }
+/* deleted versions: tombstones stay in the tables and the graph, greyed */
+.pill.deleted, .report-prose .pill.deleted { display: inline-block; padding: 1px 8px; border-radius: 99px; background: transparent; border: 1px dashed var(--muted); color: var(--muted); font-size: 12px; font-weight: 700; }
+.table-card tr.tombstone td { color: var(--muted); }
+.table-card tr.tombstone td a, .table-card tr.tombstone td strong { color: var(--muted); }
+.tombstone-reason { font-size: 13px; }
+.tombstone-note { border-left-color: var(--muted); }
+.graph-node.is-deleted rect { fill: transparent; stroke: var(--muted); stroke-dasharray: 5 4; }
+.graph-node.is-deleted .graph-name { fill: var(--muted); }

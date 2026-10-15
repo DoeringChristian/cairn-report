@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 from ..store import refs
 from ..store.cache import blob_cache, place, scratch
-from ..store.errors import BadRange, Conflict, Forbidden, NotFound, StoreError, Unauthorized, Unreachable
+from ..store.errors import BadRange, Conflict, Deleted, Forbidden, MissingBlobs, NotFound, Protected, StoreError, Unauthorized, Unreachable
 from ..store.local import FileRead
 from ..store.refs import Ref
 from ..store.uids import UID
@@ -214,6 +214,37 @@ class RemoteStore:
     def set_alias(self, project: str, name: str, alias: str, version: int) -> None:
         self._call("POST", f"{self._artifact(project, name)}/aliases", {"alias": alias, "version": version})
 
+    # ------------------------------------------------------- deleting, retention, gc
+
+    @staticmethod
+    def _flags(force: bool, reason: str | None) -> str:
+        flags = (["force=1"] if force else []) + ([f"reason={q(reason)}"] if reason else [])
+        return "?" + "&".join(flags) if flags else ""
+
+    def delete_version(self, project: str, name: str, version: int | str, *, reason: str | None = None, force: bool = False) -> dict:
+        """`LocalStore.delete_version` on the server (a write token; `force` needs the owner token)."""
+        if isinstance(version, str) and refs.VERSION.fullmatch(version):
+            version = int(version[1:])
+        if isinstance(version, str) and not UID.fullmatch(version):
+            raise ValueError(f"invalid version {version!r}")
+        return self._call("DELETE", f"{self._artifact(project, name)}/versions/{version}{self._flags(force, reason)}")
+
+    def delete_artifact(self, project: str, name: str, *, reason: str | None = None, force: bool = False) -> dict:
+        return self._call("DELETE", f"{self._artifact(project, name)}{self._flags(force, reason)}")
+
+    def delete_project(self, project: str, *, reason: str | None = None, force: bool = False) -> dict:
+        return self._call("DELETE", f"/api/v2/projects/{q(project)}{self._flags(force, reason)}")
+
+    def retention(self, project: str) -> list[dict]:
+        return self._call("GET", f"/api/v2/projects/{q(project)}/retention")["rules"]
+
+    def set_retention(self, project: str, rules: list[dict]) -> list[dict]:
+        return self._call("PUT", f"/api/v2/projects/{q(project)}/retention", {"rules": rules})["rules"]
+
+    def gc(self, dry_run: bool = True, grace: float | str | None = None) -> dict:
+        """Garbage collection on the server (the owner token only)."""
+        return self._call("POST", "/api/v2/gc", {"dry_run": dry_run, "grace": grace})
+
     # ------------------------------------------------------------- resolving
 
     def _qualified(self, ref: Ref | str) -> Ref:
@@ -224,16 +255,26 @@ class RemoteStore:
         answer = self._call("GET", f"/api/v2/resolve?ref={q(str(self._qualified(ref)))}")
         return answer["project"], answer["name"], answer["version"]
 
-    def lineage(self, ref: Ref | str) -> dict[str, list[str]]:
+    def lineage(self, ref: Ref | str, marks: bool = False) -> dict[str, list[str]]:
         answer = self._call("GET", f"/api/v2/lineage?ref={q(str(self._qualified(ref)))}")
-        return {"inputs": answer["inputs"], "consumers": answer["consumers"]}
+        found = {"inputs": answer["inputs"], "consumers": answer["consumers"]}
+        if marks:
+            found["deleted"] = answer.get("deleted", [])
+        return found
 
 
 def _translate(error: ClientError) -> StoreError:
-    """404 is a NotFound; every other server answer is a StoreError with the server's message."""
+    """404 is a NotFound, 410 a Deleted; every other server answer is a StoreError with the server's message."""
     text = str(error)
     if error.unreachable:
         return Unreachable(text)
     if error.status == 404:
         return NotFound(text)
+    if error.status == 410:
+        return Deleted(text)
+    answer = error.answer() if error.status == 409 else {}
+    if isinstance(answer.get("missing"), list):
+        return MissingBlobs(answer["missing"], text)
+    if isinstance(answer.get("protected"), list):
+        return Protected(text, answer["protected"])
     return {401: Unauthorized, 403: Forbidden, 409: Conflict}.get(error.status, StoreError)(text)

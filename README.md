@@ -321,7 +321,7 @@ hydra:
 
 The store holds **artifacts**: named, versioned folders inside a **project**. A name is a
 slash path (`descent`, `datasets/crops`); reports are the artifacts `reports/<slug>`. A
-version is immutable once completed and records its files (by content hash), metadata,
+version is immutable once completed (until it is deleted: see below) and records its files (by content hash), metadata,
 the exact versions it consumed (`inputs`), and where it was published from. Aliases
 (`latest` moves by itself; `best`, `paper` by hand) and labels select versions:
 `[project:]name[@v3|@uid|@alias|@label][//file]`.
@@ -435,6 +435,8 @@ cairn sync                                                 # send them now, and 
 cairn pull datasets/crops@paper --offline                  # never ask the server (see below)
 cairn prune [--older-than 30d] [--max-size 20G]            # trim the cache by last pull
 cairn verify [REF | --cache | --store [ROOT] | --all] [--repair]   # re-hash what is stored (see Integrity)
+cairn delete datasets/crops@v2 --reason "..."             # a tombstone; see Deleting and garbage collection
+cairn gc --dry-run                                         # retention rules and unreferenced blobs
 ```
 
 All of them work the same against a store folder and a store server.
@@ -471,6 +473,73 @@ with fit.publishing("outputs/live") as running:    # a running version that foll
 The functions `cairn.pull`, `cairn.publish`, `cairn.alias`, `cairn.versions`, `cairn.lineage`, and
 `cairn.Publication` stay, as shortcuts on top of these objects (`cairn.publish` returns the
 version number, or None while the version is pending).
+
+### Deleting and garbage collection
+
+The store is an artifact store, not a tracker: versions can be deleted, and their files go once
+nothing names them any more.
+
+```bash
+cairn delete datasets/crops@v3 --reason "wrong crop size"   # one version (also @uid, @alias, @label)
+cairn delete --artifact scratch/tmp                          # every version of an artifact (all or none)
+cairn project delete old-study [--force]                     # refused while it has versions, unless --force
+cairn delete datasets/crops@v1 --force                       # a protected version too (the owner token on a server)
+```
+
+A deleted version becomes a **tombstone**: it stays in the version list (status `deleted`, with
+`deleted_at`, `deleted_by`, and the reason; the UI shows it greyed with a `deleted` pill), keeps its
+label, metadata, and inputs, and loses its files. Its number and uid are never used again: the next
+publish gets the next number, and a replica that sends the same uid again is refused. Any reference to
+it (`@v3`, `@<uid>`, as an input, a file URL) fails with "was deleted" (410 on the server). Lineage
+keeps its edges, and marks the node deleted. `latest` moves back to the newest completed version left.
+
+Some versions are **protected**, and a deletion that touches one is refused (409) unless forced:
+
+- an alias other than `latest` points at it (forcing removes the alias);
+- it is an input of a version that is not deleted, in any project: a report's pinned input, a model's
+  dataset (forcing keeps the consumer's input edge, marked deleted);
+- it is running.
+
+**Retention rules** say what `cairn gc` deletes by itself, per project or per artifact-name prefix
+(the longest matching prefix wins). A version is kept if it is among the `keep_last` newest of its
+artifact, or younger than `keep_days`, or the artifact's `latest`; aliased versions are kept and take
+no `keep_last` place (`--no-keep-aliased`: they take a place, and are still never deleted). Rules never
+delete protected versions: those are skipped and reported.
+
+```bash
+cairn retention set my-study --prefix runs/ --keep-last 5 --keep-days 30
+cairn retention set my-study --keep-last 20          # every other artifact
+cairn retention show my-study
+cairn retention clear my-study --prefix runs/
+cairn gc --dry-run                                   # the configured store: what would be deleted and freed
+cairn gc [--grace 24h]                               # apply the rules, then sweep the blobs
+cairn gc /srv/store --dry-run                        # a store root on this machine (a served one: only --dry-run)
+cairn server /srv/store --gc-interval 24h [--grace 24h]   # also collect garbage on a schedule (default: never)
+```
+
+`cairn gc` first applies the retention rules, then sweeps the blobs: a blob that no version (other
+than deleted ones) names in any project, and whose file is older than the **grace period** (24 h by
+default), is removed; the output says how many bytes were freed. The grace period protects uploads
+in progress: a client uploads the blobs before it commits the version that names them. The sweep runs
+in the store's single writer (the server, or the process that owns a store folder) and re-checks
+every candidate inside the same transaction that removes it, while a publish checks its blobs inside
+its own transaction: a publish racing a sweep either finds its blobs kept, or is answered "upload these
+blobs first" (409 with `missing`), and the client uploads them and sends the version again, so it ends
+complete and downloadable. Stale temporary uploads (untouched for the grace period, at least an hour)
+go too. A dry run changes nothing. On a store server, deleting needs a write token for the project,
+while `--force` and `gc` need the owner token.
+
+The same in Python: `version.delete(reason=..., force=False)`, `artifact.delete()`, `project.delete()`,
+`project.retention = [{"prefix": "runs/", "keep_last": 5}]` (or `project.set_retention("runs/",
+keep_last=5)`), and `store.gc(dry_run=True, grace="24h")`, which returns what was (or would be)
+deleted, the protected versions it skipped, and the blobs and bytes freed. The API routes are
+`DELETE /api/v2/projects/<p>/artifacts/<name>/versions/<n>` (`?force=1&reason=...`),
+`DELETE .../artifacts/<name>`, `DELETE /api/v2/projects/<p>`, `GET`/`PUT /api/v2/projects/<p>/retention`,
+and `POST /api/v2/gc {dry_run, grace}`.
+
+A copy of a deleted version that this machine already pulled stays in its cache until `cairn prune`;
+after `cairn delete` here, exact references to it fail on this machine too, but other machines'
+caches still answer exact references to it offline.
 
 ### The local replica
 

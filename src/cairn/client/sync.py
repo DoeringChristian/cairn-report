@@ -42,11 +42,13 @@ from ..store.blobs import now
 from ..store.cache import hostname, place, scratch
 from ..store.fs import clone_or_copy
 from ..store.digest import manifest_digest
-from ..store.errors import NotFound, StoreError, Unreachable
+from ..store.errors import MissingBlobs, NotFound, StoreError, Unreachable
 from ..store.uids import new_uid
 from . import replica
 from .http import Client, HashCache, entries_for, scan
 from .remote import RemoteStore
+
+RETRIES = 3  # sends of a version whose blobs the server's garbage collection removed meanwhile
 
 # ------------------------------------------------------------------ staging
 
@@ -182,10 +184,16 @@ class Replica:
             record["digest"] = manifest_digest(record["files"])  # the server recomputes it from the files and refuses a mismatch
         manifest = {key: record.get(key) for key in ("label", "metadata", "source")}
         if record["kind"] == "publish":
-            self._upload(record["files"])
-            replica.refresh_claim(claimed)
-            record["number"] = remote.publish(project, name, record["files"], inputs=record["inputs"], aliases=record["aliases"],
-                                              uid=record["uid"], digest=record["digest"], **manifest)
+            for attempt in range(RETRIES):
+                self._upload(record["files"])
+                replica.refresh_claim(claimed)
+                try:
+                    record["number"] = remote.publish(project, name, record["files"], inputs=record["inputs"],
+                                                      aliases=record["aliases"], uid=record["uid"], digest=record["digest"], **manifest)
+                    break
+                except MissingBlobs:  # the server's garbage collection removed a blob since we checked: send it again
+                    if attempt == RETRIES - 1:
+                        raise
             return self._done(record)
         if record["number"] is None:
             record["number"] = remote.start_version(project, name, uid=record["uid"], **manifest)
@@ -193,9 +201,15 @@ class Replica:
         fresh = [item for item in record["files"] if record["pushed"].get(item["path"]) != (item.get("sha256") or item.get("link"))]
         try:
             if fresh:
-                self._upload(fresh)
-                replica.refresh_claim(claimed)
-                remote.add_files(project, name, record["number"], fresh)
+                for attempt in range(RETRIES):
+                    self._upload(fresh)
+                    replica.refresh_claim(claimed)
+                    try:
+                        remote.add_files(project, name, record["number"], fresh)
+                        break
+                    except MissingBlobs:  # removed by garbage collection since we checked: send it again
+                        if attempt == RETRIES - 1:
+                            raise
                 record["pushed"].update({item["path"]: item.get("sha256") or item.get("link") for item in fresh})
                 self.save(record)
             if record["status"] == "running":

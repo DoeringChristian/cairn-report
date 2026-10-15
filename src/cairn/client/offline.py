@@ -21,8 +21,8 @@ import sys
 from pathlib import Path
 
 from ..store import refs
-from ..store.cache import cache_root, cached as cached_record, inside, materialize_version
-from ..store.errors import NotFound, StoreError, Unreachable
+from ..store.cache import RECORD, cache_root, cached as cached_record, inside, materialize_version, read_record, version_folder, write_json
+from ..store.errors import Deleted, NotFound, StoreError, Unreachable
 from ..store.inputs import record_input
 from ..store.refs import Ref
 from . import replica
@@ -32,6 +32,25 @@ from .remote import RemoteStore
 def cached(uid: str | None) -> dict | None:
     """The record of a synced version in the cache (store, project, name, version, uid, manifest), or None."""
     return cached_record(uid)
+
+
+def forget(uid: str, tombstone: dict) -> None:
+    """After this machine deleted a version on the server: its cached copy answers with the tombstone from now on
+    (so exact references fail here too, also offline); the files stay until `cairn prune`, for jobs still reading."""
+    folder = version_folder(cache_root(), uid)
+    record = read_record(folder)
+    if record is not None:
+        try:
+            write_json(folder / RECORD, {**record, "manifest": tombstone})
+        except OSError:
+            pass
+
+
+def _alive(project: str, name: str, manifest: dict) -> dict:
+    if manifest.get("status") == "deleted":
+        raise Deleted(f"{refs.exact(project, name, manifest['version'])} was deleted ({(manifest.get('deleted_at') or '')[:19]})"
+                      + (f": {manifest['reason']}" if manifest.get("reason") else ""))
+    return manifest
 
 
 def pending_match(store: RemoteStore, project: str, name: str, selector: str) -> dict | None:
@@ -71,7 +90,7 @@ def resolve_version(store, ref: Ref | str, offline: bool = False, warn=None) -> 
         hint = {"uid": ref.uid} if ref.uid else replica.hint(store.key, project, ref.name, selector)
         found = cached(hint and hint["uid"])
         if found and found["project"] == project and found["name"] == ref.name:
-            return project, ref.name, found["manifest"]
+            return project, ref.name, _alive(project, ref.name, found["manifest"])
     pending = None if ref.exact else pending_match(store, project, ref.name, selector)
     if not offline:
         try:
@@ -106,6 +125,7 @@ def resolve_version(store, ref: Ref | str, offline: bool = False, warn=None) -> 
     if not found:
         raise Unreachable(f"{reason}, and this machine has no cached version for {key}")
     exact = refs.exact(project, ref.name, found["version"])
+    _alive(project, ref.name, found["manifest"])
     say(f"warning: {reason}; using the last known resolution of {key}: {exact} (uid {found['uid']})")
     return project, ref.name, found["manifest"]
 

@@ -7,7 +7,7 @@
       server.lock                locked by the `cairn server` serving this root (db.ServerLock)
 
 A version starts `running` (it may grow), then becomes `completed` or `failed`; a completed version
-is never written again. Only completed versions resolve through `latest`, aliases, and labels, so
+is never written again, except to delete it. Only completed versions resolve through `latest`, aliases, and labels, so
 readers never see half-published data. Every change is one SQLite transaction: a publish (version,
 files, completion, `latest`, aliases, consumers) commits whole or not at all, and version numbers are
 handed out inside the transaction, so they are unique however many threads and processes publish.
@@ -23,6 +23,12 @@ processes may read the root but not change its metadata (they publish through th
 owner commands on the server's host (`cairn token create`) are the exception, and SQLite's locking
 keeps their small writes safe. Without a server, several processes on one host may write a root
 (SQLite serializes them). Never write a root over a network filesystem (fs.py).
+
+Deleting a version leaves a tombstone (status `deleted`: number, uid, label, metadata, and inputs kept, the file
+list dropped), so a number or uid is never used again; references to it fail with Deleted, and lineage keeps its
+edges. Protected versions (an alias other than `latest` points at them, a version that is not deleted consumed
+them, or they are running) are refused unless forced. `gc` applies retention rules and removes unreferenced blobs
+(gc.py).
 """
 
 from __future__ import annotations
@@ -37,11 +43,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..ranges import byte_range
-from . import refs
+from . import gc, refs
 from .blobs import CHUNK, BlobStore, BlobWriter, clean_entries, now, resolve_entry
-from .db import Database, ServerLock, export
+from .db import RETENTION_TABLE, Database, ServerLock, export
 from .digest import manifest_digest
-from .errors import BadRange, Conflict, Forbidden, NotFound, StoreError, Unauthorized  # noqa: F401
+from .errors import BadRange, Conflict, Deleted, Forbidden, MissingBlobs, NotFound, Protected, StoreError, Unauthorized  # noqa: F401
 from .fs import network_filesystem
 from .refs import Ref
 from .uids import UID, new_uid, valid_uid
@@ -223,6 +229,8 @@ class LocalStore:
             version = self.get_version(project, name, selector)
         else:
             version = self.resolve(Ref(project, name, selector))[2]
+        if version["status"] == "deleted":
+            raise self._gone(project, name, version)
         entry = resolve_entry(version["files"], path)
         if entry is None:
             raise NotFound(f"{name} has no file {path}")
@@ -319,7 +327,7 @@ class LocalStore:
         """Every project record with its artifact count and last update."""
         with self._db.read() as connection:
             counts = {row[0]: (row[1], row[2]) for row in
-                      connection.execute("SELECT project, count(*), max(updated) FROM artifacts GROUP BY project")}
+                      connection.execute("SELECT project, count(*), max(updated) FROM artifacts WHERE versions > 0 GROUP BY project")}
             found = []
             for (text,) in connection.execute("SELECT record FROM projects ORDER BY name"):
                 record = json.loads(text)
@@ -341,7 +349,8 @@ class LocalStore:
     def artifacts(self, project: str) -> list[str]:
         with self._db.read() as connection:
             self._project(connection, project)
-            return [row[0] for row in connection.execute("SELECT name FROM artifacts WHERE project = ? ORDER BY name", (project,))]
+            return [row[0] for row in connection.execute("SELECT name FROM artifacts WHERE project = ? AND versions > 0 ORDER BY name",
+                                                         (project,))]
 
     @staticmethod
     def _state(connection, project: str, name: str, number: int) -> dict | None:
@@ -423,7 +432,7 @@ class LocalStore:
                 raise NotFound(f"unknown project {project!r}")
             cached = self._listings.get(project)
             if cached is None or cached[0] != row[0]:
-                rows = connection.execute(f"{_SUMMARY} WHERE project = ? ORDER BY name", (project,)).fetchall()
+                rows = connection.execute(f"{_SUMMARY} WHERE project = ? AND versions > 0 ORDER BY name", (project,)).fetchall()
                 cached = (row[0], [self._summary(item) for item in rows])
                 self._listings[project] = cached
         return (project, cached[0]), cached[1]
@@ -493,9 +502,9 @@ class LocalStore:
 
     def _merged(self, state: dict, entries) -> dict:
         clean = clean_entries(entries)
-        missing = self.missing(clean)
+        missing = self.missing(clean)  # inside the write transaction: a sweep cannot remove them meanwhile
         if missing:
-            raise StoreError(f"{len(missing)} blobs are not in the store yet, e.g. {missing[0]}")
+            raise MissingBlobs(missing)
         merged = {entry["path"]: entry for entry in state["files"]}
         merged.update({entry["path"]: entry for entry in clean})
         files = sorted(merged.values(), key=lambda entry: entry["path"])
@@ -536,6 +545,8 @@ class LocalStore:
                 known = self._by_uid(connection, valid_uid(uid))
                 if known is not None and known[:2] == (project, name):
                     state = known[2]
+                    if state["status"] == "deleted":
+                        raise Conflict(f"uid {uid} named {project}:{name}@v{state['version']}, which was deleted: a uid is never used again")
                     if state["label"] != label or state["metadata"] != (metadata or {}):
                         raise Conflict(f"uid {uid} already names {project}:{name}@v{state['version']} with another label or metadata")
                     return state["version"]
@@ -579,21 +590,29 @@ class LocalStore:
         """
         clean = sorted(clean_entries(entries), key=lambda entry: entry["path"])
         _check_tree(clean)
-        missing = self.missing(clean)  # blobs are never removed, so checking before the transaction is safe
+        sweeps = self._sweeps()
+        missing = self.missing(clean)
         if missing:
-            raise StoreError(f"{len(missing)} blobs are not in the store yet, e.g. {missing[0]}")
+            raise MissingBlobs(missing)
         for alias in aliases:
             refs.valid_word(alias, "alias")
         actual = manifest_digest(clean)
         _check_digest(digest, actual, f"{project}:{name}")
         with self._write() as connection:
             self._check(connection, project, name)
+            if self._sweeps(connection) != sweeps:  # a blob sweep ran since the check: check again, inside the transaction
+                missing = self.missing(clean)
+                if missing:
+                    raise MissingBlobs(missing)
             exact = self._exact_inputs(connection, inputs)
             known = self._by_uid(connection, valid_uid(uid)) if uid is not None else None
             head = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = 'latest'",
                                       (project, name)).fetchone()
             state = self._state(connection, project, name, head[0]) if head else None
             if known is not None:
+                if known[2]["status"] == "deleted":
+                    raise Conflict(f"uid {uid} named {refs.exact(known[0], known[1], known[2]['version'])}, which was deleted: "
+                                   "a uid is never used again")
                 if known[:2] != (project, name) or known[2]["status"] != "completed" or not _same(known[2], actual, exact, metadata or {}):
                     raise Conflict(f"uid {uid} already names {refs.exact(known[0], known[1], known[2]['version'])} with other content")
                 version = known[2]["version"]
@@ -643,6 +662,8 @@ class LocalStore:
                 state = found[2] if found and found[:2] == (project, ref.name) else None
             if state is None:
                 raise NotFound(f"{project}:{ref.name} has no version {ref.selector}")
+            if state["status"] == "deleted":
+                raise self._gone(project, ref.name, state)
             if state["status"] != "completed":
                 raise StoreError(f"{project}:{ref.name}@{ref.selector} is {state['status']}, not completed")
             return project, ref.name, state
@@ -661,10 +682,319 @@ class LocalStore:
         with self._db.read() as connection:
             return self._resolve(connection, ref)
 
-    def lineage(self, ref: Ref | str) -> dict[str, list[str]]:
-        """The versions this one consumed and the versions that consumed it, as exact references."""
+    def lineage(self, ref: Ref | str, marks: bool = False) -> dict[str, list[str]]:
+        """The versions this one consumed and the versions that consumed it, as exact references. Deleting a version
+        keeps its edges: an exact reference to a deleted version answers too. With `marks`, `deleted` lists the
+        references among them (and the version itself) that were deleted."""
+        ref = refs.parse(ref) if isinstance(ref, str) else ref
         with self._db.read() as connection:
-            project, name, version = self._resolve(connection, ref)
+            try:
+                project, name, version = self._resolve(connection, ref)
+            except Deleted:
+                project = ref.project or self.project
+                version = self._lookup(connection, project, ref.name, ref.selector)
+                name = ref.name
             me = refs.exact(project, name, version["version"])
             consumers = [row[0] for row in connection.execute("SELECT consumer FROM consumers WHERE input = ? ORDER BY seq", (me,))]
-        return {"inputs": list(version["inputs"]), "consumers": consumers}
+            found = {"inputs": list(version["inputs"]), "consumers": consumers}
+            if marks:
+                found["deleted"] = [item for item in [me, *found["inputs"], *consumers] if self._tombstoned(connection, item)]
+        return found
+
+    # ------------------------------------------------------------- deleting (tombstones)
+
+    @staticmethod
+    def _gone(project: str, name: str, state: dict) -> Deleted:
+        when = (state.get("deleted_at") or "")[:19]
+        by = f" by {state['deleted_by']}" if state.get("deleted_by") else ""
+        why = f": {state['reason']}" if state.get("reason") else ""
+        return Deleted(f"{refs.exact(project, name, state['version'])} was deleted ({when}{by}){why}")
+
+    def _lookup(self, connection, project: str, name: str, version: int | str | None) -> dict:
+        """A version's record by number, `v<n>`, or uid, whatever its status (NotFound if there is none)."""
+        if isinstance(version, str) and refs.VERSION.fullmatch(version):
+            version = int(version[1:])
+        if isinstance(version, bool) or not isinstance(version, (int, str)):
+            raise ValueError(f"a version is a number, 'v<n>', or a uid, not {version!r}")
+        if isinstance(version, int):
+            state = self._state(connection, project, name, version)
+        else:
+            found = self._by_uid(connection, valid_uid(version))
+            state = found[2] if found and found[:2] == (project, name) else None
+        if state is None:
+            raise NotFound(f"{project}:{name} has no version {version if isinstance(version, str) else f'v{version}'}")
+        return state
+
+    @staticmethod
+    def _row_status(connection, ref: str) -> str | None:
+        """The status of the version an exact `project:name@v<n>` names (None: no such version)."""
+        try:
+            parsed = refs.parse(ref)
+        except ValueError:
+            return None
+        if parsed.project is None or parsed.version is None:
+            return None
+        row = connection.execute("SELECT status FROM versions WHERE project = ? AND name = ? AND number = ?",
+                                 (parsed.project, parsed.name, parsed.version)).fetchone()
+        return row[0] if row else None
+
+    def _tombstoned(self, connection, ref: str) -> bool:
+        return self._row_status(connection, ref) == "deleted"
+
+    def _protection(self, connection, project: str, name: str, state: dict, aliases: dict[str, int], deleting: set[str]) -> list[str]:
+        """Why a version may not be deleted without force: it is running, an alias other than `latest` points at it,
+        or it is an input of a version that is not deleted (in any project; `deleting` are going too)."""
+        reasons = ["running"] if state["status"] == "running" else []
+        reasons += [f"alias {alias}" for alias, number in aliases.items() if number == state["version"] and alias != "latest"]
+        me = refs.exact(project, name, state["version"])
+        for (consumer,) in connection.execute("SELECT consumer FROM consumers WHERE input = ? ORDER BY seq", (me,)):
+            status = self._row_status(connection, consumer)
+            if consumer not in deleting and status not in (None, "deleted"):
+                reasons.append(f"input of {consumer}")
+        return reasons
+
+    def _remove_alias(self, connection, project: str, name: str, alias: str) -> None:
+        """Drop an alias (the log records the removal as a move to version 0)."""
+        connection.execute("DELETE FROM aliases WHERE project = ? AND name = ? AND alias = ?", (project, name, alias))
+        connection.execute("INSERT INTO alias_log (project, name, alias, number, time) VALUES (?, ?, ?, 0, ?)", (project, name, alias, now()))
+        aliases = json.dumps(self._aliases(connection, project, name))
+        if alias == "latest":
+            connection.execute("UPDATE artifacts SET latest = NULL, metadata = '{}', aliases = ? WHERE project = ? AND name = ?",
+                               (aliases, project, name))
+        else:
+            connection.execute("UPDATE artifacts SET aliases = ? WHERE project = ? AND name = ?", (aliases, project, name))
+
+    def _tombstone(self, connection, targets: list[tuple[str, str, dict]], *, reason: str | None, force: bool, by: str,
+                   skip: bool = False, apply: bool = True) -> dict:
+        """Delete versions (project, name, record) in this transaction: each becomes a tombstone (status `deleted`,
+        `deleted_at`, `deleted_by`, `reason`, its file list dropped; number, uid, label, metadata, and inputs kept).
+        Without `force`, protected versions refuse the whole call (Protected), or with `skip` are left out and
+        reported. Aliases that pointed at a deleted version are removed; `latest` moves back to the newest completed
+        version left. `apply=False` only says what would happen. Returns {deleted: [refs], skipped: [{ref, reasons}]}."""
+        aliases_of: dict[tuple[str, str], dict[str, int]] = {}
+        chosen, protected = list(targets), []
+        while True:  # leaving a protected version out can protect its inputs: repeat until nothing changes
+            deleting = {refs.exact(project, name, state["version"]) for project, name, state in chosen}
+            keep, kept = [], []
+            for project, name, state in chosen:
+                aliases = aliases_of.setdefault((project, name), self._aliases(connection, project, name))
+                reasons = self._protection(connection, project, name, state, aliases, deleting)
+                if reasons and not force:
+                    kept.append({"ref": refs.exact(project, name, state["version"]), "reasons": reasons})
+                else:
+                    keep.append((project, name, state))
+            protected += kept
+            if not kept:
+                break
+            chosen = keep
+        if protected and not skip:
+            listed = "; ".join(f"{item['ref']} ({', '.join(item['reasons'])})" for item in protected[:5])
+            more = f" and {len(protected) - 5} more" if len(protected) > 5 else ""
+            raise Protected(f"refused: protected versions {listed}{more}; delete with force to remove them anyway", protected)
+        stamp, touched = now(), {}
+        for project, name, state in chosen:
+            if not apply:
+                continue
+            files = state.get("files") or []
+            tomb = {key: state[key] for key in ("version", "uid", "label", "created", "completed", "metadata", "inputs", "source")
+                    if key in state}
+            tomb.update(status="deleted", was=state["status"], files=[], file_count=sum("sha256" in entry for entry in files),
+                        size=sum(entry.get("size") or 0 for entry in files), deleted_at=stamp, deleted_by=by, reason=reason)
+            connection.execute("UPDATE versions SET status = 'deleted', manifest = ? WHERE project = ? AND name = ? AND number = ?",
+                               (json.dumps(tomb), project, name, state["version"]))
+            connection.execute("UPDATE artifacts SET versions = versions - 1 WHERE project = ? AND name = ?", (project, name))
+            for alias, number in list(aliases_of[(project, name)].items()):
+                if number == state["version"] and alias != "latest":
+                    self._remove_alias(connection, project, name, alias)
+            touched[(project, name)] = True
+        for project, name in touched:
+            row = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = 'latest'", (project, name)).fetchone()
+            if row is None or self._state(connection, project, name, row[0])["status"] == "deleted":
+                newest = connection.execute("SELECT max(number) FROM versions WHERE project = ? AND name = ? AND status = 'completed'",
+                                            (project, name)).fetchone()[0]
+                if newest is not None:
+                    self._move_alias(connection, project, name, "latest", newest)
+                elif row is not None:
+                    self._remove_alias(connection, project, name, "latest")
+            connection.execute("UPDATE projects SET generation = generation + 1 WHERE name = ?", (project,))
+        return {"deleted": [refs.exact(project, name, state["version"]) for project, name, state in chosen], "skipped": protected}
+
+    @staticmethod
+    def _reason(reason) -> str | None:
+        if reason is not None and (not isinstance(reason, str) or len(reason) > 1000):
+            raise ValueError("a reason is text of at most 1000 characters")
+        return reason or None
+
+    def delete_version(self, project: str, name: str, version: int | str, *, reason: str | None = None, force: bool = False,
+                       by: str | None = None) -> dict:
+        """Delete one version (by number, `v<n>`, or uid): it becomes a tombstone (see `_tombstone`) and its blobs are
+        garbage once no other version names them (`gc`). Protected versions (an alias other than `latest` points at
+        it, it is an input of a version that is not deleted in any project, or it is running) are refused with
+        Protected unless `force`. Returns {deleted: [ref], skipped: []}."""
+        reason = self._reason(reason)
+        with self._write() as connection:
+            self._check(connection, project, name)
+            state = self._lookup(connection, project, name, version)
+            if state["status"] == "deleted":
+                raise self._gone(project, name, state)
+            return self._tombstone(connection, [(project, name, state)], reason=reason, force=force, by=by or _who())
+
+    def delete_artifact(self, project: str, name: str, *, reason: str | None = None, force: bool = False, by: str | None = None) -> dict:
+        """Delete every version of an artifact under the rules of `delete_version` (all of them, or none)."""
+        reason = self._reason(reason)
+        with self._write() as connection:
+            self._check(connection, project, name)
+            states = self._states(connection, project, name)
+            if not states:
+                raise NotFound(f"no artifact {project}:{name}")
+            live = [(project, name, state) for state in states.values() if state["status"] != "deleted"]
+            if not live:
+                raise Deleted(f"every version of {project}:{name} was deleted already")
+            return self._tombstone(connection, live, reason=reason, force=force, by=by or _who())
+
+    def delete_project(self, project: str, *, reason: str | None = None, force: bool = False, by: str | None = None) -> dict:
+        """Delete a project. One with versions that are not deleted is refused (Protected) unless `force`, which
+        deletes them all first, protected or not. The tombstones stay, so numbers and uids are never used again."""
+        reason = self._reason(reason)
+        with self._write() as connection:
+            self._project(connection, project)
+            live = [(row[0], row[1], json.loads(row[2])) for row in connection.execute(
+                "SELECT project, name, manifest FROM versions WHERE project = ? AND status != 'deleted' ORDER BY name, number", (project,))]
+            if live and not force:
+                raise Protected(f"project {project!r} has {len(live)} versions that are not deleted: delete them first, or force")
+            result = self._tombstone(connection, live, reason=reason, force=True, by=by or _who()) if live else {"deleted": [], "skipped": []}
+            connection.execute("DELETE FROM projects WHERE name = ?", (project,))
+            try:
+                connection.execute("DELETE FROM retention WHERE project = ?", (project,))
+            except sqlite3.OperationalError:  # no retention rules were ever set in this root
+                pass
+            self._listings.pop(project, None)
+            return {**result, "project": project}
+
+    # ------------------------------------------------------------- retention and garbage collection (gc.py)
+
+    @staticmethod
+    def _rules(connection, project: str | None = None) -> dict[str, list[dict]]:
+        query, values = "SELECT project, rule FROM retention", ()
+        if project is not None:
+            query, values = query + " WHERE project = ?", (project,)
+        found: dict[str, list[dict]] = {}
+        try:
+            for row in connection.execute(query + " ORDER BY project, prefix", values):
+                found.setdefault(row[0], []).append(json.loads(row[1]))
+        except sqlite3.OperationalError:  # a root from before retention rules: none set
+            pass
+        return found
+
+    def retention(self, project: str) -> list[dict]:
+        """A project's retention rules: [{prefix, keep_last, keep_days, keep_aliased}] (gc.py)."""
+        with self._db.read() as connection:
+            self._project(connection, project)
+            return self._rules(connection, project).get(project, [])
+
+    def set_retention(self, project: str, rules: list[dict]) -> list[dict]:
+        """Replace a project's retention rules (an empty list removes them). They act only when `gc` runs."""
+        clean = gc.clean_rules(rules)
+        with self._write() as connection:
+            self._project(connection, project)
+            connection.execute(RETENTION_TABLE)  # roots made before retention rules lack the table
+            connection.execute("DELETE FROM retention WHERE project = ?", (project,))
+            for rule in clean:
+                connection.execute("INSERT INTO retention VALUES (?, ?, ?)", (project, rule["prefix"], json.dumps(rule)))
+        return clean
+
+    def _sweeps(self, connection=None) -> str | None:
+        """How many blob sweeps ever ran here (publishes check their blobs again when it changed)."""
+        if connection is None:
+            with self._db.read() as reading:
+                return Database.meta(reading, "sweeps")
+        return Database.meta(connection, "sweeps")
+
+    @staticmethod
+    def _referenced(connection, projects: list[str] | None, excluded: set[str]) -> set[str]:
+        """The blobs named by versions that are not deleted (of `projects`, or all), leaving out `excluded` refs."""
+        query, values = "SELECT project, name, number, manifest FROM versions WHERE status != 'deleted'", ()
+        if projects is not None:
+            query += f" AND project IN ({', '.join('?' for _ in projects)})"
+            values = tuple(projects)
+        found: set[str] = set()
+        for project, name, number, manifest in connection.execute(query, values):
+            if excluded and refs.exact(project, name, number) in excluded:
+                continue
+            found.update(entry["sha256"] for entry in json.loads(manifest)["files"] if "sha256" in entry)
+        return found
+
+    def gc(self, dry_run: bool = True, grace: float | str = gc.GRACE, *, by: str = "gc", now: float | None = None) -> dict:
+        """Apply the retention rules, then remove the blobs no version names that are older than `grace` (seconds,
+        or text like `24h`), and stale temporary uploads. `dry_run` (the default) changes nothing and says what would
+        go. Safe beside concurrent publishes (gc.py says how). Returns {dry_run, grace, deleted: [refs],
+        skipped: [{ref, reasons}], blobs, bytes, temporary, temporary_bytes}."""
+        grace = gc.parse_duration(grace)
+        clock = gc.now() if now is None else now
+        report = {"dry_run": bool(dry_run), "grace": grace, "deleted": [], "skipped": [], "blobs": 0, "bytes": 0,
+                  "temporary": 0, "temporary_bytes": 0}
+        with self._db.read() as connection:
+            rules = self._rules(connection)
+        for project, project_rules in rules.items():  # one transaction per project
+            with (self._db.read() if dry_run else self._write()) as connection:
+                if connection.execute("SELECT 1 FROM projects WHERE name = ?", (project,)).fetchone() is None:
+                    continue
+                targets = []
+                for (name,) in connection.execute("SELECT name FROM artifacts WHERE project = ? ORDER BY name", (project,)).fetchall():
+                    rule = gc.rule_for(project_rules, name)
+                    if rule is None:
+                        continue
+                    states = self._states(connection, project, name)
+                    for number in gc.expired(list(states.values()), self._aliases(connection, project, name), rule, clock):
+                        targets.append((project, name, states[number]))
+                if targets:
+                    result = self._tombstone(connection, targets, reason="retention rule", force=False, by=by, skip=True,
+                                             apply=not dry_run)
+                    report["deleted"] += result["deleted"]
+                    report["skipped"] += result["skipped"]
+        cutoff = clock - grace
+        with self._db.read() as connection:
+            generations = dict(connection.execute("SELECT name, generation FROM projects").fetchall())
+            referenced = self._referenced(connection, None, set(report["deleted"]) if dry_run else set())
+        found = gc.candidates(self._blobs.blobs_name, referenced, cutoff)
+        temporaries = gc.stale_temporaries(self._blobs.tmp_name, clock - max(grace, gc.STALE_UPLOAD))  # never a live upload
+        if dry_run:
+            report.update(blobs=len(found), bytes=sum(size for _, _, size in found), temporary=len(temporaries),
+                          temporary_bytes=sum(size for _, size in temporaries))
+            return report
+        with self._write() as connection:  # the sweep: serialized with every publish's own check of its blobs
+            connection.execute("INSERT INTO meta VALUES ('sweeps', '1') ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1")
+            changed = [name for name, generation in connection.execute("SELECT name, generation FROM projects")
+                       if generations.get(name) != generation]
+            if changed:
+                referenced |= self._referenced(connection, changed, set())
+            for sha, path, size in found:
+                if sha in referenced:
+                    continue
+                try:
+                    if os.stat(path).st_mtime >= cutoff:  # uploaded again meanwhile
+                        continue
+                    os.unlink(path)
+                except FileNotFoundError:
+                    continue
+                report["blobs"] += 1
+                report["bytes"] += size
+        for path, size in temporaries:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                continue
+            report["temporary"] += 1
+            report["temporary_bytes"] += size
+        return report
+
+
+
+def _who() -> str:
+    """Who deletes, for a tombstone (`deleted_by`) written by this process."""
+    try:
+        import getpass
+
+        return getpass.getuser()
+    except Exception:  # noqa: BLE001 - no user name: say so
+        return "local"

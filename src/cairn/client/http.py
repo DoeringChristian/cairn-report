@@ -33,9 +33,17 @@ BLOCK = 1 << 20  # uploads are sent in 1 MB blocks (http.client's default is 8 K
 class ClientError(Exception):
     """An HTTP answer the client did not expect; `status` None means there was no answer at all."""
 
-    def __init__(self, message: str, status: int | None = None, headers: dict | None = None):
+    def __init__(self, message: str, status: int | None = None, headers: dict | None = None, body: bytes = b""):
         super().__init__(message)
-        self.status, self.headers = status, headers or {}
+        self.status, self.headers, self.body = status, headers or {}, body
+
+    def answer(self) -> dict:
+        """The server's JSON answer ({} if it sent none)."""
+        try:
+            value = json.loads(self.body)
+        except ValueError:
+            return {}
+        return value if isinstance(value, dict) else {}
 
     @property
     def unreachable(self) -> bool:
@@ -112,7 +120,7 @@ class Client:
             raise ClientError("the store rejected the token" if self.token else
                               "the store needs a token: set CAIRN_STORE_TOKEN or [store] token_file", 401)
         if response.status not in expect:
-            raise ClientError(_message(method, path, response.status, data), response.status)
+            raise ClientError(_message(method, path, response.status, data), response.status, body=data)
         return response.status, data
 
     def stream(self, path: str, headers: dict | None = None, expect=(200, 206)):

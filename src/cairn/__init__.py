@@ -42,13 +42,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._version import __version__
-from .store import BadRange, Conflict, FileRead, Forbidden, LocalStore, NotFound, Ref, StoreError, Unauthorized, Unreachable
+from .store import (BadRange, Conflict, Deleted, FileRead, Forbidden, LocalStore, MissingBlobs, NotFound, Protected, Ref, StoreError,
+                    Unauthorized, Unreachable)
 
 if TYPE_CHECKING:
     from .client.objects import Artifact, File, Project, Store, Version
     from .client.remote import RemoteStore
 
-__all__ = ["__version__", "Artifact", "BadRange", "Conflict", "File", "FileRead", "Forbidden", "LocalStore", "NotFound", "Project",
+__all__ = ["__version__", "Artifact", "BadRange", "Conflict", "Deleted", "File", "FileRead", "Forbidden", "LocalStore", "MissingBlobs",
+           "NotFound", "Project", "Protected",
            "Ref", "RemoteStore", "Store", "StoreError", "Unauthorized", "Unreachable", "Version", "alias", "connect", "lineage",
            "Publication", "open_store", "publish", "pull", "versions"]
 
