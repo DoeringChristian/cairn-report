@@ -30,7 +30,7 @@ that pulls an artifact records the exact version it read, and `cairn publish` ca
 as the new version's `inputs`. A report is a folder `reports/<slug>/report.md` that pins what it
 reads:
 
-```markdown
+````markdown
 ---
 title: Fit quality
 inputs:
@@ -44,7 +44,7 @@ error = read_scalars(inputs.fit)["rmse"]
 The final error is {{ error }}.
 
 ![errors](input:fit/figures/errors.png)
-```
+````
 
 `cairn build` makes the page, `cairn publish reports/<slug>` stores it with its pinned inputs.
 
@@ -64,7 +64,7 @@ Cairn is the next version of cairn-report (0.13.0 is the first release under the
 | `cairn-report.toml` | `cairn.toml` (the old name is still read, with a warning, when `cairn.toml` is absent) |
 | `~/.cache/cairn-report/` | `~/.cache/cairn/` |
 
-The environment variables (`CAIRN_STORE_TOKEN`, `CAIRN_INPUTS`) and the store layout are unchanged.
+The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep their names. Everything Cairn writes for a project now lives in `.cairn/` (see Where Cairn keeps things); an old `.store/` is moved there on first use.
 The old Cairn tracker (cairn-track) cannot be installed in the same environment.
 
 ## Install

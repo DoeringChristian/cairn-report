@@ -516,6 +516,12 @@ class UIHandler(BaseHTTPRequestHandler):
     def _json(self, status: int, value) -> None:
         self._send(status, json.dumps(value).encode(), "application/json", {"Cache-Control": "no-store"})
 
+    def handle(self):
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):  # the browser went away mid-response: nothing to do
+            pass
+
     def log_message(self, format, *args):  # one line per request, without the session
         sys.stderr.write(f"{self.log_date_time_string()} {self.address_string()} {format % args}\n")
 
