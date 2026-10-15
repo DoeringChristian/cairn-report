@@ -153,6 +153,12 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
   the tails of stdout and stderr, refreshed while running, the config, where it ran); run nodes in the
   lineage graph (a `run` pill, failed and running marked) and a "Data only" toggle; a Runs tab and rail
   section; "Download zip" for a whole version (`/files/<p>/<name>@<sel>.zip`, streamed).
+- **UI: the reports' look.** The UI uses the report stylesheets unchanged (no separate theme, so no dark
+  mode). The rail lists the projects and the current project's reports, artifacts and runs, on app
+  pages and on reports opened in the UI, which also get a back link to where the reader came from.
+  Selects are a listbox in the report style instead of the system menu. At phone width the rail folds
+  into a "Browse" bar, tables and the lineage graph scroll in their own box, and the page never
+  scrolls sideways.
 - **Package layout.** `store`, `client`, `server`, `ui`, `reports` and `runs`, with import
   boundaries enforced by a test. `import cairn` loads no server, UI, report or plotting code.
 
@@ -161,6 +167,8 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
 - The hub (`cairn-report hub`, `push`, `pull` of report trees), MLflow mirroring, and the logger's hub
   and MLflow backends (`[logger]`).
 - Nested reports, the ```` ```reports ```` fence, the overview report, and `run:` references.
+- Report comments (the comment popover, Copy and Clear, `[page] copy_preamble`). The copy-location
+  buttons stay: on a text selection, a figure, and in the lightbox.
 
 ### Migrating
 
