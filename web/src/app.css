@@ -77,13 +77,15 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .app-panel a.data-version:hover { text-decoration: underline; }
 .app-panel .data-row .image-copy[data-tooltip].show-tip::after { z-index: 10; }
 .preview-row td { background: color-mix(in srgb, var(--card) 70%, transparent); }
-.preview-media { display: block; max-width: 100%; max-height: 28rem; border: 1px solid var(--line); border-radius: 10px; background: white; }
-.preview-text { max-height: 24rem; font-size: 13px; }
+.preview-row td { padding: 8px 0 14px; max-width: 0; } /* a wide line in a text preview must scroll inside the preview, not widen the table */
+.preview-media { display: block; width: auto; height: auto; max-width: 100%; max-height: 28rem; margin: 0; object-fit: contain; border: 1px solid var(--line); border-radius: 10px; background: white; }
+video.preview-media { background: #111; }
+.preview-row .preview-text, .preview-row pre { max-width: 100%; max-height: 24rem; margin: 0; font-size: 13px; overflow: auto; }
 .app-figures { margin: 14px 0; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .app-figures .figure-card { text-decoration: none; color: inherit; cursor: pointer; }
-.app-figures .figure-card img { aspect-ratio: 16/10; }
+.app-figures .figure-card img { aspect-ratio: 16/10; object-fit: contain; background: white; }
 .app-figures .figure-card:last-child:nth-child(odd) { grid-column: auto; }
-.app-figures .figure-card:last-child:nth-child(odd) img { aspect-ratio: 16/10; }
+.app-figures .figure-card:last-child:nth-child(odd) img { aspect-ratio: 16/10; object-fit: contain; }
 .app-figures .figure-copy { padding: 10px 14px; }
 .app-figures .figure-copy p { overflow-wrap: anywhere; font-size: 12px; }
 .graph-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); padding: 12px 14px; }
@@ -120,3 +122,7 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
   .row-actions { flex-wrap: wrap; }
 }
 main { margin-block: 0; align-self: start; }
+/* The rail is pinned to the top-left at the window's full height whatever the page's length: it must not
+   be stretched or centred by the body grid (the sticky box is one window tall, its row is the page). */
+.rail { align-self: start; position: sticky; top: 0; height: 100vh; height: 100dvh; }
+@media (max-width: 760px) { .rail { position: relative; height: auto; } }
