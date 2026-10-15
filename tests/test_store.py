@@ -205,7 +205,7 @@ def test_materialize_read_only_and_idempotent(local, tmp_path):
     local.publish("p", "run", entries)
     cache = tmp_path / "c"
     folder_ = materialize(local, "run", cache)
-    assert folder_ == cache / "p" / "run" / "v1"
+    assert folder_ == cache / "versions" / local.get_version("p", "run", 1)["uid"]
     assert (folder_ / "sub/b.txt").read_text() == "2"
     assert (folder_ / "ln").is_symlink() and (folder_ / "ln").read_text() == "1"
     assert not os.access(folder_ / "a.txt", os.W_OK)

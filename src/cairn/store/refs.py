@@ -1,15 +1,20 @@
-"""Artifact references: `[project:]name[@version|@alias|@label][//path/in/artifact]`.
+"""Artifact references: `[project:]name[@version|@uid|@alias|@label][//path/in/artifact]`.
 
     descent@latest//figures/trajectory.png      datasets/crops@v3      other-project:models/denoiser@best
+    datasets/crops@0192f3a4-5b6c-7d8e-9f01-23456789abcd
 
 Names are slash paths, so the file path inside the artifact follows a `//`. After `@`, `v<n>` is an
-exact version; anything else is an alias (movable, per artifact) or a label (chosen at publish).
+exact version number and a UUIDv7 (`uids.UID`, lowercase with dashes) is an exact version uid; both
+are reserved, so no alias or label can take either form. Anything else is an alias (movable, per
+artifact) or a label (chosen at publish).
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+
+from .uids import UID
 
 PROJECT = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 SEGMENT = re.compile(r"[a-z0-9][a-z0-9_.-]*")
@@ -39,6 +44,8 @@ def valid_word(word: str, what: str) -> str:
         raise ValueError(f"invalid {what} {word!r}: use [A-Za-z0-9][A-Za-z0-9_.-]*")
     if VERSION.fullmatch(word) or re.fullmatch(r"v[0-9]+", word):
         raise ValueError(f"invalid {what} {word!r}: v<number> is reserved for versions")
+    if UID.fullmatch(word.lower()):
+        raise ValueError(f"invalid {what} {word!r}: a UUIDv7 is reserved for version uids")
     return word
 
 
@@ -53,6 +60,16 @@ class Ref:
     def version(self) -> int | None:
         """The exact version number if the selector is `v<n>`."""
         return int(self.selector[1:]) if self.selector and VERSION.fullmatch(self.selector) else None
+
+    @property
+    def uid(self) -> str | None:
+        """The exact version uid if the selector is one."""
+        return self.selector if self.selector and UID.fullmatch(self.selector) else None
+
+    @property
+    def exact(self) -> bool:
+        """Whether the selector names one version for good (`v<n>` or a uid), not an alias or label."""
+        return self.version is not None or self.uid is not None
 
     def __str__(self) -> str:
         return (f"{self.project}:" if self.project else "") + self.name + (f"@{self.selector}" if self.selector else "") \
@@ -74,7 +91,7 @@ def parse(text: str) -> Ref:
     name, at, selector = head.partition("@")
     valid_name(name)
     if at:
-        if VERSION.fullmatch(selector) is None:
+        if VERSION.fullmatch(selector) is None and UID.fullmatch(selector) is None:
             if re.fullmatch(r"v[0-9]+", selector):
                 raise ValueError(f"invalid reference {text!r}: version numbers have no leading zeros")
             valid_word(selector, "alias or label")

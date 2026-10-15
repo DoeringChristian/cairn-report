@@ -25,3 +25,11 @@ class BadRange(StoreError):
     def __init__(self, total: int):
         super().__init__(f"the range lies outside the file ({total} bytes)")
         self.total = total
+
+
+class Conflict(StoreError):
+    """The request contradicts what is stored, e.g. a known version uid with different content (HTTP 409)."""
+
+
+class Unreachable(StoreError, OSError):
+    """The store server did not answer (refused, timed out, or a proxy said 502/503/504)."""

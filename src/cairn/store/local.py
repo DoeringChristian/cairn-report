@@ -1,6 +1,7 @@
 """LocalStore: projects, artifacts, and immutable versions in a folder.
 
     <root>/
+      store.json                                       the store's uid (UUIDv7), made once, never changed
       blobs/<aa>/<sha256-rest>                         file contents (blobs.BlobStore)
       projects/<p>/project.json                        name, title, description, created
       projects/<p>/consumers.jsonl                     consumer ref -> input ref, when a version with inputs completes
@@ -10,12 +11,18 @@
 Everything is append-only. A version starts `running` (it may grow), then becomes `completed` or
 `failed`; a completed version is never written again. Only completed versions resolve through
 `latest`, aliases, and labels, so readers never see half-published data.
+
+Every version has a `uid` (a UUIDv7, see uids.py), made when it starts or supplied by the client
+that created it (an outbox); a uid names one version for good. A store written before uids existed
+is upgraded as it is read: each version gets a deterministic uid (`uids.legacy`), persisted with one
+more state line once the version is final, and the root gets its store.json.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import secrets
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -24,9 +31,10 @@ from pathlib import Path
 from ..formats import read_jsonl
 from ..ranges import byte_range
 from . import refs
-from .errors import BadRange, Forbidden, NotFound, StoreError, Unauthorized  # noqa: F401
+from .errors import BadRange, Conflict, Forbidden, NotFound, StoreError, Unauthorized  # noqa: F401
 from .blobs import CHUNK, BlobStore, append_lines, clean_entries, now, resolve_entry
 from .refs import Ref
+from .uids import UID, legacy, new_uid, valid_uid
 
 
 @dataclass
@@ -62,6 +70,31 @@ def _same(version: dict, files: list[dict], inputs: list[str], metadata: dict) -
     return strip(version["files"]) == strip(files) and sorted(version["inputs"]) == sorted(inputs) and version["metadata"] == metadata
 
 
+def store_uid(root: Path) -> str:
+    """The uid in `<root>/store.json`, made on first use. Two processes racing both end with the one that won
+    (the file is linked into place, which fails if it exists), so a store's uid never changes."""
+    path = root / "store.json"
+    for _ in range(3):
+        try:
+            return valid_uid(json.loads(path.read_text())["uid"])
+        except FileNotFoundError:
+            pass
+        except (ValueError, KeyError, TypeError):
+            raise StoreError(f"{path} is damaged: it must hold {{\"uid\": <UUIDv7>}}")
+        temporary = root / f"store.json.{secrets.token_hex(6)}.tmp"
+        temporary.write_text(json.dumps({"uid": new_uid(), "created": now()}, indent=1))
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+        except OSError:  # a filesystem without hard links: rename, accepting a tiny race on first use
+            if not path.exists():
+                os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return valid_uid(json.loads(path.read_text())["uid"])
+
+
 def _check_tree(entries: list[dict]) -> None:
     """No path may be both a file and a folder."""
     paths = {entry["path"] for entry in entries}
@@ -78,6 +111,7 @@ class LocalStore:
         self.root, self.project = Path(root), project
         self._blobs = BlobStore(self.root)  # creates blobs/, projects/, tmp/
         self.lock = threading.Lock()
+        self.uid = store_uid(self.root)
 
     # ------------------------------------------------------------------ blobs
 
@@ -93,6 +127,8 @@ class LocalStore:
         optionally a byte range (the value of an HTTP Range header). Raises NotFound and BadRange."""
         if selector and refs.VERSION.fullmatch(selector):
             version = self.get_version(project, name, int(selector[1:]))
+        elif selector and UID.fullmatch(selector):
+            version = self.get_version(project, name, selector)
         else:
             version = self.resolve(Ref(project, name, selector))[2]
         entry = resolve_entry(version["files"], path)
@@ -116,7 +152,7 @@ class LocalStore:
                     yield chunk
                     remaining -= len(chunk)
 
-        immutable = version["status"] == "completed" and bool(selector) and refs.VERSION.fullmatch(selector) is not None
+        immutable = version["status"] == "completed" and bool(selector) and bool(refs.VERSION.fullmatch(selector) or UID.fullmatch(selector))
         return FileRead(total, first, last, entry["sha256"], immutable, chunks())
 
     def has_blob(self, sha: str) -> bool:
@@ -180,8 +216,23 @@ class LocalStore:
         return self._project_dir(project) / "artifacts" / refs.valid_name(name)
 
     def _states(self, project: str, name: str) -> dict[int, dict]:
-        """The latest recorded state per version number."""
-        return {row["version"]: row for row in read_jsonl(self._artifact_dir(project, name) / "versions.jsonl")}
+        """The latest recorded state per version number, each with its uid (see the upgrade in the module doc)."""
+        states = {row["version"]: row for row in read_jsonl(self._artifact_dir(project, name) / "versions.jsonl")}
+        upgraded = []
+        for number, state in states.items():
+            if not state.get("uid"):
+                state["uid"] = legacy(f"{self.uid}/{project}/{name}/{number}", state.get("created"))
+                if state["status"] != "running":  # final: no other writer can append after this line
+                    upgraded.append(state)
+        if upgraded:
+            try:
+                append_lines(self._artifact_dir(project, name) / "versions.jsonl", upgraded)
+            except OSError:  # a read-only store: the same uids are derived again next time
+                pass
+        return states
+
+    def _by_uid(self, states: dict[int, dict], uid: str) -> dict | None:
+        return next((state for state in states.values() if state["uid"] == uid), None)
 
     def _write(self, project: str, name: str, record: dict) -> None:
         append_lines(self._artifact_dir(project, name) / "versions.jsonl", [record])
@@ -193,11 +244,12 @@ class LocalStore:
     def versions(self, project: str, name: str) -> list[dict]:
         return [dict(state) for _, state in sorted(self._states(project, name).items())]
 
-    def get_version(self, project: str, name: str, version: int) -> dict:
-        """One version's manifest, whatever its status."""
-        state = self._states(project, name).get(version)
+    def get_version(self, project: str, name: str, version: int | str) -> dict:
+        """One version's manifest, by number or uid, whatever its status."""
+        states = self._states(project, name)
+        state = self._by_uid(states, version) if isinstance(version, str) else states.get(version)
         if state is None:
-            raise NotFound(f"{project}:{name} has no version v{version}")
+            raise NotFound(f"{project}:{name} has no version {version if isinstance(version, str) else f'v{version}'}")
         return dict(state)
 
     def summary(self, project: str, name: str) -> dict:
@@ -233,7 +285,7 @@ class LocalStore:
                 exact.append(text)
         return exact
 
-    def _start(self, project, name, label, metadata, source) -> dict:
+    def _start(self, project, name, label, metadata, source, uid=None) -> dict:
         if label is not None:
             refs.valid_word(label, "label")
         metadata = {} if metadata is None else metadata
@@ -241,8 +293,8 @@ class LocalStore:
             raise StoreError("metadata must be a dict")
         json.dumps(metadata)
         states = self._states(project, name)
-        record = {"version": max(states, default=0) + 1, "label": label, "status": "running", "created": now(),
-                  "files": [], "metadata": metadata, "inputs": [], "source": source}
+        record = {"version": max(states, default=0) + 1, "uid": new_uid() if uid is None else valid_uid(uid), "label": label,
+                  "status": "running", "created": now(), "files": [], "metadata": metadata, "inputs": [], "source": source}
         self._write(project, name, record)
         return record
 
@@ -277,10 +329,18 @@ class LocalStore:
             append_lines(self._artifact_dir(project, name) / "aliases.jsonl", [{"alias": alias, "version": version, "time": now()}])
 
     def start_version(self, project: str, name: str, label: str | None = None, metadata: dict | None = None,
-                      source: dict | None = None) -> int:
+                      source: dict | None = None, uid: str | None = None) -> int:
+        """Start a running version; returns its number. With `uid` (made by the client), starting the same version
+        again returns its number; a uid this artifact already has for a different label or metadata is a Conflict."""
         self._artifact_dir(project, name)
         with self.lock:
-            return self._start(project, name, label, metadata, source)["version"]
+            if uid is not None:
+                known = self._by_uid(self._states(project, name), valid_uid(uid))
+                if known is not None:
+                    if known["label"] != label or known["metadata"] != (metadata or {}):
+                        raise Conflict(f"uid {uid} already names {project}:{name}@v{known['version']} with another label or metadata")
+                    return known["version"]
+            return self._start(project, name, label, metadata, source, uid)["version"]
 
     def add_files(self, project: str, name: str, version: int, entries: list[dict]) -> None:
         """Add or replace files in a running version (entries as in `blobs.clean_entries`, blobs already uploaded)."""
@@ -298,23 +358,30 @@ class LocalStore:
             self._write(project, name, {**state, "status": "failed", "completed": now()})
 
     def publish(self, project: str, name: str, entries: list[dict], label: str | None = None, metadata: dict | None = None,
-                inputs=None, aliases=(), source: dict | None = None) -> int:
+                inputs=None, aliases=(), source: dict | None = None, uid: str | None = None) -> int:
         """Start, fill, and complete a version in one step.
 
         When the latest completed version already has these files, inputs, and metadata, no version
-        is created and its number is returned (the aliases are still applied).
+        is created and its number is returned (the aliases are still applied). With `uid`, publishing
+        the same version again returns its number; a known uid with other content is a Conflict.
         """
         self._artifact_dir(project, name)
         clean = sorted(clean_entries(entries), key=lambda entry: entry["path"])
         _check_tree(clean)
         with self.lock:
             exact = self._exact_inputs(inputs)
+            states = self._states(project, name)
+            known = self._by_uid(states, valid_uid(uid)) if uid is not None else None
             head = self.aliases(project, name).get("latest")
-            state = self._states(project, name).get(head) if head else None
-            if state is not None and _same(state, clean, exact, metadata or {}):
+            state = states.get(head) if head else None
+            if known is not None:
+                if known["status"] != "completed" or not _same(known, clean, exact, metadata or {}):
+                    raise Conflict(f"uid {uid} already names {project}:{name}@v{known['version']} with other content")
+                version = known["version"]
+            elif state is not None and _same(state, clean, exact, metadata or {}):
                 version = state["version"]
             else:
-                version = self._start(project, name, label, metadata, source)["version"]
+                version = self._start(project, name, label, metadata, source, uid)["version"]
                 try:
                     self._add(project, name, version, clean)
                     self._complete(project, name, version, exact)
@@ -350,12 +417,12 @@ class LocalStore:
         states = self._states(project, ref.name)
         if not states:
             raise NotFound(f"no artifact {project}:{ref.name}")
-        if ref.version is not None:
-            state = states.get(ref.version)
+        if ref.exact:
+            state = states.get(ref.version) if ref.version is not None else self._by_uid(states, ref.uid)
             if state is None:
-                raise NotFound(f"{project}:{ref.name} has no version v{ref.version}")
+                raise NotFound(f"{project}:{ref.name} has no version {ref.selector}")
             if state["status"] != "completed":
-                raise StoreError(f"{project}:{ref.name}@v{ref.version} is {state['status']}, not completed")
+                raise StoreError(f"{project}:{ref.name}@{ref.selector} is {state['status']}, not completed")
             return project, ref.name, dict(state)
         selector = ref.selector or "latest"
         number = self.aliases(project, ref.name).get(selector)

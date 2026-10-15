@@ -71,6 +71,7 @@ def test_migrate(old_hub, tmp_path, capsys):
     assert [(v["label"], v["status"]) for v in versions] == [
         ("2025-01-01_10-00-00", "completed"), ("2025-01-02_10-00-00", "completed"), ("2025-01-03_10-00-00", "failed")]
     assert versions[0]["metadata"] == {"migrated_from": "demo/descent/2025-01-01_10-00-00"}
+    assert len({v["uid"] for v in versions}) == 3 and (new / "store.json").is_file()  # migrated versions get uids
     assert store.aliases("demo", "descent") == {"latest": 2}  # the failed run never moved it, the link is ignored
     paths = {e["path"]: e for e in versions[0]["files"]}
     assert sorted(paths) == ["metrics.jsonl", "note.txt", "run.json"]

@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from ..config import Config
+from ..store.cache import cache_root
 
 TOKEN_ENV = "CAIRN_STORE_TOKEN"
 SKIP_NAMES = {"__pycache__", ".DS_Store"}
@@ -29,9 +30,20 @@ BATCH = 5_000
 
 
 class ClientError(Exception):
+    """An HTTP answer the client did not expect; `status` None means there was no answer at all."""
+
     def __init__(self, message: str, status: int | None = None, headers: dict | None = None):
         super().__init__(message)
         self.status, self.headers = status, headers or {}
+
+    @property
+    def unreachable(self) -> bool:
+        """No answer, or a proxy saying the store is down: worth retrying later."""
+        return self.status is None or self.status in (502, 503, 504)
+
+
+def _no_answer(method: str, path: str, url: str, error: BaseException) -> ClientError:
+    return ClientError(f"{method} {path}: the store at {url} did not answer ({error.__class__.__name__}: {error})", None)
 
 
 class Limited:
@@ -87,6 +99,12 @@ class Client:
                         handle.write(chunk)
                 return response.status, b""
             data = response.read()
+        except (ConnectionError, TimeoutError, http.client.HTTPException) as error:
+            raise _no_answer(method, path, self.url, error) from error
+        except OSError as error:
+            if stream_to is not None and isinstance(error, (PermissionError, FileNotFoundError, IsADirectoryError)):
+                raise  # a local file problem, not the network
+            raise _no_answer(method, path, self.url, error) from error
         finally:
             connection.close()
         if response.status == 401:
@@ -100,8 +118,11 @@ class Client:
         """GET as (status, response headers, chunks); the connection closes when the chunks end or are closed."""
         connection = self._connection()
         try:
-            connection.request("GET", path, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})
-            response = connection.getresponse()
+            try:
+                connection.request("GET", path, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})
+                response = connection.getresponse()
+            except (OSError, http.client.HTTPException) as error:
+                raise _no_answer("GET", path, self.url, error) from error
             found = {key.lower(): value for key, value in response.getheaders()}
             if response.status == 401:
                 data = response.read()
@@ -256,7 +277,7 @@ class HashCache:
     """SHA-256 per file, reused while size and modification time are unchanged."""
 
     def __init__(self, project: Path):
-        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cairn"
+        base = cache_root()
         self.path = base / f"push-{hashlib.sha256(str(project.resolve()).encode()).hexdigest()[:16]}.json"
         try:
             self.entries = json.loads(self.path.read_text())
@@ -311,8 +332,9 @@ def entries_for(files: dict[str, dict], cache: HashCache) -> tuple[list[dict], d
     return entries, sources
 
 
-def upload_missing(client: Client, sources: dict[str, tuple[Path, int]], cache: HashCache, workers: int = 4) -> tuple[set[str], int]:
-    """Upload the contents the store lacks. Returns (hashes that failed, bytes sent)."""
+def upload_missing(client: Client, sources: dict[str, tuple[Path, int]], cache: HashCache | None, workers: int = 4,
+                   errors: list | None = None, quiet: bool = False) -> tuple[set[str], int]:
+    """Upload the contents the store lacks. Returns (hashes that failed, bytes sent); `errors` collects why."""
     missing = client.missing(sorted(sources))
     failed: set[str] = set()
 
@@ -322,9 +344,13 @@ def upload_missing(client: Client, sources: dict[str, tuple[Path, int]], cache: 
             client.upload(sha, file, size)
             return size
         except (ClientError, OSError) as error:  # changed while uploading, or a network error: retry next time
-            cache.forget(file)
+            if cache is not None:
+                cache.forget(file)
             failed.add(sha)
-            print(f"warning: {file} not uploaded ({error}); retrying next time", file=sys.stderr)
+            if errors is not None:
+                errors.append(error)
+            if not quiet:
+                print(f"warning: {file} not uploaded ({error}); retrying next time", file=sys.stderr)
             return 0
 
     with ThreadPoolExecutor(workers) as pool:

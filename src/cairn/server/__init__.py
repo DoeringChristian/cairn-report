@@ -11,26 +11,31 @@ HTTPS reverse proxy in front of anything else: the server speaks plain HTTP.
 Artifact names are slash paths (`datasets/crops`), so every route says where the name ends:
 
     API (JSON, `Authorization: Bearer <token>`; a name is ONE percent-encoded path segment, `datasets%2Fcrops`)
+      GET  /api/v2/store                                         {uid, version}: the store's uid and the server's version
       GET  /api/v2/projects                                      [{..., artifacts, updated}]   POST {name, title?, description?}
       GET  /api/v2/projects/<p>                                  PATCH {title?, description?}
       GET  /api/v2/projects/<p>/artifacts                        [{name, latest, versions, aliases, updated, metadata}]
       GET  /api/v2/projects/<p>/artifacts/<name>                 that summary plus `latest_version` (its manifest, or null)
       GET  /api/v2/projects/<p>/artifacts/<name>/versions        every version, full manifests
-      GET  /api/v2/projects/<p>/artifacts/<name>/versions/<n>    one manifest        .../versions/<n>/files  {files: [entries]}
+      GET  /api/v2/projects/<p>/artifacts/<name>/versions/<n>    one manifest (<n>: a number or a uid)   .../files  {files: [entries]}
       GET  /api/v2/projects/<p>/artifacts/<name>/aliases         {alias: version}
-      POST /api/v2/projects/<p>/artifacts/<name>/versions        {label?, metadata?, source?} -> {version} (running)
+      POST /api/v2/projects/<p>/artifacts/<name>/versions        {uid?, label?, metadata?, source?} -> {version, uid} (running)
       POST .../versions/<n>/files {entries}   (409 + `missing` when blobs are absent)   .../complete {inputs?}   .../fail
-      POST /api/v2/projects/<p>/artifacts/<name>/publish         {entries, label?, metadata?, inputs?, aliases?, source?}
-                                                                 -> {version, created}  (created=false: nothing changed)
+      POST /api/v2/projects/<p>/artifacts/<name>/publish         {uid?, entries, label?, metadata?, inputs?, aliases?, source?}
+                                                                 -> {version, uid, created}  (created=false: nothing changed,
+                                                                 or this uid was published already)
       POST /api/v2/projects/<p>/artifacts/<name>/aliases         {alias, version}
       GET  /api/v2/resolve?ref=<ref>                             {project, name, version: manifest}
       GET  /api/v2/lineage?ref=<ref>                             {ref, inputs, consumers}
       POST /api/v2/blobs/missing {sha256: [...]}                 PUT /api/v2/blobs/<sha256> (streamed, hash-verified)
     Files (the name ends at `@`; the path inside the artifact follows `//`)
-      GET  /files/<p>/<name>[@v<n>|@alias|@label]//<path>        ETag, Range, immutable for `@v<n>` of a completed
-                                                                 version, `?download=1` for an attachment
+      GET  /files/<p>/<name>[@v<n>|@uid|@alias|@label]//<path>   ETag, Range, immutable for `@v<n>` or `@uid` of a
+                                                                 completed version, `?download=1` for an attachment
 
 References in the API are `project:name[@selector]` (the project is required: the server has no default).
+A client may supply a version's `uid` (UUIDv7) when it creates it: sending the same version again is
+answered with the version it made (an outbox can retry safely), and a known uid with different content
+is refused with 409.
 
 Tokens are bearer tokens only: there are no cookies and no pages. Everything stored is append-only and the
 server never executes pushed code. Files are served with `Content-Security-Policy: sandbox`.

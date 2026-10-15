@@ -3,21 +3,26 @@
 It offers what `cairn` and `Publication` use: projects, blob upload, versions, aliases,
 `resolve`, `lineage`, and `blob_file` for the pull cache. HTTP, the token, and the HTTPS rule are
 `http.Client`'s. Artifact names travel percent-encoded in API paths (`datasets%2Fcrops`).
+
+A server that does not answer raises `Unreachable` (a StoreError), which the outbox and offline pulls
+catch. `uid` is the server's store uid (`GET /api/v2/store`), remembered in the cache so it is known
+offline too.
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
 import re
-import secrets
 from pathlib import Path
 from urllib.parse import quote
 
 from ..store import refs
-from ..store.errors import BadRange, Forbidden, NotFound, StoreError, Unauthorized
+from ..store.cache import blob_cache, place, scratch
+from ..store.errors import BadRange, Conflict, Forbidden, NotFound, StoreError, Unauthorized, Unreachable
 from ..store.local import FileRead
 from ..store.refs import Ref
+from ..store.uids import UID
+from . import state
 from .http import BATCH, Client, ClientError, upload_missing
 
 
@@ -30,6 +35,23 @@ class RemoteStore:
         """`project` is the default for references without one."""
         self.client, self.project = client, project
         self.url = client.url
+        self._uid: str | None = None
+
+    @property
+    def uid(self) -> str | None:
+        """The server's store uid; while it does not answer, the one remembered from last time (or None)."""
+        if self._uid is None:
+            try:
+                self._uid = self._call("GET", "/api/v2/store")["uid"]
+                state.remember_uid(self.url, self._uid)
+            except Unreachable:
+                return state.known_uid(self.url)
+        return self._uid
+
+    @property
+    def key(self) -> str:
+        """The folder name for this server's outbox and hints: its uid if ever learned, else one made from its URL."""
+        return self._uid or state.known_uid(self.url) or state.store_key(self.url)
 
     def _call(self, method: str, path: str, value=None, expect=(200,)):
         try:
@@ -51,13 +73,16 @@ class RemoteStore:
         except ClientError as error:
             raise _translate(error) from error
 
-    def upload(self, sources: dict[str, tuple[Path, int]], cache) -> None:
+    def upload(self, sources: dict[str, tuple[Path, int]], cache, quiet: bool = False) -> None:
         """Upload, in parallel, the blobs of `sources` ({sha: (file, size)}) that the server lacks."""
+        errors: list = []
         try:
-            failed, _ = upload_missing(self.client, sources, cache)
+            failed, _ = upload_missing(self.client, sources, cache, errors=errors, quiet=quiet)
         except ClientError as error:
             raise _translate(error) from error
         if failed:
+            if any(isinstance(error, ClientError) and error.unreachable for error in errors):
+                raise Unreachable(f"{len(failed)} files were not uploaded: {errors[0]}")
             raise StoreError(f"{len(failed)} files were not uploaded; publish again")
 
     def put_blob(self, sha: str, stream, size: int) -> bool:
@@ -70,13 +95,16 @@ class RemoteStore:
         return status == 201
 
     def blob_file(self, project: str, name: str, version: int, entry: dict, cache_root) -> Path:
-        """The entry's contents in the blob cache under `cache_root`, downloaded (and verified) once."""
+        """The entry's contents in the blob cache under `cache_root`, downloaded (and verified) once.
+
+        The download goes to a scratch name and is renamed into place, so concurrent jobs sharing the cache
+        (on NFS too) never see a partial blob; when two download the same blob, the second rename is skipped."""
         sha = entry["sha256"]
-        target = Path(cache_root) / ".blobs" / sha[:2] / sha[2:]
+        target = blob_cache(cache_root, sha)
         if target.is_file():
             return target
         target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name(f".{sha[2:]}.{secrets.token_hex(6)}.tmp")
+        temporary = scratch(target)
         try:
             where = f"/files/{q(project)}/{quote(name)}@v{version}//{quote(entry['path'])}"
             try:
@@ -89,7 +117,7 @@ class RemoteStore:
                     digest.update(chunk)
             if digest.hexdigest() != sha:
                 raise StoreError(f"{where}: downloaded content does not match its SHA-256")
-            os.replace(temporary, target)
+            place(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
         return target
@@ -145,16 +173,19 @@ class RemoteStore:
     def versions(self, project: str, name: str) -> list[dict]:
         return self._call("GET", f"{self._artifact(project, name)}/versions")
 
-    def get_version(self, project: str, name: str, version: int) -> dict:
+    def get_version(self, project: str, name: str, version: int | str) -> dict:
+        """One manifest by number or uid, whatever its status."""
+        if isinstance(version, str) and not UID.fullmatch(version):
+            raise ValueError(f"invalid version {version!r}")
         return self._call("GET", f"{self._artifact(project, name)}/versions/{version}")
 
     def aliases(self, project: str, name: str) -> dict[str, int]:
         return self._call("GET", f"{self._artifact(project, name)}/aliases")
 
     def start_version(self, project: str, name: str, label: str | None = None, metadata: dict | None = None,
-                      source: dict | None = None) -> int:
+                      source: dict | None = None, uid: str | None = None) -> int:
         return self._call("POST", f"{self._artifact(project, name)}/versions",
-                          {"label": label, "metadata": metadata, "source": source}, expect=(201,))["version"]
+                          {"label": label, "metadata": metadata, "source": source, "uid": uid}, expect=(201,))["version"]
 
     def add_files(self, project: str, name: str, version: int, entries: list[dict]) -> None:
         for start in range(0, len(entries), BATCH):
@@ -167,10 +198,10 @@ class RemoteStore:
         self._call("POST", f"{self._artifact(project, name)}/versions/{version}/fail", {})
 
     def publish(self, project: str, name: str, entries: list[dict], label: str | None = None, metadata: dict | None = None,
-                inputs=None, aliases=(), source: dict | None = None) -> int:
+                inputs=None, aliases=(), source: dict | None = None, uid: str | None = None) -> int:
         answer = self._call("POST", f"{self._artifact(project, name)}/publish", {
             "entries": entries, "label": label, "metadata": metadata, "inputs": [str(item) for item in inputs or []],
-            "aliases": list(aliases), "source": source}, expect=(200, 201))
+            "aliases": list(aliases), "source": source, "uid": uid}, expect=(200, 201))
         return answer["version"]
 
     def set_alias(self, project: str, name: str, alias: str, version: int) -> None:
@@ -194,6 +225,8 @@ class RemoteStore:
 def _translate(error: ClientError) -> StoreError:
     """404 is a NotFound; every other server answer is a StoreError with the server's message."""
     text = str(error)
+    if error.unreachable:
+        return Unreachable(text)
     if error.status == 404:
         return NotFound(text)
-    return {401: Unauthorized, 403: Forbidden}.get(error.status, StoreError)(text)
+    return {401: Unauthorized, 403: Forbidden, 409: Conflict}.get(error.status, StoreError)(text)

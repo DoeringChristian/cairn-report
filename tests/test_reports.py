@@ -273,7 +273,8 @@ def test_inputs_exposes_paths_by_attribute_and_item(project):
         "metric('Steps', steps)\nmetric('Folder', inputs.descent.name)\n```\n"))
     build_all(load_config(project))
     narrative = (built(project) / "alpha" / "narrative.html").read_text()
-    assert "<strong>3</strong>" in narrative and "<strong>v1</strong>" in narrative
+    uid = store.versions("descent")[0]["uid"]  # the cache keys a version's folder by its uid
+    assert "<strong>3</strong>" in narrative and f"<strong>{uid}</strong>" in narrative
 
 
 def test_input_images_are_copied_with_their_trace(project):
