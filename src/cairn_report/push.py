@@ -365,7 +365,7 @@ class ReportPusher:
             return None, False, 0
         unbuilt = unbuilt_reports(self.config)
         if unbuilt:  # a failed or partial build must not become a report version
-            raise HubError("these reports have no built pages: " + ", ".join(key or "/" for key in unbuilt)
+            raise HubError("these reports have no built pages: " + ", ".join(unbuilt)
                            + "; run `cairn-report build` (and fix its errors) before pushing")
         entries, sources = entries_for(files, self.cache)
         failed, sent = upload_missing(self.hub, sources, self.cache)

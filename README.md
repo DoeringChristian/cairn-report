@@ -3,8 +3,8 @@
 Small pieces for research projects that keep their evidence in plain run
 folders:
 
-- a **builder** that turns a tree of Markdown reports into a static site, reading
-  numbers and figures straight from run outputs;
+- a **builder** that turns single-page Markdown reports into a static site, reading
+  numbers and figures from the artifacts each report declares as inputs;
 - a **run logger** that writes evidence to fixed places in a run folder (and,
   files only; `cairn-report publish --watch` syncs a running job's folder to the store);
 - a **hub**: a token-protected artifact store for reports and runs, with push
@@ -38,72 +38,140 @@ Optional extras: `cairn-report[video]` (`log.video` from frames),
 
 ## Reports
 
-A report is a folder with a `report.md` and, optionally, an `assets/` folder and
-child reports (sub-folders with their own `report.md`, at any depth: a folder
-without one only groups the reports below it). The configured report folder
-(default `reports/`) is the root of the tree:
+A report is one page: a folder `reports/<slug>/` (the slug is lower-case letters,
+digits, `-` and `_`) with a `report.md` and, optionally, an `assets/` folder and
+a `data/` folder. There is no nesting and no root report: a project holds
+several flat reports, one per research direction. A `report.md` anywhere else
+(`reports/report.md`, `reports/a/b/report.md`) fails the build with "reports are
+single pages: move it to reports/<slug>/".
 
 ```text
 reports/                       ->  generated/reports/
-├── report.md                  ->  index.html            (the root page, served at /)
-├── assets/                    ->  images, Plotly JSON, HTML fragments, data
-└── alpha/                     ->  alpha/index.html
-    ├── report.md
-    ├── assets/
-    └── beta/report.md         ->  alpha/beta/index.html
+├── alpha/                     ->  alpha/index.html
+│   ├── report.md
+│   ├── assets/                    images, Plotly JSON, HTML fragments
+│   └── data/                      small data kept with the report
+└── beta/report.md             ->  beta/index.html
+                                   index.html           (the project index, served at /)
 ```
 
 ```bash
-cairn-report build             # build the whole tree into generated/reports/
-cairn-report build --report alpha/beta
+cairn-report build             # build every report into generated/reports/
+cairn-report build --report beta
 cairn-report serve             # build, then serve at http://127.0.0.1:8000/
 ```
 
-`serve` moves to the next free port when the requested one is taken
-(`--strict-port` fails instead). The output is a static site: any web server,
-the project server, or a hub can serve it, at any address prefix.
+The build also writes `generated/reports/index.html`, a project index with one
+card per report (title, status, summary, update time, number of inputs), and
+`site.json`, the flat report list the sidebar uses. `serve` moves to the next
+free port when the requested one is taken (`--strict-port` fails instead). The
+output is a static site: any web server, the project server, or a hub can serve
+it, at any address prefix.
 
 ### Writing a report
 
 Front matter is optional: `title` (default: the folder name), `subtitle`,
-`status`, `summary`, `eyebrow`. The body is Markdown with:
+`status`, `summary`, `eyebrow`, and `inputs`. The body is Markdown with:
 
-- `python exec` fences (`hide` to run without showing the code) that read runs:
-  `run_dir(name)`, `run_trials(study)`, `read_scalars`, `read_json`, `read_csv`,
+- `python exec` fences (`hide` to run without showing the code) that read the
+  report's data: `inputs.<name>`, `read_scalars`, `read_json`, `read_csv`,
   `read_jsonl`, `track(path)`, plus `metric(...)` cards.
   Matplotlib figures a block creates become figure cards (`caption(text)` sets
   the current figure's caption), and `graph(source, id=..., title=...,
   caption=...)` turns generated Graphviz source into one, for example a model
   architecture drawn from code;
-- `{{ expression }}` values in prose and in the `summary`;
-- figures as Markdown images: a path in the report folder, `run:<name>/<file>`
-  (the run's latest folder, `run:<name>@<timestamp>/<file>` for a fixed one); Plotly JSON files become interactive figures,
-  videos (`.mp4`, `.m4v`, `.mov`, `.webm`) become video cards, Matplotlib
-  figures drawn in `python exec` blocks are embedded, and Graphviz fences
-  (`dot`, `neato`, ...) are laid out at build time;
+- `{{ expression }}` values in prose and in the `summary` (which may use inputs
+  too);
+- figures as Markdown images: a path in the report folder, or
+  `input:<name>/<file>` for a file of a declared input; Plotly JSON files become
+  interactive figures, videos (`.mp4`, `.m4v`, `.mov`, `.webm`) become video
+  cards, Matplotlib figures drawn in `python exec` blocks are embedded, and
+  Graphviz fences (`dot`, `neato`, ...) are laid out at build time;
 - `!!! <type> "Title"` callouts; `!!! finding <status> "Title"` blocks are
-  collected with their status and counted on the parent's child cards;
-- `[text](report:<path>#anchor)` links to other reports (`report:/` is the root),
-  checked at build time;
-- a ```` ```reports ```` fence: a card per child report (title, status, summary,
-  finding counts), or only the children it names;
+  collected with their status in `report-data.json`;
+- `[text](report:<slug>#anchor)` links to other reports, checked at build time;
 - `$...$` / `$$...$$` mathematics (MathML), `html raw` and `html include`
   fences, and `<!-- ... -->` comments, which never reach the page.
 
-Each page links to its nearest parent report. The sidebar lists every report as
-a tree that follows the folders: branches fold, the current page's branch is
-open, and a folder without a `report.md` shows as a label. A folder whose name
-is not lower-case letters, digits, `-` and `_` is skipped with a warning. Pages
-open
-figures in a lightbox that shows where they came from (run, the code that drew
-and logged them, the commit). A video card loads near the viewport and plays muted and looped while it is on
-screen (not with reduced motion). In the lightbox it has a player: play/pause
-(click, Space, `k`), a scrub bar, frame steps (`,` `.`, or a sideways or Shift
-mouse wheel), ±1 s (Shift+←/→), speed from 0.1× to 2×, and the same zoom and
-pan as images. The frame rate is read from the MP4, so frame steps are exact.
-`serve` and the hub answer range requests, so browsers can seek. Each build writes a
-`manifest.json` per report: every file read with its hash, the runs used and
-their status, links, typed numbers in prose, and the tooling versions.
+### Inputs
+
+A report declares the artifacts it reads in its front matter, by local name:
+
+```yaml
+---
+title: Descent
+inputs:
+  descent: descent@latest          # [project:]name[@vN|@alias|@label], as in `store.pull`
+  crops: datasets/crops@v3
+---
+```
+
+Local names are lower-case identifiers (`[a-z_][a-z0-9_]*`). At build time each
+reference is resolved to an exact version (`project:name@vN`; aliases only
+resolve completed versions), materialized read-only through the store's cache,
+and exposed in `python exec` blocks as `inputs`, an object whose attributes and
+items are `Path`s:
+
+```python
+scores = read_scalars(inputs.descent)                         # metrics.jsonl of the input
+table = read_csv(inputs["crops"] / "tables" / "cases.csv")
+```
+
+Images use `input:descent/figures/trajectory.png`. The lightbox of such a figure
+shows the input reference (`descent@v3//figures/trajectory.png`) and the exact
+artifact version. The store comes from `[store]` in `cairn-report.toml`; the
+build does not touch `.cairn-inputs.jsonl`: a report records its inputs in its
+own manifest instead.
+
+**Strict.** A report may read only its own folder and its declared inputs.
+The read helpers raise a build error for any other path. While a `python exec`
+block (or a `{{ }}` value) runs, an audit hook also fails the build when the
+code opens a file (or lists a folder) inside the project or the store cache that
+is neither in the report folder nor in a declared input, for example
+`open("outputs/run/metrics.jsonl")`. The error names the file and the report
+line and says to declare it under `inputs:`. Paths elsewhere (the standard
+library, site-packages, temporary files, font caches) and writes into the
+report's generated output stay allowed. Known gaps: code that reads through a
+subprocess or a native library that opens files without Python's `open`, files
+reached through a path outside the project and the cache (a store kept
+elsewhere is watched, other locations are not), and imports of project modules
+(importing is not reading data).
+
+The manifest (`generated/reports/<slug>/manifest.json`) and `report-data.json`
+record `inputs: {name: {requested, resolved, files}}`; the manifest also lists
+every file read with its hash, links, typed numbers in prose, and the tooling
+versions.
+
+### Pages
+
+Every report page shows a compact **Data** section right after the header: one
+row per input with its local name, the exact version (`name@vN`, with the exact
+reference in a `data-artifact` attribute) and its file count, and a button that
+copies the exact reference. The sidebar lists the project's reports flat, sorted
+by title, with the current page highlighted; the brand links to the project
+index. A folder whose name is not a valid slug is skipped with a warning. Pages
+open figures in a lightbox that shows where they came from. A video card loads
+near the viewport and plays muted and looped while it is on screen (not with
+reduced motion). In the lightbox it has a player: play/pause (click, Space,
+`k`), a scrub bar, frame steps (`,` `.`, or a sideways or Shift mouse wheel),
+±1 s (Shift+←/→), speed from 0.1× to 2×, and the same zoom and pan as images.
+The frame rate is read from the MP4, so frame steps are exact. `serve` and the
+hub answer range requests, so browsers can seek.
+
+### Publishing a report
+
+```bash
+cairn-report publish reports/alpha
+```
+
+builds the report and stores it as the next version of the artifact
+`reports/alpha`: `source/` (the report folder: `report.md`, `assets/`, `data/`)
+and `site/` (its built page and the shared `_static` files it needs, so the
+version can be viewed on its own), with metadata `{title, status, summary}` and
+the exact input versions as its inputs. A report whose source, inputs, and
+metadata are unchanged creates no new version. Lineage follows: the report
+version lists its inputs, and each input lists the report as a consumer
+(`store.lineage`).
 
 ### Comments
 
@@ -130,10 +198,10 @@ report remembers the reader's position in the browser.
 
 ```bash
 cairn-report share                 # build, then write generated/share/index.html
-cairn-report share --report alpha  # only alpha and its children
+cairn-report share --report alpha  # only alpha
 ```
 
-`share` writes the whole tree as one self-contained page for hosts that take a
+`share` writes the reports as one self-contained page for hosts that take a
 single file, such as claude.ai artifacts: every report's text, its figures as
 data URIs, and its Plotly data, with the styles and script inline. The sidebar
 and `report:` links switch reports inside the page, and a plain `#anchor` in
@@ -260,9 +328,9 @@ a folder, `**` spans folders, a leading `/` anchors to the project root.
 Everything has a default; `cairn-report.toml` at the project root changes it:
 
 ```toml
-reports_dir = "reports"            # the root report folder
+reports_dir = "reports"            # holds one folder per report
 output_dir = "generated/reports"   # the built site
-outputs_dir = "outputs"            # run folders
+outputs_dir = "outputs"            # run folders (pushed to a hub)
 
 [style]
 css = ["style.css"]                # extra stylesheets, loaded after the default style

@@ -71,28 +71,29 @@ def test_report_versions(hub, client):
     assert push(config, what="report") == 0  # unchanged: still version 1
     versions = json.loads(call(hub, "GET", "/api/v1/projects/study/report/versions")[2])
     assert [v["version"] for v in versions] == [1]
-    root = client / "reports" / "report.md"
-    root.write_text(root.read_text().replace("See [the result]", "Start here. See [the result]"))
+    beta = client / "reports" / "beta" / "report.md"
+    beta.write_text(beta.read_text().replace("Back to", "Start here. Back to"))
     build_all(config)
     push(config, what="report")
     versions = json.loads(call(hub, "GET", "/api/v1/projects/study/report/versions")[2])
     assert [v["version"] for v in versions] == [1, 2]
-    assert b"Start here" in call(hub, "GET", "/p/study/narrative.html")[2]
-    assert b"Start here" not in call(hub, "GET", "/p/study@1/narrative.html")[2]  # old versions stay viewable
+    assert b"Start here" in call(hub, "GET", "/p/study/beta/narrative.html")[2]
+    assert b"Start here" not in call(hub, "GET", "/p/study@1/beta/narrative.html")[2]  # old versions stay viewable
 
 
 def test_report_served_with_caching(hub, client):
     config = load_config(client)
     build_all(config)
     push(config, what="report")
-    page = call(hub, "GET", "/p/study/alpha/beta/")[2].decode()
-    script = re.search(r'src="\.\./\.\./(_static/report\.[0-9a-f]+\.js)"', page).group(1)
+    page = call(hub, "GET", "/p/study/beta/")[2].decode()
+    script = re.search(r'src="\.\./(_static/report\.[0-9a-f]+\.js)"', page).group(1)
     status, headers, _ = call(hub, "GET", f"/p/study/{script}", headers={"Accept-Encoding": "gzip"})
     assert status == 200 and headers["Content-Encoding"] == "gzip" and "immutable" in headers["Cache-Control"]
     versioned = re.search(r'data-narrative="([^"]+)"', page).group(1)
-    assert "immutable" in call(hub, "GET", f"/p/study/alpha/beta/{versioned}")[1]["Cache-Control"]
+    assert "immutable" in call(hub, "GET", f"/p/study/beta/{versioned}")[1]["Cache-Control"]
     assert call(hub, "GET", "/p/study/alpha")[0] == 301
-    assert json.loads(call(hub, "GET", "/p/study/site.json")[2])["title"] == "Root"
+    assert json.loads(call(hub, "GET", "/p/study/site.json")[2])["title"] == "Reports"
+    assert b"Alpha" in call(hub, "GET", "/p/study/")[2]  # the project index is the hub's root page for the project
 
 
 def test_runs_are_incremental_with_history(hub, client):
@@ -155,14 +156,14 @@ def test_pull_restores_and_protects_local_changes(hub, client, tmp_path):
                        outputs_dir=root / "outputs")
     pull(Hub(hub["url"], TOKEN), "study", restored, runs=[])
     assert (root / "reports" / "alpha" / "report.md").read_text() == (client / "reports" / "alpha" / "report.md").read_text()
-    assert (root / "generated" / "reports" / "alpha" / "beta" / "index.html").is_file()
+    assert (root / "generated" / "reports" / "beta" / "index.html").is_file()
     assert (root / "outputs" / RUN / "metrics.jsonl").read_bytes() == (client / "outputs" / RUN / "metrics.jsonl").read_bytes()
     assert (root / "outputs" / "demo" / "latest").is_symlink()
-    (root / "reports" / "report.md").write_text("local edit\n")
+    (root / "reports" / "alpha" / "report.md").write_text("local edit\n")
     with pytest.raises(SystemExit, match="would be replaced"):
         pull(Hub(hub["url"], TOKEN), "study", restored)
     pull(Hub(hub["url"], TOKEN), "study", restored, force=True)
-    assert (root / "reports" / "report.md").read_text() != "local edit\n"
+    assert (root / "reports" / "alpha" / "report.md").read_text() != "local edit\n"
 
 
 def test_push_wraps_a_command(hub, client):
@@ -220,7 +221,7 @@ def test_serve_creates_a_new_hub_and_prints_its_token(tmp_path, monkeypatch, cap
 def test_push_refuses_a_partial_build(hub, client, capsys):
     config = load_config(client)
     build_all(config)
-    shutil.rmtree(client / "generated" / "reports" / "alpha" / "beta")  # as after a build that failed midway
+    shutil.rmtree(client / "generated" / "reports" / "beta")  # as after a build that failed midway
     assert push(config, what="report") == 1
-    assert "no built pages: alpha/beta" in capsys.readouterr().err
+    assert "no built pages: beta" in capsys.readouterr().err
     assert call(hub, "GET", "/api/v1/projects/study/report")[0] == 404  # no version was created

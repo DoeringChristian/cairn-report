@@ -1,7 +1,7 @@
 """`cairn-report share`: the built reports as one self-contained page, for single-file hosts such as
 claude.ai artifacts.
 
-The page holds every report of the shared tree, its text, figures (as data URIs), and Plotly figure
+The page holds every shared report, its text, figures (as data URIs), and Plotly figure
 data; the sidebar switches between reports inside the page. Only Plotly's runtime is fetched, from a
 public CDN at the exact version the build bundles. The page is published exactly as written: to change
 it, edit reports/ and share again.
@@ -46,7 +46,7 @@ def inline_assets(key: str, narrative: str, sizes: dict[str, int]) -> tuple[str,
         if root not in path.parents or not path.is_file():
             return match.group(0)  # a link to a report or an anchor: the page resolves it
         data = path.read_bytes()
-        sizes[f"{key or '/'}: {value.split('?')[0]}"] = len(data)
+        sizes[f"{key}: {value.split('?')[0]}"] = len(data)
         if path.suffix == ".json":
             files[value] = json.loads(data)
             return match.group(0)
@@ -85,32 +85,33 @@ def page(title: str, notice: str, bundle: dict, start: str) -> str:
 
 
 def share(config: Config, report: str | None = None, build: bool = True, out: Path | None = None) -> Path:
-    """Write the shared page for the report tree rooted at `report` (default: every report)."""
+    """Write the shared page for one report (`report`, a slug) or, by default, every report."""
     if build:
         builder.build_all(config)
     else:
         builder.configure(config)
     reports = builder.discover_reports()
-    start = (report or "").strip("/")
-    if start not in reports:
-        raise SystemExit(f"unknown report {report!r}; reports: {', '.join(k or '/' for k in reports)}")
-    keys = [key for key in reports if not start or key == start or key.startswith(start + "/")]
+    if report is not None and report.strip("/") not in reports:
+        raise SystemExit(f"unknown report {report!r}; reports: {', '.join(reports)}")
     site = json.loads((builder.OUTPUT_ROOT / "site.json").read_text())
+    wanted = [report.strip("/")] if report is not None else [entry["key"] for entry in site["reports"]]
     entries, bundle_reports, sizes = [], {}, {}
     for entry in site["reports"]:
         key = entry["key"]
-        if key not in keys:
+        if key not in wanted:
             continue
         folder = builder.output_dir(key)
         if not (folder / "narrative.html").is_file():
-            raise SystemExit(f"report {key or '/'} is not built; run `cairn-report build`")
+            raise SystemExit(f"report {key} is not built; run `cairn-report build`")
         narrative, files = inline_assets(key, (folder / "narrative.html").read_text(), sizes)
         data = json.loads((folder / "report-data.json").read_text())
         bundle_reports[key] = {"data": data, "narrative": narrative, "files": files}
         entries.append(entry)
-    title = bundle_reports[start]["data"]["title"]
+    start = entries[0]["key"]
+    title = bundle_reports[start]["data"]["title"] if report is not None else site["title"]
     bundle = {"start": start, "site": site | {"title": title, "reports": entries}, "reports": bundle_reports}
-    source = builder.discover_reports()[start].relative_to(config.project).as_posix() + "/"
+    source = (builder.REPORTS_ROOT / start).relative_to(config.project).as_posix() + "/" if report is not None else \
+        builder.REPORTS_ROOT.relative_to(config.project).as_posix() + "/"
     text = page(title, NOTICE.format(source=source), bundle, start)
     size = len(text.encode())
     if size > MAX_BYTES:
@@ -118,12 +119,12 @@ def share(config: Config, report: str | None = None, build: bool = True, out: Pa
         shown = "\n  ".join(f"{name} ({count / 1e6:.1f} MB)" for name, count in largest)
         raise SystemExit(
             f"the shared page would be {size / 1e6:.1f} MB, above the {MAX_BYTES / 1e6:.0f} MB limit of single-file hosts;"
-            f" share a smaller part of the tree (--report) or make these figures smaller:\n  {shown}"
+            f" share one report (--report) or make these figures smaller:\n  {shown}"
         )
     target = (out or share_dir(config) / "index.html").resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text)
-    names = ", ".join(key or "/" for key in bundle_reports)
+    names = ", ".join(bundle_reports)
     print(f"Shared page: {target} ({size / 1e6:.1f} MB; reports: {names})")
     print("Publish this one file exactly as written (on claude.ai: the Artifact tool with this file_path and no other files);"
           " do not edit it. To change it, edit the report sources and run `cairn-report share` again.")

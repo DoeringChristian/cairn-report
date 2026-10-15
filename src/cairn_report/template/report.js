@@ -5,10 +5,10 @@ const $ = selector => document.querySelector(selector);
 const PAGE = document.currentScript?.dataset || {};
 const PLOTLY_SRC = PAGE.plotly || "plotly.min.js";  // loaded on first use
 const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
-/* The builder tells each page where the site root is (relative) and which report it shows ("" is the root),
+/* The builder tells each page where the site root is (relative) and which report (slug) it shows,
    so the same build works at any address: a project server, a hub prefix, or plain static hosting. */
 const siteRoot = new URL(PAGE.root || "./", location.href).pathname;
-/* `cairn-report share` writes one page that carries every report of a tree (#cairn-bundle); links between
+/* `cairn-report share` writes one page that carries the shared reports (#cairn-bundle); links between
    reports then switch the report inside the page, so it works on hosts that serve a single file. */
 const BUNDLE = (() => { const node = document.getElementById("cairn-bundle"); return node ? JSON.parse(node.textContent) : null; })();
 const VIRTUAL_SITE = "https://site.invalid/";  // bundle mode: report links resolve against this stand-in address
@@ -133,11 +133,26 @@ function fetchReport() {
   narrativeText = fetch(PAGE.narrative || "narrative.html").then(r => r.text());
 }
 function showHeader(data) {
-  $("#overview-link").hidden = true;
-  if (BUNDLE && data.parent && !(data.parent.key in BUNDLE.reports)) data = {...data, parent: null};  // outside the shared tree
   document.title = data.title; $("#title").textContent = data.title; $("#subtitle").textContent = data.subtitle;
-  $("#status").textContent = data.status; $("#status").hidden = !data.status; $("#report-summary").textContent = data.summary || ""; $("#report-summary").hidden = !data.summary; if (data.parent) { const back = $("#overview-link"); back.textContent = `← ${data.parent.title}`; back.href = siteHref(data.parent.href); back.title = "Back to the parent report"; back.hidden = false; } $("#eyebrow").textContent = data.eyebrow || ""; $("#eyebrow").hidden = !data.eyebrow; $("#updated").textContent = `Updated · ${data.updated}`;
+  $("#status").textContent = data.status; $("#status").hidden = !data.status; $("#report-summary").textContent = data.summary || ""; $("#report-summary").hidden = !data.summary; $("#eyebrow").textContent = data.eyebrow || ""; $("#eyebrow").hidden = !data.eyebrow; $("#updated").textContent = `Updated · ${data.updated}`;
+  showData(data.inputs || {});
+  if (!BUNDLE) $(".brand").href = siteRoot;  // the project index lists every report
   bundleLinks($(".hero"));
+}
+/* The Data panel: each input the report was built from, pinned to an exact version. The version carries its exact
+   reference in data-artifact; a store server's page for it (/p/<project>/a/<name>@v<n>/) can link it from there. */
+function showData(inputs) {
+  const panel = $("#data-panel"); if (!panel) return;
+  const list = $("#data-list"); list.replaceChildren();
+  Object.entries(inputs).forEach(([name, input]) => {
+    const row = el("li", "data-row"), version = el("span", "data-version", input.resolved.split(":").pop());
+    version.dataset.artifact = input.resolved; version.title = input.requested ? `declared as ${input.requested}` : input.resolved;
+    const button = el("button", "image-copy"); button.type = "button"; button.title = "Copy exact version"; button.setAttribute("aria-label", "Copy exact version"); button.dataset.tooltip = "Copy exact version"; button.innerHTML = COPY_ICON;
+    button.onclick = async () => flashTip(button, (await copyText(input.resolved)) ? "Version copied" : "Copy failed");
+    row.append(el("span", "data-name", name), version, el("span", "data-files", `${input.files} file${input.files === 1 ? "" : "s"}`), button);
+    list.append(row);
+  });
+  panel.hidden = !list.childElementCount;
 }
 let pageBound = false;
 function renderReport(place) {
@@ -235,22 +250,7 @@ async function prefetchReport(href) {
   } catch (_) {}
 }
 
-// The sidebar lists every report of the site as a tree that follows the folder hierarchy. A folder
-// without its own report.md appears as a label holding the reports below it.
-function reportTree(reports) {
-  const rootKey = reports[0]?.key ?? "", root = {key: rootKey, name: "", report: reports[0], children: []}, nodes = new Map([[rootKey, root]]);
-  reports.slice(1).forEach(report => {
-    const relative = rootKey ? report.key.slice(rootKey.length + 1) : report.key;
-    let parent = root, key = rootKey;
-    relative.split("/").forEach(name => {
-      key = key ? `${key}/${name}` : name;
-      if (!nodes.has(key)) { const node = {key, name, report: null, children: []}; nodes.set(key, node); parent.children.push(node); }
-      parent = nodes.get(key);
-    });
-    parent.report = report;
-  });
-  return root;
-}
+// The sidebar lists every report of the site, flat and sorted by title.
 function reportLink(report) {
   const link = el("a", "report-list-link");
   link.append(el("span", null, report.title));
@@ -260,25 +260,12 @@ function reportLink(report) {
   else if (!BUNDLE) { link.addEventListener("pointerenter", () => prefetchReport(link.href), {once: true}); link.addEventListener("focus", () => prefetchReport(link.href), {once: true}); }
   return link;
 }
-function reportBranch(node) {
-  const head = node.report ? reportLink(node.report) : el("span", "report-list-folder", node.name);
-  if (!node.children.length) return head;
-  const branch = el("details", "report-list-branch"), summary = el("summary");
-  summary.append(head);
-  branch.open = reportKey === node.key || reportKey.startsWith(`${node.key}/`) || !node.report;  // the current page's branch, and plain folders
-  const children = el("div", "report-list-children");
-  node.children.forEach(child => children.append(reportBranch(child)));
-  branch.append(summary, children);
-  return branch;
-}
 async function loadReportList(data) {
   const {reports = [], title} = await siteData;
   if (title) $("#site-title").textContent = title;
   const list = $("#report-list"); list.replaceChildren();
   if (reports.length < 2) return;
-  const root = reportTree(reports);
-  list.append(reportLink(root.report));
-  root.children.forEach(child => list.append(reportBranch(child)));
+  [...reports].sort((a, b) => a.title.localeCompare(b.title)).forEach(report => list.append(reportLink(report)));
   $("#report-list-section").hidden = false;
 }
 
@@ -286,8 +273,7 @@ const lightbox = $("#lightbox"), lightboxImage = $("#lightbox-image"), lightboxP
 let viewMedia = lightboxImage;  // the image or the video the zoom, pan, and wheel act on
 lightboxImage.addEventListener("load", () => lightboxImage.classList.toggle("is-pixelated", lightboxImage.clientWidth > 2 * lightboxImage.naturalWidth));
 async function showFigure(index) { active = (index + figures.length) % figures.length; const figure = figures[active]; const interactive = figure.type === "plotly", video = figure.type === "video"; lightboxImage.hidden = interactive || video; lightboxVideo.hidden = !video; $("#video-controls").hidden = !video; lightboxPlot.hidden = !interactive; $(".zoom").hidden = interactive; viewMedia = video ? lightboxVideo : lightboxImage; if (!video) stopVideo(); if (interactive) { lightboxImage.src = ""; await renderPlot(lightboxPlot, figure, true); } else { if (globalThis.Plotly) Plotly.purge(lightboxPlot); if (video) { lightboxImage.removeAttribute("src"); startVideo(figure); } else { lightboxImage.src = figure.src; lightboxImage.alt = figure.title; } resetView(); } syncLightboxComment(); $("#lightbox-title").textContent = figure.title; $("#lightbox-caption").textContent = figure.caption || ""; renderTrace(figure.trace || {}); }
-// Every enlarged figure says where it came from: file, run, producing code, commit.
-const codeRef = ref => ref ? `${ref.file || "?"}${ref.line ? `:${ref.line}` : ""}${ref.function ? ` · ${ref.function}()` : ""}` : "";
+// Every enlarged figure says where it came from: its file, or the input (name@vN//file) and the exact artifact version.
 let traceOpen = false;
 try { traceOpen = localStorage.getItem("report-trace-open") === "1"; } catch (_) {}
 function applyTraceState() {
@@ -301,12 +287,10 @@ $("#lightbox-info").onclick = toggleTrace;
 function renderTrace(trace) {
   const rows = [
     ["File", trace.path],
-    ["Run", trace.run],
-    ["Drawn by", codeRef(trace.producer)],
-    ["Logged by", codeRef(trace.origin)],
+    ["Input", trace.input],
+    ["Artifact", trace.artifact],
     ["Generated", trace.generated],
     ["Read in block", (trace.inputs || []).join(", ")],
-    ["Commit", trace.revision ? trace.revision.slice(0, 12) + (trace.uncommitted ? ` + ${trace.uncommitted}` : "") : ""],
     ["Report", trace.report],
   ].filter(([, value]) => value);
   const list = $("#lightbox-trace"); list.replaceChildren();

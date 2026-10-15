@@ -47,20 +47,23 @@ def test_rejects_bad_names_and_values(tmp_path):
         log.scalar("flag", True)
 
 
-def test_report_reads_logged_run(tmp_path):
+def test_report_reads_logged_run(tmp_path, monkeypatch):
+    from cairn_report import store
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     (tmp_path / "pyproject.toml").write_text("")
+    monkeypatch.chdir(tmp_path)
     run = tmp_path / "outputs" / "demo" / "2026-01-01_00-00-00"
     RunLogger(run).scalar("rmse", 0.125)
-    (run / "run.json").write_text(json.dumps({"status": "completed"}))
-    (run.parent / "latest").symlink_to(run.name)
-    (tmp_path / "reports").mkdir()
-    (tmp_path / "reports" / "report.md").write_text(
-        '---\ntitle: T\n---\n\n```python exec hide\nscores = read_scalars(run_dir("demo"))\n```\n\nLogged error {{ scores["rmse"] }}.\n')
+    store.publish("demo", run)
+    (tmp_path / "reports" / "main").mkdir(parents=True)
+    (tmp_path / "reports" / "main" / "report.md").write_text(
+        '---\ntitle: T\ninputs:\n  demo: demo\n---\n\n```python exec hide\nscores = read_scalars(inputs.demo)\n```\n\nLogged error {{ scores["rmse"] }}.\n')
     build_all(load_config(tmp_path))
-    out = tmp_path / "generated" / "reports"
+    out = tmp_path / "generated" / "reports" / "main"
     assert ">0.125</span>" in (out / "narrative.html").read_text()
     manifest = json.loads((out / "manifest.json").read_text())
-    assert "outputs/demo/2026-01-01_00-00-00/metrics.jsonl" in manifest["sources"]
+    assert "input:demo/metrics.jsonl" in manifest["sources"] and manifest["inputs"]["demo"]["resolved"] == f"{tmp_path.name}:demo@v1"
 
 
 def test_origin_capture_is_cheap(tmp_path):

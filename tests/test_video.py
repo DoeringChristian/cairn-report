@@ -6,7 +6,8 @@ from http.server import ThreadingHTTPServer
 import numpy as np
 import pytest
 
-from cairn_report import serve as server
+from conftest import make_data
+from cairn_report import serve as server, store
 from cairn_report.build import build_all, mp4_size
 from cairn_report.config import load_config
 from cairn_report.logger import RunLogger
@@ -30,11 +31,18 @@ def test_logged_video_is_browser_ready_mp4(tmp_path):
     assert json.loads((tmp_path / "artifacts.jsonl").read_text().splitlines()[-1])["kind"] == "video"
 
 
+def publish_video(project):
+    """A new version of the `descent` input that also holds a video; returns the video file."""
+    run = make_data(project.parent / "with-video")
+    path = write_video(run)
+    store.publish("descent", run)
+    return path
+
+
 def test_video_becomes_a_figure_card(project):
-    run = next((project / "outputs" / "demo").glob("2*"))
-    write_video(run)
+    publish_video(project)
     alpha = project / "reports" / "alpha" / "report.md"
-    alpha.write_text(alpha.read_text() + "\n![Rollout](run:demo/videos/rollout.mp4 \"Twelve frames.\")\n")
+    alpha.write_text(alpha.read_text() + "\n![Rollout](input:descent/videos/rollout.mp4 \"Twelve frames.\")\n")
     build_all(load_config(project))
     narrative = (project / "generated" / "reports" / "alpha" / "narrative.html").read_text()
     assert 'data-figure-type="video"' in narrative and "<video data-src=" in narrative
@@ -50,10 +58,9 @@ def test_byte_ranges(header, expected):
 
 
 def test_served_video_answers_range_requests(project, monkeypatch):
-    run = next((project / "outputs" / "demo").glob("2*"))
-    path = write_video(run)
+    path = publish_video(project)
     alpha = project / "reports" / "alpha" / "report.md"
-    alpha.write_text(alpha.read_text() + "\n![Rollout](run:demo/videos/rollout.mp4)\n")
+    alpha.write_text(alpha.read_text() + "\n![Rollout](input:descent/videos/rollout.mp4)\n")
     build_all(load_config(project))
     monkeypatch.setattr(server, "OUTPUT_ROOT", project / "generated" / "reports")
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)

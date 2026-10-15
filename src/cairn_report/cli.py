@@ -35,10 +35,14 @@ def cmd_push(args) -> None:
 
 
 def cmd_publish(args) -> None:
-    from .publish import parse_meta, publish_folder, publish_mappings, watch_folder
+    from .publish import is_report_folder, parse_meta, publish_folder, publish_mappings, publish_report, watch_folder
 
     config = load_config(args.project)
     meta, command = parse_meta(args.meta), args.command or None
+    if args.folder is not None and is_report_folder(config, Path(args.folder)):
+        if args.name or args.watch or command or args.label or args.alias or meta:
+            raise SystemExit("a report folder publishes as reports/<slug> on its own: no NAME, --label, --alias, --meta, or --watch")
+        return publish_report(config, Path(args.folder))
     if (args.folder is None) != (args.name is None):
         raise SystemExit("publish takes FOLDER NAME together, or neither to use [store] publish")
     if args.folder is None:
@@ -98,7 +102,7 @@ def main(argv: list[str] | None = None) -> None:
     commands = parser.add_subparsers(dest="command", required=True)
 
     build = commands.add_parser("build", help="build every report (or one)")
-    build.add_argument("--report", help="build only this report (its path below the root, e.g. a/b)")
+    build.add_argument("--report", help="build only this report (its slug)")
     build.set_defaults(run=cmd_build)
     serve = commands.add_parser("serve", help="build and serve the reports")
     serve.add_argument("--host", default="127.0.0.1")
@@ -108,7 +112,7 @@ def main(argv: list[str] | None = None) -> None:
     serve.set_defaults(run=cmd_serve)
 
     share = commands.add_parser("share", help="write the reports as one self-contained page to publish unchanged (claude.ai artifacts)")
-    share.add_argument("--report", help="share only this report and its children (its path below the root, e.g. a/b)")
+    share.add_argument("--report", help="share only this report (its slug)")
     share.add_argument("--out", type=Path, help="where to write the page (default: <output_dir>/../share/index.html)")
     share.add_argument("--no-build", action="store_true", help="share the existing build output")
     share.set_defaults(run=cmd_share)
@@ -118,7 +122,7 @@ def main(argv: list[str] | None = None) -> None:
     finalize.set_defaults(run=cmd_finalize_study)
 
     publish = commands.add_parser("publish", help="store a folder as a new artifact version (or follow a running job's folder)")
-    publish.add_argument("folder", nargs="?", help="the folder to publish (a symlink such as runs/x/latest is followed)")
+    publish.add_argument("folder", nargs="?", help="the folder to publish (a symlink such as runs/x/latest is followed); a report folder reports/<slug> is built and published as reports/<slug>")
     publish.add_argument("name", nargs="?", help="artifact name, e.g. descent or datasets/crops")
     publish.add_argument("--label", help="version label (default: the resolved folder's name)")
     publish.add_argument("--alias", action="append", default=[], help="alias to point at the version (repeatable)")

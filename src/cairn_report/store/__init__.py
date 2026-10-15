@@ -61,15 +61,20 @@ def _store(store) -> LocalStore:
     return store if isinstance(store, LocalStore) else LocalStore(store)
 
 
-def pull(ref: str, *, store: LocalStore | Path | str | None = None) -> Path:
-    """A read-only local copy of an artifact version (or of the file after `//`), recorded as an input."""
+def pull(ref: str, *, store: LocalStore | Path | str | None = None, record: bool = True) -> Path:
+    """A read-only local copy of an artifact version (or of the file after `//`), recorded as an input.
+
+    `record=False` leaves the inputs file alone: the report builder records a report's inputs in the
+    report's own manifest instead.
+    """
     store = _store(store)
     parsed = refs.parse(ref)
     project, name, version = store.resolve(parsed)
     path = materialize(store, parsed, default_root())
-    target = Path(os.environ.get(INPUTS_ENV) or INPUTS_FILE)
-    with target.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"ref": refs.exact(project, name, version["version"]), "time": now()}) + "\n")
+    if record:
+        target = Path(os.environ.get(INPUTS_ENV) or INPUTS_FILE)
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"ref": refs.exact(project, name, version["version"]), "time": now()}) + "\n")
     return path
 
 
@@ -108,7 +113,7 @@ def _stage(store: LocalStore, local: Path, config: Config, cache: HashCache) -> 
 
 
 def publish(name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-            inputs=None, store: LocalStore | Path | str | None = None) -> int:
+            inputs=None, store: LocalStore | Path | str | None = None, config: Config | None = None) -> int:
     """Store a folder as the next version of artifact `name`; returns the version number.
 
     A symlinked folder is followed (the label defaults to the resolved folder's name). When nothing
@@ -119,7 +124,7 @@ def publish(name: str, folder: Path | str, *, metadata: dict | None = None, alia
         raise ValueError(f"{folder} is not a folder")
     store = _store(store)
     project, artifact = _target(name, store)
-    config = load_config()
+    config = config or load_config()
     entries = _stage(store, local, config, HashCache(config.project))
     merged = [*read_inputs(local), *(str(item) for item in inputs or [])]
     return store.publish(project, artifact, entries, label=label or local.name, metadata=metadata, inputs=merged,
