@@ -27,7 +27,7 @@ def server(tmp_path, monkeypatch):
     token = init_root(root).read_text().strip()
     httpd = make_server(root, port=0)
     requests = []
-    httpd.RequestHandlerClass.log_message = lambda self, format, *args: requests.append(format % args)
+    httpd.log = requests.append
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     port = httpd.server_address[1]
     monkeypatch.setenv("CAIRN_STORE_TOKEN", token)
@@ -48,7 +48,7 @@ def call(server, method, path, body=None, headers=None, token="owner"):
     response = connection.getresponse()
     data = response.read()
     connection.close()
-    return response.status, dict(response.getheaders()), data
+    return response.status, response.headers, data  # case-insensitive, like HTTP header names
 
 
 def api(server, method, path, body=None, token="owner", expect=200):
@@ -102,8 +102,8 @@ def test_the_server_has_no_pages_and_no_cookies(server, project):
 def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
     import cairn.server.app as module
 
-    original = module.ThreadingHTTPServer.serve_forever
-    module.ThreadingHTTPServer.serve_forever = lambda self: self.server_close()
+    original = module.StoreServer.serve_forever
+    module.StoreServer.serve_forever = lambda self: self.server_close()
     try:
         root = tmp_path / "new-store"
         serve_store(root, port=0)
@@ -117,7 +117,7 @@ def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
         serve_store(root, host="0.0.0.0", port=0)
         assert "plain HTTP" in capsys.readouterr().out
     finally:
-        module.ThreadingHTTPServer.serve_forever = original
+        module.StoreServer.serve_forever = original
 
 
 # ------------------------------------------------------------- scoped tokens

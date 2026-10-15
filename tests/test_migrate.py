@@ -103,7 +103,7 @@ def test_migrated_store_is_served(old_hub, tmp_path, monkeypatch):
     main(["migrate", str(old_hub), str(new)])
     token = init_root(new).read_text().strip()
     httpd = make_server(new, port=0)
-    httpd.RequestHandlerClass.log_message = lambda *a: None
+    httpd.log = None
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     from cairn.ui.server import RemoteBackend, make_ui_server
 

@@ -235,7 +235,8 @@ def cmd_server(args) -> None:
     from .server import serve_store
 
     serve_store(args.root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3), no_auth=args.no_auth,
-                ui_port=None if args.no_ui else args.ui_port if args.ui_port is not None else args.port + 1 if args.port else 0)
+                ui_port=None if args.no_ui else args.ui_port if args.ui_port is not None else args.port + 1 if args.port else 0,
+                allow_network_fs=args.allow_network_fs)
 
 
 def cmd_ui(args) -> None:
@@ -375,6 +376,8 @@ def main(argv: list[str] | None = None) -> None:
     store_serve.add_argument("--no-auth", action="store_true", help="no token, everyone acts as the owner (local testing; loopback hosts only)")
     store_serve.add_argument("--ui-port", type=int, help="port of the UI started beside the store (default: --port + 1)")
     store_serve.add_argument("--no-ui", action="store_true", help="do not start `cairn ui` beside the store")
+    store_serve.add_argument("--allow-network-fs", action="store_true",
+                             help="serve a root on a network filesystem (NFS, Lustre, GPFS, SMB, ...): only if this server is its only writer")
     store_serve.set_defaults(run=cmd_server)
     migrate = commands.add_parser("migrate", help="copy an old hub root into a store (the old root is not modified)")
     migrate.add_argument("old_root", type=Path)

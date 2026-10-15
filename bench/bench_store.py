@@ -11,6 +11,8 @@ Scenarios (each prints a row of the table at the end):
   upload                           PUT one `--size-mb` random file (streamed, hash-verified by the server)
   pull/cold, pull/warm             GET that file from a freshly started server, then again (`--repeats` times);
                                    the OS page cache holds the file both times (dropping it needs root)
+  pull/curl x1, x4                 the same file with curl (a faster client than Python's http.client), one at a
+                                   time and four at once (aggregate MB/s), with the server's CPU time per GB sent
   pull/client                      the same file through the real client (`RemoteStore.blob_file`: download,
                                    verify, place in the cache)
   range                            `--ranges` random 64 KB Range requests on that file from `--meta-clients` clients
@@ -18,7 +20,7 @@ Scenarios (each prints a row of the table at the end):
                                    `--versions` versions each (seeded directly into the folder before the server
                                    starts): projects, the artifact listing, one summary, versions, lineage
 
-Every client keeps one HTTP/1.1 connection (keep-alive). Latencies are per request (per publish for publish/*).
+Every client keeps one HTTP/1.1 connection (keep-alive) and sends bodies in 1 MB blocks. Latencies are per request (per publish for publish/*).
 The script is not a test (pytest does not collect it); it uses only the standard library and cairn.
 """
 
@@ -61,7 +63,7 @@ class Connection:
         headers = {"Authorization": f"Bearer {self.token}", **(headers or {})}
         for attempt in range(2):
             if self.connection is None:
-                self.connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=600)
+                self.connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=600, blocksize=1 << 20)
             try:
                 self.connection.request(method, path, body=body, headers=headers)
                 response = self.connection.getresponse()
@@ -108,9 +110,12 @@ def summarize(name: str, latencies: list[float], elapsed: float, count: int | No
 # ------------------------------------------------------------------ server
 
 
+SERVER_SRC = ROOT / "src"
+
+
 def start_server(root: Path, port: int) -> subprocess.Popen:
     command = [sys.executable, "-m", "cairn", "server", str(root), "--port", str(port), "--no-ui"]
-    environment = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    environment = {**os.environ, "PYTHONPATH": str(SERVER_SRC)}
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=environment)
     deadline = time.time() + 60
     for line in process.stdout:
@@ -146,8 +151,10 @@ def free_port() -> int:
 # ------------------------------------------------------------------ publishes
 
 
-def _publish_worker(port: int, token: str, jobs: list[tuple[str, int]], threads: int, seed: str) -> list[float]:
-    """Run `jobs` ((artifact, index) pairs) with `threads` clients; returns per-publish latencies."""
+def _publish_worker(port: int, token: str, jobs: list[tuple[str, int]], threads: int, seed: str,
+                    start_at: float) -> tuple[list[float], float]:
+    """Run `jobs` ((artifact, index) pairs) with `threads` clients, starting at wall time `start_at` (so process start-up
+    is not measured); returns the per-publish latencies and the wall time the last one finished."""
     local = threading.local()
     latencies: list[float] = []
     lock = threading.Lock()
@@ -173,9 +180,10 @@ def _publish_worker(port: int, token: str, jobs: list[tuple[str, int]], threads:
         with lock:
             latencies.append(elapsed)
 
+    time.sleep(max(0.0, start_at - time.time()))
     with ThreadPoolExecutor(threads) as pool:
         list(pool.map(one, jobs))
-    return latencies
+    return latencies, time.time()
 
 
 def bench_publishes(port: int, token: str, args, same: bool) -> dict:
@@ -185,11 +193,12 @@ def bench_publishes(port: int, token: str, args, same: bool) -> dict:
     per = [jobs[index::procs] for index in range(procs)]
     threads = [args.clients // procs + (1 if index < args.clients % procs else 0) for index in range(procs)]
     seed = f"{time.time_ns()}"
-    started = time.perf_counter()
+    start_at = time.time() + 3.0  # every client process is up by then
     with ProcessPoolExecutor(procs) as pool:
-        results = list(pool.map(_publish_worker, [port] * procs, [token] * procs, per, threads, [seed] * procs))
-    elapsed = time.perf_counter() - started
-    latencies = [value for part in results for value in part]
+        results = list(pool.map(_publish_worker, [port] * procs, [token] * procs, per, threads, [seed] * procs,
+                                [start_at] * procs))
+    elapsed = max(end for _, end in results) - start_at
+    latencies = [value for part, _ in results for value in part]
     return summarize(f"publish/{'same' if same else 'distinct'}", latencies, elapsed, unit="pub/s",
                      extra=f"{args.clients} clients, {procs} procs, 3 files x 1 KB, 5 requests each")
 
@@ -239,6 +248,43 @@ def pull_big(port: int, token: str, size: int, label: str, repeats: int) -> dict
     best = statistics.median(times)
     return summarize(label, times, sum(times), count=len(times), unit="MB/s",
                      extra=f"{size / 1e6:.0f} MB, median of {len(times)}") | {"rate": size / 1e6 / best}
+
+
+def server_cpu(pid: int) -> float | None:
+    """CPU seconds (user + system) the process used so far, from ps; None if ps is missing."""
+    try:
+        text = subprocess.run(["ps", "-o", "time=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return None
+    seconds = 0.0
+    for part in text.replace("-", ":").split(":"):
+        seconds = seconds * 60 + float(part)
+    return seconds
+
+
+def pull_curl(port: int, token: str, size: int, repeats: int, server: subprocess.Popen, parallel: int = 1) -> dict | None:
+    """The same download with curl (a client much faster than Python's), `parallel` at once, so the row shows the
+    server's limit; the notes give the server's CPU time per GB sent."""
+    curl = shutil.which("curl")
+    if curl is None:
+        return None
+    command = [curl, "-s", "-o", "/dev/null", "-w", "%{http_code} %{size_download}", "-H",
+               f"Authorization: Bearer {token}", f"http://127.0.0.1:{port}/files/{PROJECT}/big@v1//big.bin"]
+    times = []
+    before = server_cpu(server.pid)
+    for _ in range(repeats):
+        started = time.perf_counter()
+        processes = [subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(parallel)]
+        outputs = [process.communicate()[0] for process in processes]
+        times.append(time.perf_counter() - started)
+        if any(output.split() != ["200", str(size)] for output in outputs):
+            raise RuntimeError(f"curl: {outputs}")
+    after = server_cpu(server.pid)
+    best = statistics.median(times)
+    gigabytes = size * parallel * repeats / 1e9
+    cpu = f", server CPU {(after - before) / gigabytes:.2f} s/GB" if before is not None and after is not None else ""
+    return summarize(f"pull/curl x{parallel}", times, sum(times), count=len(times), unit="MB/s",
+                     extra=f"{parallel} curl to /dev/null at once, median of {len(times)}{cpu}") | {"rate": size * parallel / 1e6 / best}
 
 
 def pull_client(port: int, token: str, size: int, sha: str) -> dict:
@@ -386,7 +432,12 @@ def main() -> None:
     parser.add_argument("--only", default="publish,large,meta", help="comma-separated: publish, large, meta")
     parser.add_argument("--json", type=Path, help="also write the rows here")
     parser.add_argument("--keep", action="store_true", help="keep the temporary store")
+    parser.add_argument("--server-src", type=Path, help="run the server from this source tree (e.g. a worktree of an older "
+                        "commit, to compare); the clients and the seeding always use this checkout")
     args = parser.parse_args()
+    global SERVER_SRC
+    if args.server_src:
+        SERVER_SRC = args.server_src.resolve()
     only = set(args.only.split(","))
 
     from cairn.store.tokens import init_root
@@ -425,9 +476,13 @@ def main() -> None:
             if "large" in only:
                 rows.append(pull_big(port, token, size, "pull/cold", 1))
                 rows.append(pull_big(port, token, size, "pull/warm", args.repeats))
+                for parallel in (1, 4):
+                    curl = pull_curl(port, token, size, args.repeats, server, parallel)
+                    if curl:
+                        rows.append(curl)
                 rows.append(pull_client(port, token, size, sha))
                 rows.append(bench_ranges(port, token, size, args))
-                print(rows[-4:], file=sys.stderr)
+                print(rows[-6:], file=sys.stderr)
             if "meta" in only:
                 rows.extend(bench_metadata(port, token, args))
         finally:
@@ -435,7 +490,7 @@ def main() -> None:
     finally:
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
-    commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    commit = subprocess.run(["git", "-C", str(SERVER_SRC), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     header = (f"cairn bench: commit {commit}, {platform.platform()}, {platform.machine()}, {os.cpu_count()} cores, "
               f"Python {platform.python_version()}, {args.clients} publish clients / {args.procs} procs")
     print(header)

@@ -102,7 +102,7 @@ def run(keep: bool) -> int:
     root = base / "store-root"
     token = init_root(root).read_text().strip()
     store_httpd = make_server(root, port=0)
-    store_httpd.RequestHandlerClass.log_message = lambda *a: None
+    store_httpd.log = None
     threading.Thread(target=store_httpd.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{store_httpd.server_address[1]}"
     os.environ["CAIRN_STORE_TOKEN"] = token

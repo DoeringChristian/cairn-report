@@ -13,25 +13,31 @@ class HttpError(Exception):
         self.status, self.message = status, message
 
 
-class AuthMixin:
-    """Bearer-token authentication for the handler (needs `owner_token`, `tokens`, `no_auth`, `headers`)."""
+class Auth:
+    """Bearer-token authentication: the owner token, the scoped tokens of `tokens`, or (`no_auth`) everyone as the owner."""
 
-    owner_token: str = ""
-    tokens: Tokens
-    no_auth: bool = False  # --no-auth: every request acts as the owner (local testing only)
+    def __init__(self, owner_token: str, tokens: Tokens, no_auth: bool = False):
+        self.owner_token, self.tokens, self.no_auth = owner_token, tokens, no_auth
 
-    def _principal_for(self, token: str) -> Principal | None:
+    def principal_for(self, token: str) -> Principal | None:
         if hmac.compare_digest(token.encode(), self.owner_token.encode()):
             return OWNER
         return self.tokens.find(token)
 
-    def _bearer(self) -> Principal | None:
+    def bearer(self, header: str | None) -> Principal | None:
+        """The principal of an `Authorization` header value, or None (no or an unknown token)."""
         if self.no_auth:
             return OWNER
-        header = self.headers.get("Authorization", "")
-        return self._principal_for(header[7:].strip()) if header.startswith("Bearer ") else None
+        header = header or ""
+        return self.principal_for(header[7:].strip()) if header.startswith("Bearer ") else None
 
-    @staticmethod
-    def _allow(principal: Principal, project: str, write: bool = False) -> None:
-        if not principal.can(project, write):
-            raise HttpError(403, f"this token cannot {'write' if write else 'read'} project {project!r}")
+    def require(self, header: str | None) -> Principal:
+        principal = self.bearer(header)
+        if principal is None:
+            raise HttpError(401, "missing or invalid token")
+        return principal
+
+
+def allow(principal: Principal, project: str, write: bool = False) -> None:
+    if not principal.can(project, write):
+        raise HttpError(403, f"this token cannot {'write' if write else 'read'} project {project!r}")

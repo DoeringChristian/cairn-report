@@ -25,7 +25,10 @@ Repository = "https://github.com/DoeringChristian/cairn-report"
 [project.optional-dependencies]
 # Placeholders for the parts that need nothing extra yet: the server and the UI use only the standard
 # library, and the UI's built files ship with the package.
-server = []
+server = [
+    "starlette>=0.40",
+    "uvicorn[standard]>=0.30",
+]
 ui = []
 hydra = [
     "hydra-core>=1.3",
@@ -45,4 +48,6 @@ dev = [
     "imageio>=2.38.1",
     "imageio-ffmpeg>=0.6.0",
     "pytest>=8",
+    "starlette>=0.40",
+    "uvicorn[standard]>=0.30",
 ]

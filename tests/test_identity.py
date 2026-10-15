@@ -40,7 +40,7 @@ class Server:
     def start(self) -> "Server":
         self.httpd = make_server(self.root, port=self.port)
         requests = self.requests
-        self.httpd.RequestHandlerClass.log_message = lambda handler, format, *args: requests.append(format % args)
+        self.httpd.log = requests.append
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         return self
 
