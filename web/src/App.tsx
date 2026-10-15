@@ -50,7 +50,7 @@ function Rail() {
       <RailSection label="Projects" items={projectItems} />
       {project && <RailSection label="Reports" items={reports.map(a => ({ key: a.name, title: title(a), to: reportHref(project, a.name), current: false }))} />}
       {project && <RailSection label="Artifacts" items={others.map(a => ({ key: a.name, title: a.name, to: artifactHref(project, a.name), plain: true, current: a.name === here }))} />}
-      {project && <RailSection label="Runs" items={runs.map(a => ({ key: a.name, title: a.name.slice("runs/".length), to: artifactHref(project, a.name, a.versions ? `v${a.versions}` : null), plain: true, current: a.name === here }))} />}
+      {project && <RailSection label="Runs" items={runs.map(a => ({ key: a.name, title: a.name.slice("runs/".length), to: artifactHref(project, a.name), plain: true, current: a.name === here }))} />}
       <div className="rail-note">
         {me.data?.scope === "project" && <>Token for project <b>{me.data.project}</b><br /></>}
         {me.data?.auth && <a href="/logout">Log out</a>}
@@ -76,13 +76,13 @@ function Login() {
   };
   return (
     <main>
-      <Hero eyebrow="Artifact store" title="Log in" subtitle="Enter a store token: the owner token or one scoped to a project." />
+      <Hero eyebrow="Cairn" title="Log in" subtitle="Enter a token: the repo's owner token or one scoped to a project (or open the one-time link cairn ui printed)." />
       <form className="login-form" onSubmit={submit}>
-        <label>Store token
+        <label>Token
           <input type="password" autoComplete="current-password" autoFocus required value={token} onChange={e => setToken(e.target.value)} />
         </label>
         {error && <p className="login-error" role="alert">{error}</p>}
-        <div className="form-actions"><button className="primary" type="submit" disabled={busy}>Open store</button></div>
+        <div className="form-actions"><button className="primary" type="submit" disabled={busy}>Open repo</button></div>
       </form>
     </main>
   );

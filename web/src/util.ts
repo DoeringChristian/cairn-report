@@ -11,16 +11,20 @@ export function bytes(size: number): string {
 export const isReport = (name: string) => /^reports\/[^/]+$/.test(name);
 export const isRunName = (name: string) => name.startsWith("runs/");
 export const enc = (path: string) => path.split("/").map(encodeURIComponent).join("/");
-export const exact = (project: string, name: string, version: number) => `${project}:${name}@v${version}`;
+/** How a version is named: `v<n>`, or its uid while it is pending (the source of truth has not numbered it yet). */
+export const selOf = (v: { version: number | null; uid: string }) => (v.version != null ? `v${v.version}` : v.uid);
+/** The short name shown in tables: `v<n>`, or the start of a pending version's uid. */
+export const shortOf = (v: { version: number | null; uid: string }) => (v.version != null ? `v${v.version}` : `${v.uid.slice(0, 13)}…`);
+export const exact = (project: string, name: string, sel: string) => `${project}:${name}@${sel}`;
 export const artifactHref = (project: string, name: string, sel?: string | number | null) =>
   `/p/${encodeURIComponent(project)}/a/${enc(name)}${sel == null ? "" : typeof sel === "number" ? `@v${sel}` : `@${sel}`}`;
 export const reportHref = (project: string, name: string, version?: number | null) =>
   `/p/${encodeURIComponent(project)}/r/${encodeURIComponent(name.split("/")[1])}${version ? `@v${version}` : ""}/`;
-export const fileHref = (project: string, name: string, version: number, path: string, download = false) =>
-  `/files/${encodeURIComponent(project)}/${enc(name)}@v${version}//${enc(path)}${download ? "?download=1" : ""}`;
+export const fileHref = (project: string, name: string, sel: string, path: string, download = false) =>
+  `/files/${encodeURIComponent(project)}/${enc(name)}@${sel}//${enc(path)}${download ? "?download=1" : ""}`;
 
-export const zipHref = (project: string, name: string, version: number) =>
-  `/files/${encodeURIComponent(project)}/${enc(name)}@v${version}.zip`;
+export const zipHref = (project: string, name: string, sel: string) =>
+  `/files/${encodeURIComponent(project)}/${enc(name)}@${sel}.zip`;
 
 export function parseRef(text: string) {
   const match = /^([^:@/]+):([^@]+)@(.+)$/.exec(text);

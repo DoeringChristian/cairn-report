@@ -25,7 +25,9 @@ export function CopyButton({ text, label = "Copy", done = "Copied" }: { text: st
 
 export function Pill({ status }: { status: string }) {
   const bad = status === "failed" || status === "interrupted" || status === "running";
-  return <span className={"pill" + (status === "deleted" ? " deleted" : bad ? " tentative" : "")}>{status}</span>;
+  const pending = status === "pending";
+  return <span className={"pill" + (status === "deleted" ? " deleted" : pending ? " pending" : bad ? " tentative" : "")}
+    title={pending ? "this repo has the version; its remote does not have it yet, so it has no number (a uid names it)" : undefined}>{status}</span>;
 }
 
 export function Loading({ what = "Loading" }: { what?: string }) {

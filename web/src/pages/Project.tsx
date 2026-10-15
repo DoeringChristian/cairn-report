@@ -53,7 +53,7 @@ export function ProjectPage() {
                         {a.metadata.summary && <><br /><span className="muted">{a.metadata.summary}</span></>}
                       </td>
                       <td>{a.metadata.status && <span className="pill">{a.metadata.status}</span>}</td>
-                      <td className="nowrap">{a.latest ? <Link to={artifactHref(project, a.name, a.latest)}>v{a.latest}</Link> : "none"}<br /><span className="muted">{a.versions} version{a.versions === 1 ? "" : "s"}</span></td>
+                      <td className="nowrap">{a.latest ? <Link to={artifactHref(project, a.name, a.latest)}>v{a.latest}</Link> : a.pending ? <span className="pill pending">pending</span> : "none"}<br /><span className="muted">{a.versions} version{a.versions === 1 ? "" : "s"}</span></td>
                       <td className="muted nowrap">{when(a.updated)}{a.latest && <><br /><a href={reportHref(project, a.name)}>Open report</a></>}</td>
                     </tr>
                   );
@@ -67,7 +67,7 @@ export function ProjectPage() {
                 {others.map(a => (
                   <tr key={a.name}>
                     <td><Link to={artifactHref(project, a.name)}><strong>{a.name}</strong></Link></td>
-                    <td>{a.latest ? `v${a.latest}` : "none"}</td>
+                    <td>{a.latest ? `v${a.latest}` : a.pending ? <span className="pill pending">pending</span> : "none"}</td>
                     <td>{Object.keys(a.aliases).filter(x => x !== "latest").sort().map(x => <span className="pill alias" key={x}>{x}</span>)}</td>
                     <td>{a.versions}</td>
                     <td className="muted nowrap">{when(a.updated)}</td>
@@ -83,7 +83,7 @@ export function ProjectPage() {
                   const config = a.metadata.config && typeof a.metadata.config === "object" ? Object.keys(a.metadata.config).slice(0, 4).join(", ") : "";
                   return (
                     <tr key={a.name}>
-                      <td><Link to={artifactHref(project, a.name, a.versions ? `v${a.versions}` : null)}><strong>{a.name.slice("runs/".length)}</strong></Link></td>
+                      <td><Link to={artifactHref(project, a.name)}><strong>{a.name.slice("runs/".length)}</strong></Link></td>
                       <td>{a.latest ? <Link to={artifactHref(project, a.name, a.latest)}>v{a.latest}</Link> : <span className="muted">none yet</span>}</td>
                       <td className="muted">{config}</td>
                       <td>{a.versions}</td>

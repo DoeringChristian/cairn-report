@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { paths, useApi, type Entry, type Manifest, type Summary, type VersionRow } from "../api";
 import { CopyButton, ErrorNote, Hero, Loading, Pill, Select, Table } from "../components";
-import { artifactHref, bytes, exact, fileHref, isReport, parseRef, previewKind, reportHref, when, zipHref } from "../util";
+import { artifactHref, bytes, exact, fileHref, isReport, parseRef, previewKind, reportHref, selOf, shortOf, when, zipHref } from "../util";
 import { Graph } from "./Graph";
 import { RunPanel } from "./Run";
 
@@ -49,7 +49,7 @@ function MetadataSections({ metadata }: { metadata: Record<string, unknown> }) {
   );
 }
 
-function Preview({ project, name, version, entry }: { project: string; name: string; version: number; entry: Entry }) {
+function Preview({ project, name, version, entry }: { project: string; name: string; version: string; entry: Entry }) {
   const kind = previewKind(entry.path), url = fileHref(project, name, version, entry.path);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -68,7 +68,7 @@ function Preview({ project, name, version, entry }: { project: string; name: str
   return <><pre className="preview-text">{text}</pre>{size > TEXT_LIMIT && <p className="hint">Showing the first {bytes(TEXT_LIMIT)} of {bytes(size)}.</p>}</>;
 }
 
-function Files({ project, name, version, files }: { project: string; name: string; version: number; files: Entry[] }) {
+function Files({ project, name, version, files }: { project: string; name: string; version: string; files: Entry[] }) {
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [all, setAll] = useState(false);
@@ -137,8 +137,9 @@ function RefList({ title, refs, project, empty, deleted = [] }: { title: string;
 
 export function ArtifactPage({ project, name, selector }: { project: string; name: string; selector: string | null }) {
   const art = useApi<ArtifactData>(paths.artifact(project, name));
-  const head = art.data?.aliases.latest ?? art.data?.versions.at(-1)?.version;
-  const sel = selector ?? (head !== undefined ? `v${head}` : null);
+  const last = art.data?.versions.at(-1);
+  const head = art.data?.aliases.latest !== undefined ? `v${art.data.aliases.latest}` : last ? selOf(last) : undefined;
+  const sel = selector ?? head ?? null;
   const ver = useApi<VersionData>(art.data && sel ? paths.version(project, name, sel) : null);
   document.title = `${name}${sel ? "@" + sel : ""} - Cairn`;
   const error = art.error ?? ver.error;
@@ -146,7 +147,8 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
   const byVersion: Record<number, string[]> = {};
   Object.entries(art.data?.aliases ?? {}).forEach(([alias, n]) => (byVersion[n] ??= []).push(alias));
   const manifest = ver.data?.version;
-  const number = manifest?.version;
+  const number = manifest ? selOf(manifest) : undefined;  // v<n>, or the uid of a pending version
+  const pending = !!manifest?.pending;
   const report = isReport(name);
   const aliasPills = (list: string[] = []) => list.sort().map(a => <span className="pill alias" key={a}>{a}</span>);
   const gone = manifest?.status === "deleted";
@@ -162,18 +164,26 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             eyebrow={<><Link to="/">Projects</Link> / <Link to={`/p/${encodeURIComponent(project)}/${isRun ? "?tab=runs" : ""}`}>{project}</Link> / {report ? "report" : isRun ? "run" : "artifact"}</>}
             title={name}
             subtitle={art.data.summary.metadata.title && report ? art.data.summary.metadata.title : undefined}
-            status={manifest.status === "completed" ? `v${number}` : `v${number} ${manifest.status}`}
+            status={manifest.status === "completed" ? number : pending ? `${shortOf(manifest)} pending` : `${number} ${manifest.status}`}
           >
             <p className="alias-line">
               {art.data.summary.latest ? <>latest <b>v{art.data.summary.latest}</b></> : "no completed version"} {aliasPills(Object.keys(art.data.aliases).filter(a => a !== "latest"))}
             </p>
-            {report && manifest.status === "completed" && <p><a className="action-button open-report" href={reportHref(project, name, number)}>Open report v{number}</a></p>}
+            {report && manifest.status === "completed" && manifest.version != null && <p><a className="action-button open-report" href={reportHref(project, name, manifest.version)}>Open report {number}</a></p>}
           </Hero>
+
+          {pending && (
+            <div className="admonition pending-note" role="note">
+              <p className="admonition-title">Pending</p>
+              <p>This repo has this version, but its remote does not have it yet, so it has no number: its uid <code>{manifest.uid}</code> names it.
+                It is sent automatically (the next command, a running job, or <code>cairn sync</code>; <code>cairn status</code> lists it){manifest.sync === "rejected" ? <>. The remote refused it: {manifest.error}</> : "."}</p>
+            </div>
+          )}
 
           {gone && (
             <div className="admonition tombstone-note" role="note">
               <p className="admonition-title">Deleted</p>
-              <p>v{number} was deleted {when(manifest.deleted_at ?? "")}{manifest.deleted_by ? ` by ${manifest.deleted_by}` : ""}{manifest.reason ? `: ${manifest.reason}` : "."} Its files are gone; its number and uid are never used again, and its lineage is kept.</p>
+              <p>{number} was deleted {when(manifest.deleted_at ?? "")}{manifest.deleted_by ? ` by ${manifest.deleted_by}` : ""}{manifest.reason ? `: ${manifest.reason}` : "."} Its files are gone; its number and uid are never used again, and its lineage is kept.</p>
             </div>
           )}
 
@@ -200,21 +210,21 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             <div className="metric"><span>Versions</span><strong>{art.data.versions.length}</strong><small>{manifest.label ? `label ${manifest.label}` : " "}</small></div>
           </div>
 
-          {isRun && !gone && <RunPanel project={project} name={name} version={number} status={manifest.status} />}
+          {isRun && !gone && !pending && <RunPanel project={project} name={name} sel={number} status={manifest.status} />}
 
           <section className="app-section">
             <div className="section-head"><h2>Versions</h2>
-              <Select label="Version" value={String(number)} onChange={v => location.assign(artifactHref(project, name, Number(v)))}
-                choices={[...art.data.versions].reverse().map(v => ({ value: String(v.version), label: `v${v.version}${v.label ? ` (${v.label})` : ""}`, note: v.status !== "completed" ? v.status : undefined }))} />
+              <Select label="Version" value={number} onChange={v => location.assign(artifactHref(project, name, v))}
+                choices={[...art.data.versions].reverse().map(v => ({ value: selOf(v), label: `${shortOf(v)}${v.label ? ` (${v.label})` : ""}`, note: v.status !== "completed" ? v.status : undefined }))} />
             </div>
             <Table head={["Version", "Label", "Status", "Created", "Aliases", "Source host"]}>
               {[...art.data.versions].reverse().map(v => (
-                <tr key={v.version} className={[v.version === number ? "selected" : "", v.status === "deleted" ? "tombstone" : ""].join(" ").trim()}>
-                  <td className="nowrap"><Link to={artifactHref(project, name, v.version)}><strong>v{v.version}</strong></Link>{report && v.status === "completed" && <> &middot; <a href={reportHref(project, name, v.version)}>open</a></>}</td>
+                <tr key={v.uid} className={[selOf(v) === number ? "selected" : "", v.status === "deleted" ? "tombstone" : "", v.pending ? "pending" : ""].join(" ").trim()}>
+                  <td className="nowrap"><Link to={artifactHref(project, name, selOf(v))} title={v.pending ? v.uid : undefined}><strong>{shortOf(v)}</strong></Link>{report && v.status === "completed" && v.version != null && <> &middot; <a href={reportHref(project, name, v.version)}>open</a></>}</td>
                   <td>{v.label}</td>
                   <td><Pill status={v.status} />{v.status === "deleted" && <span className="muted tombstone-reason" title={`deleted ${v.deleted_at ?? ""}${v.deleted_by ? " by " + v.deleted_by : ""}`}> {v.reason || when(v.deleted_at ?? "")}</span>}</td>
                   <td className="muted nowrap">{when(v.created)}</td>
-                  <td>{aliasPills(byVersion[v.version])}</td>
+                  <td>{v.version != null ? aliasPills(byVersion[v.version]) : null}</td>
                   <td className="muted">{v.source?.host}</td>
                 </tr>
               ))}
@@ -222,12 +232,12 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
           </section>
 
           <section className="app-section">
-            <div className="section-head"><h2>Lineage of v{number}</h2></div>
-            {["completed", "deleted", "running", "failed"].includes(manifest.status) ? <Graph root={exact(project, name, number)} project={project} /> : <p className="hint">Lineage is available once the version is on the store.</p>}
+            <div className="section-head"><h2>Lineage of {shortOf(manifest)}</h2></div>
+            {!pending && ["completed", "deleted", "running", "failed"].includes(manifest.status) ? <Graph root={exact(project, name, number)} project={project} /> : <p className="hint">Lineage is shown once the remote has the version (its inputs are listed below).</p>}
           </section>
 
           <section className="app-section">
-            <div className="section-head"><h2>Files of v{number}</h2></div>
+            <div className="section-head"><h2>Files of {shortOf(manifest)}</h2></div>
             {gone ? <p className="hint">This version was deleted: its files are gone.</p> : manifest.files.length ? <Files project={project} name={name} version={number} files={manifest.files} /> : <p className="hint">This version has no files.</p>}
           </section>
 

@@ -8,10 +8,10 @@ export function ProjectsPage() {
   document.title = "Projects - Cairn";
   return (
     <main>
-      <Hero eyebrow="Artifact store" title="Projects" subtitle="Most recently updated first." />
+      <Hero eyebrow="Repo" title="Projects" subtitle="Most recently updated first." />
       {loading && <Loading />}
       {error && <ErrorNote error={error} />}
-      {data && data.length === 0 && <p className="hint">No projects yet. Run <code>cairn publish</code> in a project with <code>[store] url</code> set.</p>}
+      {data && data.length === 0 && <p className="hint">No projects yet. Run <code>cairn publish</code> in a project (with <code>[repo] remote</code> set to this remote, for a remote).</p>}
       {data && data.length > 0 && (
         <Table head={["Project", "Description", "Artifacts", "Updated"]}>
           {data.map(p => (

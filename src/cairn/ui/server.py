@@ -282,7 +282,7 @@ class UIHandler(BaseHTTPRequestHandler):
         store, principal = session.store, session.principal
         match [unquote(part) for part in url.path.split("/")[2:]]:
             case ["me"]:
-                scope = "project" if principal and principal.project else "owner" if principal else "store"
+                scope = "project" if principal and principal.project else "owner" if principal else "remote"
                 return self._json(200, {"scope": scope, "project": principal.project if principal else None, "auth": not self.no_auth})
             case ["projects"]:
                 found = [item for item in store.overviews() if can(principal, item["name"])]
