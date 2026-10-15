@@ -617,7 +617,7 @@ class UIHandler(BaseHTTPRequestHandler):
                   {"label": "Reports", "items": [{"key": r["key"], "title": r["title"], "href": f"{base}r/{quote(r['key'])}/"} for r in reports]},
                   {"label": "Artifacts", "items": artifacts}, {"label": "Runs", "items": runs}]
         return {"title": store.get_project(project)["title"], "brand": "Cairn", "mark": "C", "reports": reports,
-                "groups": [g for g in groups if g["items"]], "copy_preamble": ""}
+                "groups": [g for g in groups if g["items"]]}
 
     # ------------------------------------------------------------------ login
 

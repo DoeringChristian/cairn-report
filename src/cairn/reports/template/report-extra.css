@@ -1,19 +1,3 @@
-.rail-actions { margin-top: 24px; }
-.rail-actions { display: flex; gap: 8px; }
-.rail-actions button { border: 1px solid var(--line); background: var(--card); border-radius: 8px; cursor: pointer; }
-.rail-icon { position: relative; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; color: var(--muted); }
-.rail-icon:hover, .rail-icon:focus-visible { border-color: var(--accent); color: var(--accent); }
-.rail-icon#clear-comments:hover { border-color: var(--warn); color: var(--warn); }
-.rail-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.rail-icon::after { content: attr(data-tooltip); position: absolute; z-index: 30; left: 0; top: calc(100% + 7px); padding: 5px 8px; border-radius: 6px; background: var(--ink); color: var(--card); font-size: 12px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .12s; }
-.rail-icon:hover::after, .rail-icon:focus-visible::after, .rail-icon.show-tip::after { opacity: 1; }
-.rail-icon[aria-expanded="true"]::after { opacity: 0; }
-.confirm-popover { position: fixed; z-index: 45; width: 240px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
-.confirm-popover[hidden] { display: none; }
-.confirm-popover p { margin: 0 0 10px; font-size: 13px; line-height: 1.45; }
-.confirm-actions { display: flex; justify-content: flex-end; gap: 6px; }
-.confirm-actions button { border: 1px solid var(--line); background: var(--card); border-radius: 7px; padding: 6px 11px; font: inherit; font-size: 13px; cursor: pointer; }
-.confirm-actions .danger { border-color: var(--warn); background: var(--warn); color: white; }
 .report-prose { margin-top: 28px; line-height: 1.7; }
 .report-prose h1, .report-prose h2, .report-prose h3 { font-family: Georgia, serif; letter-spacing: 0; }
 .report-prose h1 { font-size: 36px; }
@@ -37,44 +21,18 @@
 .admonition.prior-art { border-color: #c79a6b; border-left-color: #9a5b1e; background: color-mix(in srgb, #f6e4cf 70%, var(--card)); }
 .admonition.prior-art .admonition-title { color: #8a4f17; }
 .report-prose .math.block .math-tex { display: block; }
-.math-tex.math-highlight { border-radius: 4px; background: var(--accent-soft); box-shadow: inset 0 -2px #8bb5a8; cursor: pointer; }
 .report-prose [data-source-line] { position: relative; }
 .report-prose [data-source-line]:hover { outline: 1px dashed #176b5b55; outline-offset: 5px; }
-#selection-comment { position: fixed; z-index: 20; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 2px solid var(--card); background: var(--accent); color: white; border-radius: 50%; box-shadow: var(--shadow); cursor: pointer; }
-#selection-comment[hidden] { display: none; }
-#selection-comment svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
-.image-comment { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 2px solid var(--card); border-radius: 50%; background: var(--accent); color: white; box-shadow: 0 2px 8px #0003; cursor: pointer; }
-.image-comment svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
-.figure-card > .image-comment, .report-prose .image-comment { position: absolute; z-index: 5; top: 8px; right: 8px; }
 .plotly-preview { width: 100%; height: 320px; background: white; }
-.figure-expand { position: absolute; z-index: 5; top: 8px; right: 46px; width: 32px; height: 32px; border: 2px solid var(--card); border-radius: 50%; background: var(--accent); color: white; box-shadow: 0 2px 8px #0003; cursor: pointer; }
-#lightbox-comment { position: absolute; z-index: 5; left: 24px; bottom: 20px; border-color: #ffffff55; background: #ffffff20; }
+.figure-expand { position: absolute; z-index: 5; top: 8px; right: 8px; width: 32px; height: 32px; border: 2px solid var(--card); border-radius: 50%; background: var(--accent); color: white; box-shadow: 0 2px 8px #0003; cursor: pointer; }
 #lightbox-plot { width: min(1200px, 90vw); height: 75vh; background: white; }
 .lightbox-copy { text-align: center; max-width: 760px; }
-.comment-popover { position: fixed; z-index: 40; width: min(360px, calc(100vw - 24px)); padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
-.comment-popover p { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
-.comment-popover blockquote { max-height: 76px; overflow: auto; margin: 0 0 8px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--accent-soft); font-size: 12px; }
-.comment-popover textarea { width: 100%; min-height: 92px; resize: vertical; border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: inherit; }
-.comment-anchor { position: relative; }
-.comment-bubble { position: absolute; z-index: 6; top: 8px; right: 8px; min-width: 22px; height: 22px; padding: 0 6px; border: 2px solid var(--card); border-radius: 999px; background: var(--accent); color: white; box-shadow: 0 2px 8px #0002; font: 700 11px/18px system-ui; cursor: pointer; }
-.comment-bubble:hover { transform: scale(1.08); }
 .figure-grid { align-items: start; }
 .figure-grid > .figure-card.is-wide { grid-column: 1 / -1; }
 .figure-grid > .figure-card.is-tall:last-child:nth-child(odd):not(:only-child) { grid-column: auto; }
 .stage img { cursor: grab; touch-action: none; transform: translate(var(--pan-x, 0px), var(--pan-y, 0px)) scale(var(--zoom, 1)); }
 .stage img.is-panning { cursor: grabbing; transition: none; }
 .zoom[hidden] { display: none; }
-mark.comment-highlight { padding: 0 1px; border-radius: 3px; background: var(--accent-soft); color: inherit; box-shadow: inset 0 -2px #8bb5a8; cursor: pointer; }
-mark.comment-highlight:hover { background: #c7e1d7; }
-.comment-bubble { display: inline-grid; place-items: center; }
-.comment-bubble svg { width: 12px; height: 12px; fill: currentColor; }
-.comment-bubble.inline { position: relative; top: auto; right: auto; width: 20px; min-width: 20px; height: 20px; padding: 0; margin: 0 2px; vertical-align: text-bottom; border-width: 1px; }
-.comment-bubble.is-stale { background: var(--warn); }
-.comment-anchor.has-comment:not(.figure-card) { border-radius: 8px; box-shadow: 0 0 0 4px var(--accent-soft); background: color-mix(in srgb, var(--accent-soft) 35%, transparent); }
-.figure-card.has-comment { border-color: #8bb5a8; box-shadow: 0 0 0 3px var(--accent-soft); }
-.report-prose .has-comment img { border-color: #8bb5a8; }
-.image-comment.has-comment svg { fill: currentColor; }
-#lightbox-comment.has-comment { background: var(--accent); border-color: var(--card); }
 .report-prose .raw-html { max-width: 100%; overflow-x: auto; }
 .report-prose .callout { margin: 18px 0; padding: 12px 16px; border-left: 4px solid var(--accent); border-radius: 8px; background: var(--accent-soft); }
 .report-prose table { width: 100%; margin: 18px 0; border-collapse: collapse; font-size: 14px; line-height: 1.5; }
@@ -83,11 +41,6 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 .report-prose th { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .report-prose .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; }
 .report-prose .pill.tentative { background: #f5e6dc; color: var(--warn); }
-.comment-popover form { position: relative; }
-.comment-popover #comment-target { padding-right: 30px; }
-.popover-delete { position: absolute; top: -4px; right: -4px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
-.popover-delete:hover, .popover-delete:focus-visible { background: #f5e6dc; color: var(--warn); }
-.popover-delete svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .plotly-card .modebar { top: 8px !important; right: auto !important; left: 10px; background: transparent !important; }
 .report-prose .table-wrap { max-width: 100%; overflow-x: auto; }
 .report-prose .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 18px 0; }
@@ -146,14 +99,6 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 .report-list a:hover { background: var(--card); color: var(--ink); }
 .report-list a[aria-current="page"] { background: var(--card); color: var(--accent); font-weight: 700; }
 .report-prose a.report-link { color: var(--accent); text-decoration-style: dotted; text-underline-offset: 3px; }
-.unanchored-comments { margin: 56px 0 0; padding: 18px 20px; border: 1px dashed var(--warn); border-radius: var(--radius); background: color-mix(in srgb, #f5e6dc 45%, var(--card)); }
-.unanchored-comments h2 { margin: 0 0 6px; font-size: 22px; }
-.unanchored-comments p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
-.unanchored-comments ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.unanchored-comment { display: grid; gap: 3px; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
-.unanchored-comment:hover { border-color: var(--warn); }
-.unanchored-target { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.unanchored-text { font-size: 14px; }
 /* Project index: one card per report */
 .direction-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin: 22px 0; }
 .direction-card { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
@@ -169,10 +114,8 @@ mark.comment-highlight:hover { background: #c7e1d7; }
 .report-list { margin-top: 28px; }
 .rail .report-list nav { margin-top: 0; }
 .rail .report-list { margin: 26px 0 0; }
-/* The rail scrolls when its contents exceed the window; comment actions sit at the top so a long
-   table of contents never pushes them out of reach. */
+/* The rail scrolls when its contents exceed the window. */
 .rail { overflow-y: auto; overscroll-behavior: contain; }
-.rail .rail-actions { margin-top: 18px; }
 .rail-note { padding-top: 18px; }
 
 /* While the report text loads: a calm placeholder instead of an empty page. */
@@ -216,17 +159,18 @@ main { width: min(100%, calc(var(--column) + 2 * clamp(24px, 5vw, 74px))); }
 #report-prose .figure-card video { background: #111; }
 #report-prose .figure-card img.is-pixelated, .stage img.is-pixelated { image-rendering: pixelated; }
 
-/* Copy-location buttons sit beside the comment buttons: the same size, quieter. */
+/* Copy-location buttons: one line an agent can act on (report file, line, quote or figure). */
 .image-copy { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 2px solid var(--card); border-radius: 50%; background: var(--card); color: var(--accent); box-shadow: 0 2px 8px #0003; cursor: pointer; }
 .image-copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
 .image-copy:hover { color: var(--ink); }
-.figure-card > .image-copy, .report-prose .image-copy { position: absolute; z-index: 5; top: 8px; right: 46px; }
+.copy-anchor { position: relative; }
+.figure-card > .image-copy, .report-prose .image-copy { position: absolute; z-index: 5; top: 8px; right: 8px; }
 #selection-copy { position: fixed; z-index: 20; }
 #selection-copy[hidden] { display: none; }
-#lightbox-copy { position: absolute; z-index: 5; left: 62px; bottom: 20px; border-color: #ffffff55; background: #ffffff20; color: white; }
+#lightbox-copy { position: absolute; z-index: 5; left: 24px; bottom: 20px; border-color: #ffffff55; background: #ffffff20; color: white; }
 .image-copy[data-tooltip].show-tip::after { content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); right: 0; padding: 4px 8px; border-radius: 6px; background: var(--ink); color: var(--paper); font: 600 11px/1.4 system-ui; white-space: nowrap; pointer-events: none; }
 #lightbox-copy[data-tooltip].show-tip::after { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
-.plotly-card > .image-copy { right: 84px; }
+.plotly-card > .image-copy { right: 46px; }
 
 /* The Data panel: the inputs the report was built from, right under the header, on the column's edges. */
 .data-panel { margin: 22px 0 0; }

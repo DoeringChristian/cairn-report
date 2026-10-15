@@ -237,6 +237,17 @@ def run(keep: bool) -> int:
         page.locator("#title").wait_for()
         page.wait_for_function("document.querySelector('#title').textContent.length > 0")
         shot("11-report")
+        # reports keep only copy-location: no comment controls; selecting text offers the copy button
+        assert page.locator("#comment-popover, #selection-comment, .image-comment, #copy-comments, #clear-comments").count() == 0
+        page.evaluate("""() => { const p = document.querySelector('#report-prose p'); const range = document.createRange();
+            range.selectNodeContents(p); const s = getSelection(); s.removeAllRanges(); s.addRange(range); }""")
+        page.locator("#report-prose p").first.dispatch_event("mouseup")
+        page.locator("#selection-copy").wait_for(state="visible")
+        page.locator("#selection-copy").click()
+        page.wait_for_function("document.querySelector('#selection-copy').dataset.tooltip !== 'Copy location'")
+        page.locator(".figure-card").first.click()
+        page.locator("#lightbox-copy").wait_for(state="visible")
+        page.keyboard.press("Escape")
         back = page.locator("#back-link")  # came from the report artifact's page: back goes there
         back.wait_for()
         assert back.inner_text() == "← Back" and back.get_attribute("href") == "/p/study/a/reports/summary", back.get_attribute("href")

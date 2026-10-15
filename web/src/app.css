@@ -36,9 +36,9 @@ input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible
 .tabs button:hover { color: var(--ink); }
 .tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .tabs button span { margin-left: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
-.comment-trigger { font: inherit; font-size: 14px; color: var(--ink); text-decoration: none; display: inline-block; }
-.comment-trigger:disabled { opacity: .5; cursor: default; }
-.comment-trigger.small { padding: 4px 10px; font-size: 13px; }
+.action-button { font: inherit; font-size: 14px; color: var(--ink); text-decoration: none; display: inline-block; }
+.action-button:disabled { opacity: .5; cursor: default; }
+.action-button.small { padding: 4px 10px; font-size: 13px; }
 .row-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; white-space: nowrap; }
 .row-actions .image-copy, .app-panel .image-copy { position: static; width: 28px; height: 28px; border-color: transparent; box-shadow: none; background: transparent; }
 .row-actions .image-copy:hover { background: var(--accent-soft); }

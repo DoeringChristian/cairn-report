@@ -722,7 +722,7 @@ def figure_card(
     attrs = (
         f'class="{classes}"{style} id="{esc(fid)}" '
         f'data-figure-id="{esc(fid)}" data-figure-type="{kind}" data-src="{esc(src)}" '
-        f'data-line="{line}" data-comment-target="figure:{esc(fid)}" data-trace="{esc(json.dumps(trace))}"'
+        f'data-line="{line}" data-trace="{esc(json.dumps(trace))}"'
     )
     if kind == "plotly":
         media = '<div class="plotly-preview"></div>'
@@ -767,9 +767,8 @@ def render(build: Build) -> str:
 
     def metric(label: str, value, detail: str = "", fmt: str | None = None):
         shown = format(value, fmt) if fmt else str(value)
-        target = f"metric:{slug(label)}"
         metrics.append(
-            f'<article class="metric" data-comment-target="{esc(target)}">'
+            f'<article class="metric">'
             f"<span>{esc(label)}</span><strong>{esc(shown)}</strong><small>{esc(detail)}</small></article>"
         )
 
@@ -860,7 +859,6 @@ def render(build: Build) -> str:
                 title = tokens[index + 2].content
                 fid = build.unique(f"finding-{slug(title)}", line_of(token))
                 token.attrSet("id", fid)
-                token.attrSet("data-comment-target", f"finding:{fid}")
                 tokens[index + 1].attrSet("data-state", state_name)
                 build.findings.append(
                     {

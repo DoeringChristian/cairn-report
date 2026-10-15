@@ -97,8 +97,8 @@ function Files({ project, name, version, files }: { project: string; name: strin
               <td className="mono wrap-any">{f.sha256 ? <a href={fileHref(project, name, version, f.path)}>{f.path}</a> : <>{f.path} <span className="muted">&rarr; {f.link}</span></>}</td>
               <td className="muted nowrap">{f.sha256 ? bytes(f.size ?? 0) : "link"}</td>
               <td><div className="row-actions">
-                {f.sha256 && kind && <button className="comment-trigger small" aria-expanded={isOpen} onClick={() => toggle(f.path)}>{isOpen ? "Hide" : "Preview"}</button>}
-                {f.sha256 && <a className="comment-trigger small" href={fileHref(project, name, version, f.path, true)}>Download</a>}
+                {f.sha256 && kind && <button className="action-button small" aria-expanded={isOpen} onClick={() => toggle(f.path)}>{isOpen ? "Hide" : "Preview"}</button>}
+                {f.sha256 && <a className="action-button small" href={fileHref(project, name, version, f.path, true)}>Download</a>}
                 {f.sha256 && <CopyButton text={`${exact(project, name, version)}//${f.path}`} label="Copy file reference" done="Reference copied" />}
               </div></td>
             </tr>
@@ -107,7 +107,7 @@ function Files({ project, name, version, files }: { project: string; name: strin
         })}
       </Table>
       {shown.length === 0 && <p className="hint">No file matches.</p>}
-      {!all && shown.length > SHOWN && <button className="comment-trigger" onClick={() => setAll(true)}>Show all {shown.length} files</button>}
+      {!all && shown.length > SHOWN && <button className="action-button" onClick={() => setAll(true)}>Show all {shown.length} files</button>}
     </>
   );
 }
@@ -167,7 +167,7 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             <p className="alias-line">
               {art.data.summary.latest ? <>latest <b>v{art.data.summary.latest}</b></> : "no completed version"} {aliasPills(Object.keys(art.data.aliases).filter(a => a !== "latest"))}
             </p>
-            {report && manifest.status === "completed" && <p><a className="comment-trigger open-report" href={reportHref(project, name, number)}>Open report v{number}</a></p>}
+            {report && manifest.status === "completed" && <p><a className="action-button open-report" href={reportHref(project, name, number)}>Open report v{number}</a></p>}
           </Hero>
 
           {gone && (
@@ -185,7 +185,7 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
               {!gone && manifest.files.length > 0 && (
                 <li className="data-row">
                   <span className="data-name">Files</span>
-                  <span className="data-version"><a className="comment-trigger small" href={zipHref(project, name, number)} download>Download zip</a></span>
+                  <span className="data-version"><a className="action-button small" href={zipHref(project, name, number)} download>Download zip</a></span>
                   <span className="data-files">{manifest.status === "running" ? "what is synced so far; the run is still running" : bytes(manifest.files.reduce((n, f) => n + (f.size ?? 0), 0))}</span>
                   <span />
                 </li>
