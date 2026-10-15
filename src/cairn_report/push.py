@@ -178,12 +178,14 @@ def skipped(name: str) -> bool:
     return name in SKIP_NAMES or name.endswith(".tmp")
 
 
-def scan(local: Path, prefix: str, config: Config, skip_folder=None) -> dict[str, dict]:
-    """Every file and relative symlink under `local`, keyed `<prefix>/<path inside local>` (prefix may be "")."""
+def scan(local: Path, prefix: str, config: Config, skip_folder=None, exclude: list[str] | None = None) -> dict[str, dict]:
+    """Every file and relative symlink under `local`, keyed `<prefix>/<path inside local>` (prefix may be "").
+
+    `exclude` replaces the `[hub]` exclude globs (the store passes its own)."""
     found: dict[str, dict] = {}
     if not local.is_dir():
         return found
-    excluded = exclusion(config.hub.get("exclude", []))
+    excluded = exclusion(config.hub.get("exclude", []) if exclude is None else exclude)
     project = config.project.resolve()
     try:  # patterns match project paths (outputs/..., reports/..., generated/reports/...)
         base = local.resolve().relative_to(project).as_posix()

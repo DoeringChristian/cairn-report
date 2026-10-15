@@ -21,6 +21,14 @@ something, add a `cairn-report.toml` at the project root:
     interval = 30                      # seconds between pushes with --watch
     exclude = [".submitit/**/*.pkl"]   # files never pushed: gitignore-style globs (*, ?, **) on project paths
 
+    [store]                            # the artifact store `cairn_report.store` reads and writes
+    path = ".store"                    # a local store folder (default), or:
+    url = "https://store.example.org"  # a store server (not available yet)
+    project = "my-study"               # default: the project folder name
+    token_file = "~/.config/cairn-report/store-token"  # or CAIRN_STORE_TOKEN; never the token itself
+    exclude = ["*.pkl"]                # files never published: gitignore-style globs on project paths
+    publish = [{ folder = "runs/descent/latest", name = "descent" }]  # folders `cairn-report publish` syncs
+
     [logger]
     backends = ["local"]               # "local", "mlflow", "hub" (sends runs live; implies local)
     [logger.mlflow]
@@ -54,6 +62,7 @@ class Config:
     extra_css: tuple[Path, ...] = field(default_factory=tuple)
     template_dir: Path | None = None
     hub: dict = field(default_factory=dict)
+    store: dict = field(default_factory=dict)
     logger: dict = field(default_factory=lambda: {"backends": ["local"], "mlflow": {}})
     page: dict = field(default_factory=dict)
 
@@ -77,7 +86,7 @@ def load_config(project: Path | str | None = None) -> Config:
     data: dict = {}
     if (root / CONFIG_FILE).is_file():
         data = tomllib.loads((root / CONFIG_FILE).read_text())
-    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub", "logger", "page"}
+    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub", "store", "logger", "page"}
     if unknown:
         raise ValueError(f"{root / CONFIG_FILE}: unknown keys {sorted(unknown)}")
     style = data.get("style", {})
@@ -93,6 +102,22 @@ def load_config(project: Path | str | None = None) -> Config:
         raise ValueError(f"{root / CONFIG_FILE}: [hub] exclude must be a list of glob patterns")
     if unknown_hub:
         raise ValueError(f"{root / CONFIG_FILE}: unknown [hub] keys {sorted(unknown_hub)}")
+
+    store = data.get("store", {})
+    if "token" in store:
+        raise ValueError(f"{root / CONFIG_FILE}: never put the store token in the config; use token_file or CAIRN_STORE_TOKEN")
+    unknown_store = set(store) - {"path", "url", "project", "token_file", "exclude", "publish"}
+    if unknown_store:
+        raise ValueError(f"{root / CONFIG_FILE}: unknown [store] keys {sorted(unknown_store)}")
+    for key in ("path", "url", "project", "token_file"):
+        if not isinstance(store.get(key, ""), str):
+            raise ValueError(f"{root / CONFIG_FILE}: [store] {key} must be text")
+    if not isinstance(store.get("exclude", []), list) or not all(isinstance(item, str) for item in store.get("exclude", [])):
+        raise ValueError(f"{root / CONFIG_FILE}: [store] exclude must be a list of glob patterns")
+    mappings = store.get("publish", [])
+    if not isinstance(mappings, list) or not all(isinstance(item, dict) and set(item) == {"folder", "name"}
+                                                 and all(isinstance(value, str) for value in item.values()) for item in mappings):
+        raise ValueError(f"{root / CONFIG_FILE}: [store] publish must be a list of {{ folder = ..., name = ... }} tables")
 
     logger = data.get("logger", {})
     mlflow = logger.get("mlflow", {})
@@ -130,6 +155,7 @@ def load_config(project: Path | str | None = None) -> Config:
         extra_css=css,
         template_dir=template_dir,
         hub=dict(hub),
+        store=dict(store),
         logger={"backends": backends, "mlflow": dict(mlflow)},
         page=dict(page),
     )
