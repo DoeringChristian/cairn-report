@@ -196,7 +196,7 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
 
           <div className="metric-grid app-metrics">
             <div className="metric"><span>Files</span><strong>{gone ? 0 : manifest.files.length}</strong><small>{gone ? "deleted" : bytes(manifest.files.reduce((n, f) => n + (f.size ?? 0), 0))}</small></div>
-            <div className="metric"><span>Created</span><strong className="small-value">{when(manifest.created)}</strong><small>{manifest.source?.host ? `on ${manifest.source.host}` : " "}</small></div>
+            <div className="metric"><span>Created</span><strong className="small-value">{when(manifest.created).replace(/-/g, "\u2011")}</strong><small>{manifest.source?.host ? `on ${manifest.source.host}` : " "}</small></div>
             <div className="metric"><span>Versions</span><strong>{art.data.versions.length}</strong><small>{manifest.label ? `label ${manifest.label}` : " "}</small></div>
           </div>
 
