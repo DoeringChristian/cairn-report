@@ -396,14 +396,51 @@ class SyncedRepo(ProjectRepo):
         except Unreachable:
             return local()
 
+    def _waiting_projects(self) -> dict[str, dict]:
+        """The projects this repo's outbox entries name, as project records with their artifact count and last change (a
+        project first written offline is known only there until it is sent)."""
+        found: dict[str, dict] = {}
+        for record in self.records():
+            entry = found.setdefault(record["project"], {"name": record["project"], "title": record["project"], "description": "",
+                                                         "created": record["created"], "updated": record["created"], "names": set()})
+            entry["updated"] = max(entry["updated"], record["created"])
+            entry["names"].add(record["name"])
+        return found
+
+    def _with_waiting(self, listed, counts: bool) -> list[dict]:
+        """A project listing (the remote's or the copies'; None: neither answers) and the projects only the outbox names."""
+        listed = list(listed or [])
+        known = {item["name"] for item in listed}
+        for name, entry in sorted(self._waiting_projects().items()):
+            if name not in known:
+                record = {key: entry[key] for key in ("name", "title", "description", "created")}
+                if counts:
+                    record.update(artifacts=len(entry["names"]), updated=entry["updated"])
+                listed.append(record)
+        return listed
+
+    def _listing(self, call, local):
+        try:
+            return self._fallback(call, local)
+        except Unreachable:  # no copies to answer from (no database): the outbox is still listed
+            if not self.records():
+                raise
+            return None
+
     def projects(self) -> list[dict]:
-        return self._fallback(self.ask.projects, self.copies.projects)
+        return self._with_waiting(self._listing(self.ask.projects, self.copies.projects), counts=False)
 
     def overviews(self) -> list[dict]:
-        return self._fallback(self.ask.overviews, self.copies.overviews)
+        return self._with_waiting(self._listing(self.ask.overviews, self.copies.overviews), counts=True)
 
     def get_project(self, name: str) -> dict:
-        return self._fallback(lambda: self.ask.get_project(name), lambda: self.copies.get_project(name))
+        try:
+            return self._fallback(lambda: self.ask.get_project(name), lambda: self.copies.get_project(name))
+        except (NotFound, Unreachable):
+            entry = self._waiting_projects().get(name)
+            if entry is None:
+                raise
+            return {key: entry[key] for key in ("name", "title", "description", "created")}
 
     def create_project(self, name: str, title: str | None = None, description: str = "") -> dict:
         return self._changes(lambda: self.remote.create_project(name, title, description), f"creating the project {name}")
@@ -422,7 +459,12 @@ class SyncedRepo(ProjectRepo):
             except NotFound:
                 return []
 
-        found = list(self._fallback(lambda: self.ask.summaries(project), local))
+        try:
+            found = list(self._listing(lambda: self.ask.summaries(project), local) or [])
+        except NotFound:  # the remote has no such project yet: what the outbox holds of it, if anything
+            if not self._waiting_projects().get(project):
+                raise
+            found = []
         known = {item["name"] for item in found}
         waiting: dict[str, list[dict]] = {}
         for record in self.records():
