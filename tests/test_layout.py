@@ -61,14 +61,64 @@ def test_base_resolution_order(proj, tmp_path, monkeypatch):
     assert load_config().output_dir == proj / "site"
 
 
-def test_outside_a_project_there_is_no_repo_unless_cairn_dir_names_one(tmp_path, monkeypatch):
-    monkeypatch.delenv("CAIRN_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)  # no project marker above it
-    assert cairn_base() is None
-    with pytest.raises(StoreError, match="no repo"):
-        repo_root()
-    monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "chosen"))  # CAIRN_DIR works anywhere
-    assert repo_root() == tmp_path / "chosen"
+def test_cairn_dir_wins_over_everything(proj, tmp_path, monkeypatch):
+    (proj / "cairn.toml").write_text('[cairn]\ndir = "elsewhere"\n')
+    (proj / "sub" / ".cairn").mkdir(parents=True)
+    (proj / "sub" / ".cairn" / "repo.json").write_text("{}")
+    monkeypatch.chdir(proj / "sub")
+    assert cairn_base() == proj / "sub" / ".cairn"  # an existing repo below the project root is found first
+    monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "chosen"))
+    assert cairn_base() == repo_root() == load_config().cairn_dir == tmp_path / "chosen"
+    monkeypatch.chdir(tmp_path)  # outside any project too
+    assert repo_root() == tmp_path / "chosen" and not (tmp_path / ".cairn").exists()
+
+
+def test_a_script_in_a_subfolder_finds_the_parents_repo(tmp_path):
+    import subprocess
+    import sys
+
+    (tmp_path / "work" / "deep").mkdir(parents=True)
+    assert subprocess.run([sys.executable, "-m", "cairn", "init"], cwd=tmp_path / "work", capture_output=True).returncode == 0
+    script = "import cairn; run = cairn.init(name='x', system=False, code=False); print(run.path)"
+    result = subprocess.run([sys.executable, "-c", script], cwd=tmp_path / "work" / "deep", capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().startswith(str((tmp_path / "work" / ".cairn" / "drafts").resolve()))
+    assert not (tmp_path / "work" / "deep" / ".cairn").exists() and "created the repo" not in result.stderr
+
+
+def test_outside_any_project_opening_creates_the_repo_here_and_looking_refuses(tmp_path):
+    import subprocess
+    import sys
+
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    status = subprocess.run([sys.executable, "-m", "cairn", "status"], cwd=bare, capture_output=True, text=True)
+    assert status.returncode != 0 and "no repo here" in status.stderr and "cairn init" in status.stderr
+    for command in ("verify", "prune", "sync"):
+        assert subprocess.run([sys.executable, "-m", "cairn", command], cwd=bare, capture_output=True).returncode != 0
+    assert not (bare / ".cairn").exists()  # nothing was created
+    script = "import cairn; print(cairn.use.__name__); d = cairn.draft('x'); d.add_json('v', {'a': 1}); d.publish()"
+    result = subprocess.run([sys.executable, "-c", script], cwd=bare, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (bare / ".cairn" / "repo.json").is_file()
+    assert result.stderr.count("created the repo") == 1 and str(bare.resolve() / ".cairn") in result.stderr
+    assert subprocess.run([sys.executable, "-m", "cairn", "status"], cwd=bare, capture_output=True).returncode == 0
+
+
+def test_cairn_init_is_idempotent_and_writes_only_the_repo(tmp_path, capsys):
+    from cairn.cli import main
+
+    (tmp_path / ".gitignore").write_text("mine\n")
+    main(["init", str(tmp_path)])
+    assert capsys.readouterr().out.startswith("created the repo")
+    repo = tmp_path / ".cairn"
+    assert json.loads((repo / "repo.json").read_text())["uid"] and (repo / ".gitignore").read_text() == "*\n"
+    assert (repo.stat().st_mode & 0o777) == 0o700
+    uid = json.loads((repo / "repo.json").read_text())["uid"]
+    main(["init", str(tmp_path)])
+    assert "exists already" in capsys.readouterr().out
+    assert json.loads((repo / "repo.json").read_text())["uid"] == uid
+    assert (tmp_path / ".gitignore").read_text() == "mine\n" and not (tmp_path / "cairn.toml").exists()
 
 
 def test_store_config_is_an_unknown_key(proj):
@@ -83,21 +133,6 @@ def test_old_config_keys_are_errors(proj):
         load_config()
     (proj / "cairn.toml").write_text('[hub]\nremote = "x"\n')
     with pytest.raises(ValueError, match="unknown keys.*hub"):
-        load_config()
-
-
-def test_cairn_report_toml_is_not_read(proj):
-    (proj / "cairn-report.toml").write_text('reports_dir = "docs"\n')
-    with pytest.raises(ValueError, match="rename it to cairn.toml"):
-        load_config()
-    (proj / "cairn.toml").write_text("")  # both: cairn.toml wins, the old file is just ignored
-    assert load_config().reports_dir == proj / "reports"
-
-
-def test_a_folder_with_only_the_old_config_is_still_a_project(tmp_path, monkeypatch):
-    (tmp_path / "cairn-report.toml").write_text("")
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(ValueError, match="rename it to cairn.toml"):
         load_config()
 
 

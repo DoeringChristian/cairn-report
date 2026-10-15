@@ -23,13 +23,17 @@ something, add a `cairn.toml` at the project root:
     allow_network_fs = false           # a repo on NFS/Lustre/...: only if one process on one host ever writes it
     exclude = ["*.pkl"]                # files never published: gitignore-style globs on project paths
 
-The project root is the nearest folder, starting at the working directory, that contains `cairn.toml`,
-`pixi.toml`, or `pyproject.toml`. (A `cairn-report.toml` is an error: rename it to `cairn.toml`.)
+Finding the repo is one rule (`locate`), which every caller uses:
 
-The repo is one folder, `$CAIRN_DIR`, else `[cairn] dir` (relative to the project root), else
-`<project root>/.cairn` (none outside a project). It ignores itself in git (a `.gitignore` of `*`; the
-project's own `.gitignore` is never edited) and holds the metadata, the blobs, the outbox, drafts, and report
-builds (store/local.py lists the layout). `load_config(project)` resolves the folders for that project.
+    $CAIRN_DIR set        that folder is the repo (the project root is still found as below, for cairn.toml)
+    otherwise             walk from the working directory upward; the first folder that holds `.cairn/repo.json`
+                          (an existing repo, as git finds `.git`), `cairn.toml`, `pixi.toml`, or `pyproject.toml` is
+                          the project root, and its repo is `[cairn] dir` (relative to it), else `<root>/.cairn`
+    nothing found         the working directory is the project root and `<cwd>/.cairn` its repo: opening the repo
+                          creates it (and says so); read-only commands refuse instead (`cairn init` makes one)
+
+The repo ignores itself in git (a `.gitignore` of `*`; the project's own `.gitignore` is never edited) and holds the
+metadata, the blobs, the outbox, drafts, and report builds (store/local.py lists the layout).
 """
 
 from __future__ import annotations
@@ -40,8 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 CONFIG_FILE = "cairn.toml"
-OLD_CONFIG_FILE = "cairn-report.toml"  # the name before Cairn: never read, only recognized to say what to do
-ROOT_MARKERS = (CONFIG_FILE, OLD_CONFIG_FILE, "pixi.toml", "pyproject.toml")
+ROOT_MARKERS = (CONFIG_FILE, "pixi.toml", "pyproject.toml")
 BASE_ENV = "CAIRN_DIR"
 BASE_NAME = ".cairn"
 _DIR_CACHE: dict[tuple, str | None] = {}
@@ -49,13 +52,9 @@ REPO_KEYS = {"remote", "project", "token_file", "allow_http", "interval", "heart
 
 
 def config_path(root: Path) -> Path | None:
-    """The config file of a project root (`cairn.toml`), or None. A `cairn-report.toml` without it is an error."""
+    """The config file of a project root (`cairn.toml`), or None."""
     file = root / CONFIG_FILE
-    if file.is_file():
-        return file
-    if (root / OLD_CONFIG_FILE).is_file():
-        raise ValueError(f"{root / OLD_CONFIG_FILE} is the config file of cairn-report: rename it to {CONFIG_FILE}")
-    return None
+    return file if file.is_file() else None
 
 
 @dataclass(frozen=True)
@@ -67,23 +66,54 @@ class Config:
     extra_css: tuple[Path, ...] = field(default_factory=tuple)
     template_dir: Path | None = None
     repo: dict = field(default_factory=dict)  # the [repo] table
+    found: bool = True  # False: nothing was found, so the repo is the working directory's `.cairn`, made when opened
 
     @property
     def source(self) -> Path | None:
         return config_path(self.project)
 
 
-def find_project_root(start: Path | None = None) -> Path | None:
-    """The nearest folder from `start` (default: the working directory) up that holds a root marker, else None."""
+@dataclass(frozen=True)
+class Location:
+    """Where the repo is: `root` the project root, `repo` the repo folder, `marked` whether the walk found a project
+    root (or a repo), `found` whether there is a repo to use without creating one in the working directory (found
+    by the walk, or named by $CAIRN_DIR)."""
+    root: Path
+    repo: Path
+    marked: bool
+    found: bool
+
+
+def _marked(folder: Path) -> bool:
+    return (folder / BASE_NAME / "repo.json").is_file() or any((folder / marker).is_file() for marker in ROOT_MARKERS)
+
+
+def locate(start: Path | str | None = None, root: Path | str | None = None) -> Location:
+    """The one rule for finding the repo (see the module doc), from `start` (default: the working directory), or for
+    the project root `root` when it is given (`--project`)."""
     start = Path(start or Path.cwd()).resolve()
-    for folder in [start, *start.parents]:
-        if any((folder / marker).is_file() for marker in ROOT_MARKERS):
-            return folder
-    return None
+    if root is not None:
+        folder, marked = Path(root).resolve(), True
+    else:
+        folder = next((candidate for candidate in [start, *start.parents] if _marked(candidate)), None)
+        marked = folder is not None
+        folder = folder or start
+    if os.environ.get(BASE_ENV):
+        return Location(folder, Path(os.environ[BASE_ENV]).expanduser().resolve(), marked, True)
+    configured = _configured_dir(folder)
+    repo = (folder / Path(configured).expanduser()).resolve() if configured else folder / BASE_NAME
+    return Location(folder, repo, marked, marked)
+
+
+def find_project_root(start: Path | None = None) -> Path | None:
+    """The project root the walk finds from `start` (default: the working directory), else None (`locate`)."""
+    found = locate(start)
+    return found.root if found.marked else None
 
 
 def find_project(start: Path | None = None) -> Path:
-    return find_project_root(start) or Path(start or Path.cwd()).resolve()
+    """The project root (`locate`): the one found, else the working directory."""
+    return locate(start).root
 
 
 def _configured_dir(root: Path) -> str | None:
@@ -103,21 +133,10 @@ def _configured_dir(root: Path) -> str | None:
     return _DIR_CACHE[key]
 
 
-def base_for(root: Path) -> Path:
-    """The base folder of a project root: $CAIRN_DIR, else `[cairn] dir` (relative to the root), else `<root>/.cairn`."""
-    if os.environ.get(BASE_ENV):
-        return Path(os.environ[BASE_ENV]).expanduser().resolve()
-    configured = _configured_dir(root)
-    return (root / Path(configured).expanduser()).resolve() if configured else root / BASE_NAME
-
-
 def cairn_base(start: Path | None = None) -> Path | None:
-    """The base folder for the working directory's project (see the module doc); None outside any project
-    unless $CAIRN_DIR is set."""
-    root = find_project_root(start)
-    if root is not None:
-        return base_for(root)
-    return Path(os.environ[BASE_ENV]).expanduser().resolve() if os.environ.get(BASE_ENV) else None
+    """The repo for the working directory (`locate`); None when there is none to use yet (nothing found)."""
+    found = locate(start)
+    return found.repo if found.found else None
 
 
 def protect(base: Path | None, *paths: Path) -> None:
@@ -141,7 +160,8 @@ def protect(base: Path | None, *paths: Path) -> None:
 
 def load_config(project: Path | str | None = None) -> Config:
     """Read cairn.toml (if any) and resolve every path against the project root."""
-    root = Path(project).resolve() if project else find_project()
+    location = locate(root=project) if project else locate()
+    root = location.root
     data: dict = {}
     source = config_path(root) or root / CONFIG_FILE
     if source.is_file():
@@ -188,7 +208,7 @@ def load_config(project: Path | str | None = None) -> Config:
             raise ValueError(f"{source}: {value!r} points outside the project")
         return resolved
 
-    base = base_for(root)
+    base = location.repo
 
     css = tuple(path(item, None) for item in style.get("css", []))
     for sheet in css:
@@ -202,6 +222,7 @@ def load_config(project: Path | str | None = None) -> Config:
         reports_dir=path(data.get("reports_dir"), "reports"),
         output_dir=path(data.get("output_dir"), None) or base / "build",
         cairn_dir=base,
+        found=location.found,
         extra_css=css,
         template_dir=template_dir,
         repo=dict(repo),

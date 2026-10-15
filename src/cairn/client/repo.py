@@ -48,7 +48,7 @@ from ..store.errors import BadRange, Deleted, MissingBlobs, NotFound, StoreError
 from ..store.folders import cached, hostname, inside, materialize_version, pull as pull_local
 from ..store.hashes import HashCache
 from ..store.inputs import drop_inputs, record_input
-from ..store.local import FileRead, LocalRepo
+from ..store.local import FileRead, LocalRepo, repo_uid
 from ..store.outbox import Outbox, exact_ref, manifest_of, usable
 from ..store.prune import prune as prune_folders
 from ..store.refs import Ref
@@ -302,6 +302,7 @@ class SyncedRepo(ProjectRepo):
     def __init__(self, remote: Remote, root: Path | str, copies, project: str | None, heartbeat_timeout: float):
         self.remote, self.copies, self.project = remote, copies, project
         self.root = Path(root)
+        self.own_uid = repo_uid(self.root)  # repo.json, also without a database (a network filesystem)
         self.url = remote.url
         self.heartbeat_timeout = heartbeat_timeout
         self.outbox = Outbox(self.root)

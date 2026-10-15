@@ -24,6 +24,7 @@ counts as evidence is up to the project.
 ```bash
 pip install git+https://github.com/DoeringChristian/cairn.git   # see Install for extras
 cd my-project                       # any folder with a pixi.toml, pyproject.toml or cairn.toml
+cairn init                          # optional: the repo, .cairn/ (any command that writes makes it too)
 cairn publish data/crops datasets/crops   # a folder becomes version v1 of "datasets/crops" in the repo, .cairn/
 cairn pull datasets/crops@latest    # prints the path of a read-only local copy
 cairn ui                            # explore projects, versions, files and lineage in the browser
@@ -122,9 +123,8 @@ compatibility code: a project starts a fresh repo in `.cairn/`. `[store]` in `ca
 key (use `[repo]`), the environment variable `CAIRN_STORE_TOKEN` is now `CAIRN_TOKEN`, and the old
 `.cairn/store`, `.cairn/pending`, and `.cairn/cache` folders are not read. The hub importer
 (`cairn migrate`) is gone. For the names inherited from cairn-report: the distribution and the command
-are `cairn` (also `python -m cairn`), the configuration file is `cairn.toml` (a `cairn-report.toml` is not
-read: Cairn stops and asks you to rename it), and `cairn server` / `cairn token` replace `cairn-report store
-serve` / `store token`. The old Cairn tracker (cairn-track) cannot be installed in the same environment.
+are `cairn` (also `python -m cairn`), the configuration file is `cairn.toml`, and `cairn server` /
+`cairn token` replace `cairn-report store serve` / `store token`. The old Cairn tracker (cairn-track) cannot be installed in the same environment.
 
 ## Install
 
@@ -619,6 +619,7 @@ cairn pull x@latest --into DIR [--no-record]               # copy it into DIR in
 ```
 
 ```bash
+cairn init [FOLDER]                                        # create a repo (see "Finding the repo")
 cairn project list                                         # projects, artifact counts, last update
 cairn project create my-study --title "My study" [--description ...]
 cairn project show my-study                                # its title, description, and artifacts
@@ -1016,12 +1017,26 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
 
 | What | Resolution |
 | --- | --- |
-| the repo | `$CAIRN_DIR`, else `[cairn] dir` in `cairn.toml` (relative to the project root), else `<project root>/.cairn`; none outside a project (then Cairn asks for a project or `CAIRN_DIR`) |
+| the repo | `$CAIRN_DIR`, else `[cairn] dir` in `cairn.toml` (relative to the project root), else `<project root>/.cairn` |
 | built pages | `output_dir` in `cairn.toml`, else `<repo>/build` |
 
-The project root is the nearest folder above the working directory with a `cairn.toml`,
-`pixi.toml`, or `pyproject.toml` (a `cairn-report.toml` alone is an error that asks you to rename it).
-Source snapshots (a run's `code/`, a Hydra job's `provenance/`) skip `.cairn`.
+**Finding the repo** is one rule, the same for every command and script:
+
+1. `$CAIRN_DIR` set: that folder is the repo.
+2. Otherwise Cairn walks from the working directory upward. The first folder that holds `.cairn/repo.json`
+   (an existing repo, the way git finds `.git`), `cairn.toml`, `pixi.toml`, or `pyproject.toml` is the
+   project root; its repo is `[cairn] dir`, else `<root>/.cairn`.
+3. Nothing found: whatever opens the repo (`cairn.init`, `use`, `draft`, `publish`, `cairn ui`, `cairn server`
+   without a folder) creates `.cairn/` in the working directory and says so in one line on stderr. Commands that
+   only look at a repo (`cairn status`, `verify`, `prune`, `sync`) say "no repo here (run `cairn init`)" and
+   exit 1 instead.
+
+```bash
+cairn init [FOLDER]     # create FOLDER/.cairn (default: here; $CAIRN_DIR if set); an existing repo is left as it is
+```
+
+`cairn init` writes only the repo (`repo.json`, its `.gitignore` of `*`, mode 700): never a `cairn.toml`, never
+the project's own `.gitignore`. Source snapshots (a run's `code/`, a Hydra job's `provenance/`) skip `.cairn`.
 
 ## Configuration
 

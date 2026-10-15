@@ -585,3 +585,15 @@ def test_a_remote_that_drops_packets_does_not_hold_up_reads_or_publishes(tmp_pat
         for filler in fillers:
             filler.close()
         listener.close()
+
+
+def test_many_processes_opening_a_new_repo_at_once(tmp_path):
+    """A job array starting together on a project without a repo yet: every process opens (and creates) it."""
+    code = "import cairn; cairn.connect().project().artifact('x').versions(); print('ok')"
+    for round in range(5):
+        project = project_at(tmp_path, f"fresh-{round}")
+        starts = [subprocess.Popen([sys.executable, "-c", code], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                  for _ in range(8)]
+        for start in starts:
+            out, err = start.communicate(timeout=120)
+            assert start.returncode == 0 and out.strip() == "ok", err

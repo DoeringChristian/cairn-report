@@ -27,6 +27,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -60,6 +61,21 @@ CREATE TABLE IF NOT EXISTS consumers (
 RETENTION_TABLE = ("CREATE TABLE IF NOT EXISTS retention (project TEXT NOT NULL, prefix TEXT NOT NULL, rule TEXT NOT NULL, "
                    "PRIMARY KEY (project, prefix)) WITHOUT ROWID")
 TABLES += RETENTION_TABLE + ";\n"
+
+
+def _wal(connection: sqlite3.Connection) -> None:
+    """Put the database in WAL mode (once: it stays so in the file). Switching needs a moment alone with the file and
+    does not wait for SQLite's busy timeout, so processes opening a new repo at the same moment (a job array) retry."""
+    deadline = time.monotonic() + BUSY_SECONDS
+    while True:
+        try:
+            if connection.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+                connection.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as error:
+            if not ("locked" in str(error) or "busy" in str(error)) or time.monotonic() > deadline:
+                raise
+            time.sleep(0.02)
 
 
 class Database:
@@ -100,7 +116,7 @@ class Database:
         connection = getattr(self._local, "connection", None)
         if connection is None:
             connection = sqlite3.connect(self.path, timeout=BUSY_SECONDS, isolation_level=None, check_same_thread=False)
-            connection.execute("PRAGMA journal_mode=WAL")
+            _wal(connection)
             connection.execute("PRAGMA synchronous=FULL")
             self._local.connection = connection
         return connection

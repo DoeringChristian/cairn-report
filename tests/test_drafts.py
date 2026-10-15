@@ -256,15 +256,13 @@ def test_cli_lists_publishes_and_discards_kept_drafts(configured, env, capsys):
         main(["drafts", "publish", "nope"])
 
 
-def test_outside_a_project_drafts_need_a_repo(tmp_path, monkeypatch):
+def test_outside_a_project_drafts_live_in_the_repo_made_here(tmp_path, capsys):
     local = cairn.LocalRepo(tmp_path / "repo-root", "loose")
-    with pytest.raises(cairn.StoreError, match="no repo"):
-        cairn.draft("loose", store=local)
-    monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "chosen"))
     with cairn.draft("loose", store=local) as run:
-        assert run.path.parent.parent == tmp_path / "chosen" / "drafts"
+        assert run.path.parent.parent == tmp_path / ".cairn" / "drafts"
         (run.path / "a.txt").write_text("a")
     assert run.version.ref == "loose:loose@v1" and not run.path.exists()
+    assert "created the repo" in capsys.readouterr().err
 
 
 def test_a_local_store_shares_storage_with_the_published_blobs(env, monkeypatch):

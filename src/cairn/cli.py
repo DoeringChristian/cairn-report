@@ -1,4 +1,4 @@
-"""Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | alias | delete | retention |
+"""Command line: `cairn init | build | serve | share | publish | pull | project | artifacts | versions | show | alias | delete | retention |
 gc | sync | status | prune | verify | server | ui | token | export-metadata | finalize-study | drafts`.
 
 Every command that uses the repo first tries to send what waits for its remote, and once more at its end (quietly,
@@ -337,6 +337,26 @@ def cmd_gc(args) -> None:
           f"({describe_bytes(result['temporary_bytes'])}); grace {grace / 3600:g} h")
 
 
+def cmd_init(args) -> None:
+    import os
+
+    from .config import BASE_NAME, protect
+    from .store.local import REPO_FILE, repo_uid
+
+    if args.path is not None:
+        repo = Path(args.path).expanduser().resolve() / BASE_NAME
+    elif os.environ.get("CAIRN_DIR"):
+        repo = Path(os.environ["CAIRN_DIR"]).expanduser().resolve()
+    else:
+        repo = Path.cwd().resolve() / BASE_NAME
+    if (repo / REPO_FILE).is_file():
+        return print(f"the repo {repo} exists already")
+    protect(repo)
+    repo.mkdir(parents=True, exist_ok=True)
+    repo_uid(repo)  # repo.json; the folder becomes private to its owner
+    print(f"created the repo {repo}")
+
+
 def cmd_sync(args) -> None:
     import time
 
@@ -647,6 +667,10 @@ def main(argv: list[str] | None = None) -> None:
     gc.add_argument("--dry-run", action="store_true", help="only say what would be deleted and freed")
     gc.add_argument("--grace", default="24h", help="keep unreferenced blobs younger than this, e.g. 24h, 30m (default: 24h)")
     gc.set_defaults(run=cmd_gc)
+    init = commands.add_parser("init", help="create a repo, .cairn/, in a folder (default: here; $CAIRN_DIR if set); "
+                               "a repo that exists is left as it is")
+    init.add_argument("path", nargs="?", type=Path, help="the folder to create .cairn/ in (default: the working directory)")
+    init.set_defaults(run=cmd_init)
     sync = commands.add_parser("sync", help="send the repo's pending versions to its remote now, and mirror the remote's aliases")
     sync.add_argument("--watch", action="store_true", help="keep going every [repo] interval seconds (a login node's sender)")
     sync.set_defaults(run=cmd_sync)
@@ -720,6 +744,10 @@ def main(argv: list[str] | None = None) -> None:
     args.command = command
     if command and args.run is not cmd_publish:
         parser.error("only `publish` takes a command after --")
+    if args.run in LOOKING_COMMANDS and not getattr(args, "repo", None):  # they look at a repo; they never make one
+        from .client.open import existing_repo
+
+        existing_repo(load_config(args.project))
     syncing = args.run in REPO_COMMANDS and not getattr(args, "offline", False)  # --offline: never ask the remote
     if syncing:
         sync_quietly(args)
@@ -734,6 +762,7 @@ def main(argv: list[str] | None = None) -> None:
             sync_quietly(args)
 
 
+LOOKING_COMMANDS = {cmd_status, cmd_verify, cmd_prune, cmd_sync}
 REPO_COMMANDS = {cmd_publish, cmd_pull, cmd_project, cmd_project_delete, cmd_artifacts, cmd_versions, cmd_show, cmd_alias, cmd_delete,
                  cmd_retention, cmd_gc, cmd_status, cmd_prune, cmd_verify, cmd_build, cmd_drafts, cmd_finalize_study}
 

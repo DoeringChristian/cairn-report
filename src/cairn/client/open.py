@@ -18,7 +18,7 @@ import re
 import sys
 from pathlib import Path
 
-from ..config import Config, cairn_base, load_config, protect
+from ..config import Config, load_config, locate, protect
 from ..store import LocalRepo, StoreError, refs
 from ..store.errors import Unreachable
 from ..store.fs import network_filesystem, network_fs_message
@@ -48,16 +48,33 @@ def remote_url(config: Config | None) -> str | None:
     return url or None
 
 
+def make_repo_folder(repo: Path, found: bool) -> Path:
+    """Make the repo folder (with its `.gitignore`) if it is new. When nothing was found (`config.locate`: no project
+    or repo above the working directory, no $CAIRN_DIR), the new repo is the working directory's: one line on stderr
+    says so."""
+    repo = Path(repo)
+    new = not repo.exists()
+    protect(repo)
+    repo.mkdir(parents=True, exist_ok=True)
+    if new and not found:
+        print(f"cairn: created the repo {repo} (no repo or project above {Path.cwd()}; `cairn init` makes one on purpose)",
+              file=sys.stderr, flush=True)
+    return repo
+
+
 def repo_root() -> Path:
-    """The working directory's repo: `$CAIRN_DIR`, else `[cairn] dir`, else `<project root>/.cairn` (made, with its
-    `.gitignore`, on first use). Outside a project, without `$CAIRN_DIR`, there is none (StoreError)."""
-    base = cairn_base()
-    if base is None:
-        raise StoreError("no repo: this folder is not inside a project (no cairn.toml, pixi.toml, or pyproject.toml here or "
-                         "above it), and CAIRN_DIR is not set; Cairn keeps everything in the project's .cairn/")
-    protect(base)
-    base.mkdir(parents=True, exist_ok=True)
-    return base
+    """The working directory's repo (`config.locate`), made if it is new (see `make_repo_folder`)."""
+    found = locate()
+    return make_repo_folder(found.repo, found.found)
+
+
+def existing_repo(config: Config) -> Path:
+    """The project's repo for a command that only looks at it (`cairn status`, `verify`, `prune`, `sync`): it must exist
+    already (SystemExit otherwise: nothing is created)."""
+    repo = Path(config.cairn_dir)
+    if not (repo / "repo.json").is_file():
+        raise SystemExit(f"cairn: no repo here ({repo} does not exist; run `cairn init`)")
+    return repo
 
 
 def client(config: Config | None, url: str | None = None, *, token: str | None = None, allow_http: bool = False,
@@ -86,8 +103,7 @@ def client(config: Config | None, url: str | None = None, *, token: str | None =
 def _compose(root: Path, remote: Remote | None, config: Config | None, project: str | None, own: bool) -> ProjectRepo:
     """The repo at `root`, with `remote` (None: without one). `own`: the remote is the project's `[repo] remote`, so the
     repo's database holds its copies (a remote named only for this call gets an outbox and blobs, no copies)."""
-    protect(root)
-    root.mkdir(parents=True, exist_ok=True)
+    make_repo_folder(root, config.found if config else True)
     allowed = bool(config and config.repo.get("allow_network_fs"))
     fstype = None if allowed else network_filesystem(root)
     beat = heartbeat_timeout(config)
@@ -114,7 +130,7 @@ def open_repo(config: Config | None = None) -> ProjectRepo:
 
 def open_remote(url_or_remote: str | Remote, *, token: str | None = None, project: str | None = None) -> ProjectRepo:
     """A remote with the working directory's repo for its outbox and files (and as its cache when it is the project's
-    own `[repo] remote`). Needs a repo: inside a project, or `$CAIRN_DIR`."""
+    own `[repo] remote`); the repo is made if it is new (`repo_root`)."""
     try:
         config = load_config()
         project = project or project_name(config)
@@ -161,10 +177,7 @@ def served_root(config: Config) -> Path:
     url = remote_url(config)
     if url:
         raise SystemExit(f"this project's repo syncs with the remote {url}; to serve a repo folder: cairn server <folder>")
-    root = Path(config.cairn_dir)
-    protect(root)
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    return make_repo_folder(Path(config.cairn_dir), config.found)
 
 
 def sync_now(config: Config, report=None, timeout: float = 10) -> dict | None:

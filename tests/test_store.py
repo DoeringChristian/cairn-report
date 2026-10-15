@@ -320,9 +320,6 @@ def test_config_file_is_cairn_toml(tmp_path):
     from cairn import config
     from cairn.config import load_config
 
-    (tmp_path / "cairn-report.toml").write_text('[repo]\nproject = "old"\n')
-    with pytest.raises(ValueError, match="rename it to cairn.toml"):
-        load_config(tmp_path)
     (tmp_path / "cairn.toml").write_text('[repo]\nproject = "new"\n')
     assert load_config(tmp_path).repo["project"] == "new"
     nested = tmp_path / "a" / "b"

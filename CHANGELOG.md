@@ -30,6 +30,11 @@ before it, so there is no migration and no compatibility code, and a project sta
   `cairn ui` opens the project's repo directly (`--remote URL`, `--repo FOLDER`); `cairn status` lists the
   pending, running, and rejected versions; `cairn verify [REF] [--repo FOLDER] [--repair]`; `cairn prune` trims
   read-only folders and contents only copies need. `cairn migrate` (the hub importer) is removed.
+- **Finding the repo** is one rule: `$CAIRN_DIR`, else the first folder upward from the working directory that
+  holds `.cairn/repo.json`, `cairn.toml`, `pixi.toml`, or `pyproject.toml` (its repo is `[cairn] dir`, else
+  `.cairn`); with nothing found, opening the repo creates `.cairn/` in the working directory (and says so), while
+  `cairn status`, `verify`, `prune`, and `sync` refuse. `cairn init [folder]` creates a repo (idempotent). A
+  `cairn-report.toml` is no longer recognized at all.
 - **UI:** pending versions show a `pending` badge and their uid instead of `vN`.
 - **API:** `cairn.connect()` returns a `cairn.Repo` (was `Store`); `LocalRepo` (was `LocalStore`) and
   `Remote` (was `RemoteStore`) both implement the repo interface (`cairn.store.interface`); `cairn.open_repo`
