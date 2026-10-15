@@ -42,7 +42,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .._version import __version__
-from ..store import BadRange, FileRead, Forbidden, NotFound, Ref, StoreError, Unauthorized, refs
+from ..store import BadRange, Deleted, FileRead, Forbidden, NotFound, Ref, StoreError, Unauthorized, refs
 from ..store.blobs import resolve_entry, valid_path
 from ..store.tokens import Principal
 from .backends import LocalBackend, RemoteBackend
@@ -95,11 +95,13 @@ def app_route(segments: list[str]) -> bool:
 
 
 def summarize_version(version: dict) -> dict:
-    """A version without its file list: the table of versions needs only counts."""
+    """A version without its file list: the table of versions needs only counts (a tombstone keeps those it had)."""
     files = version.get("files", [])
     slim = {key: value for key, value in version.items() if key not in ("files", "inputs")}
-    return {**slim, "input_count": len(version.get("inputs", [])), "file_count": len(files),
-            "size": sum(entry.get("size", 0) for entry in files)}
+    counts = {"file_count": len(files), "size": sum(entry.get("size", 0) for entry in files)}
+    if version.get("status") == "deleted":
+        counts = {"file_count": version.get("file_count", 0), "size": version.get("size", 0)}
+    return {**slim, "input_count": len(version.get("inputs", [])), **counts}
 
 
 class UIHandler(BaseHTTPRequestHandler):
@@ -150,6 +152,8 @@ class UIHandler(BaseHTTPRequestHandler):
             self._error(error.status, error.message)
         except BadRange as error:
             self._send(416, b"", headers={"Content-Range": f"bytes */{error.total}"})
+        except Deleted as error:
+            self._error(410, str(error))
         except NotFound as error:
             self._error(404, str(error))
         except Forbidden as error:
@@ -288,20 +292,30 @@ class UIHandler(BaseHTTPRequestHandler):
         """One manifest (files, metadata, inputs) with its consumers; `selector` is a number, `v<n>`, an alias or a label."""
         chosen = f"v{selector}" if selector.isdigit() else selector
         version = self._version(store, project, name, chosen)
-        consumers = store.lineage(refs.exact(project, name, version["version"]))["consumers"] if version["status"] == "completed" else []
-        return {"project": project, "name": name, "version": version, "consumers": consumers}
+        consumers, deleted = [], []
+        if version["status"] in ("completed", "deleted"):  # a deleted version keeps its edges
+            found = store.lineage(refs.exact(project, name, version["version"]), marks=True)
+            consumers, deleted = found["consumers"], found.get("deleted", [])
+        return {"project": project, "name": name, "version": version, "consumers": consumers, "deleted": deleted}
 
     def _lineage_api(self, session: Session, ref: Ref, depth: int) -> dict:
         """Inputs to the left and consumers to the right of a version, `depth` levels each way, from one-level lineage calls.
 
         `nodes` maps each reference to its `inputs` and `consumers` when they were looked up (null: not looked
         up, so the app may offer to expand it). Ancestors are expanded through their inputs only, descendants
-        through their consumers only. References in projects the session may not read are left out."""
+        through their consumers only. References in projects the session may not read are left out. A deleted
+        version keeps its edges; its node says `deleted: true` (the key is there only then)."""
         store, principal = session.store, session.principal
-        first = store.lineage(ref)
-        _, _, version = store.resolve(ref)
-        root = refs.exact(ref.project, ref.name, version["version"])
+        first = store.lineage(ref, marks=True)
+        try:
+            number = store.resolve(ref)[2]["version"]
+        except Deleted:
+            if not ref.exact:
+                raise
+            number = ref.version or store.get_version(ref.project, ref.name, ref.uid)["version"]
+        root = refs.exact(ref.project, ref.name, number)
         nodes: dict[str, dict] = {root: {"inputs": None, "consumers": None}}
+        gone = set(first.get("deleted", []))
         truncated = False
 
         def visible(items: list[str]) -> list[str]:
@@ -316,7 +330,9 @@ class UIHandler(BaseHTTPRequestHandler):
                         found = visible(first[side])
                     else:
                         try:
-                            found = visible(store.lineage(current)[side])
+                            answer = store.lineage(current, marks=True)
+                            gone.update(answer.get("deleted", []))
+                            found = visible(answer[side])
                         except (NotFound, StoreError, Forbidden):
                             found = []
                     kept = []
@@ -330,6 +346,8 @@ class UIHandler(BaseHTTPRequestHandler):
                         kept.append(item)
                     nodes[current][side] = kept
                 frontier = following
+        for item in gone & nodes.keys():
+            nodes[item]["deleted"] = True
         return {"ref": root, "depth": depth, "nodes": nodes, "truncated": truncated}
 
     # ------------------------------------------------------------------ files

@@ -1,9 +1,5 @@
-"""Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | sync | status |
-<<<<<<< HEAD
-server | ui | token | migrate | export-metadata | finalize-study`.
-=======
-prune | server | ui | token | migrate | finalize-study`.
->>>>>>> replica
+"""Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | delete | retention |
+gc | sync | status | prune | server | ui | token | migrate | export-metadata | finalize-study`.
 
 Every command that talks to the store first tries to send this machine's pending versions for it (quietly,
 and only when something is pending); `sync` does that by hand, says what happened, and refreshes what the
@@ -193,6 +189,87 @@ def cmd_show(args) -> None:
         print(f"  {item.path}\t{'-> ' + item.link if item.link else item.size}")
 
 
+def _store_errors(action):
+    """Run `action`; a refusal from the store ends the command with its message instead of a traceback."""
+    from .store import StoreError
+
+    try:
+        return action()
+    except StoreError as error:
+        raise SystemExit(f"cairn: {error}") from None
+
+
+def cmd_delete(args) -> None:
+    store = open_objects(args)
+    if (args.ref is None) == (args.artifact is None):
+        raise SystemExit("delete takes a REF (one version) or --artifact NAME (every version of it)")
+    if args.artifact:
+        result = _store_errors(lambda: store.artifact(args.artifact).delete(force=args.force, reason=args.reason))
+    else:
+        result = _store_errors(lambda: store.version(args.ref).delete(force=args.force, reason=args.reason))
+    for ref in result["deleted"]:
+        print(f"deleted {ref}")
+
+
+def cmd_project_delete(args) -> None:
+    store = open_objects(args)
+    result = _store_errors(lambda: store.project(args.name).delete(force=args.force, reason=args.reason))
+    for ref in result["deleted"]:
+        print(f"deleted {ref}")
+    print(f"deleted project {args.name}")
+
+
+def _rule_text(rule: dict) -> str:
+    parts = [f"keep_last={rule['keep_last']}" if rule.get("keep_last") is not None else "",
+             f"keep_days={rule['keep_days']:g}" if rule.get("keep_days") is not None else "",
+             "" if rule.get("keep_aliased", True) else "keep_aliased=false"]
+    return f"{rule['prefix'] or '(every artifact)'}\t" + " ".join(part for part in parts if part)
+
+
+def cmd_retention(args) -> None:
+    store = open_objects(args)
+    project = store.project(args.store_project)
+    if args.retention_command == "set":
+        if args.keep_last is None and args.keep_days is None:
+            raise SystemExit("set takes --keep-last and/or --keep-days")
+        _store_errors(lambda: project.set_retention(args.prefix or "", keep_last=args.keep_last, keep_days=args.keep_days,
+                                                    keep_aliased=not args.no_keep_aliased))
+    elif args.retention_command == "clear":
+        rules = _store_errors(lambda: project.retention)
+        _store_errors(lambda: setattr(project, "retention", [rule for rule in rules if rule["prefix"] != (args.prefix or "")]))
+    rules = _store_errors(lambda: project.retention)
+    for rule in rules:
+        print(_rule_text(rule))
+    if not rules:
+        print(f"no retention rules in {project.name}: nothing is deleted by `cairn gc` but blobs no version names")
+
+
+def cmd_gc(args) -> None:
+    from .store import LocalStore
+    from .store.gc import describe_bytes, parse_duration
+
+    try:
+        grace = parse_duration(args.grace)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    if args.root is not None:
+        if not (args.root / "store.json").is_file():
+            raise SystemExit(f"{args.root} is not a store root (no store.json)")
+        backend = LocalStore(args.root)
+        result = _store_errors(lambda: backend.gc(dry_run=args.dry_run, grace=grace))
+    else:
+        store = open_objects(args)
+        result = _store_errors(lambda: store.gc(dry_run=args.dry_run, grace=grace))
+    verb = "would delete" if args.dry_run else "deleted"
+    for ref in result["deleted"]:
+        print(f"{verb} {ref}")
+    for item in result["skipped"]:
+        print(f"kept {item['ref']} (protected: {', '.join(item['reasons'])})")
+    print(f"{verb} {len(result['deleted'])} versions; {'would remove' if args.dry_run else 'removed'} {result['blobs']} blobs "
+          f"({describe_bytes(result['bytes'])} {'to free' if args.dry_run else 'freed'}) and {result['temporary']} stale uploads "
+          f"({describe_bytes(result['temporary_bytes'])}); grace {grace / 3600:g} h")
+
+
 def cmd_sync(args) -> None:
     store = open_objects(args)
     if not store.remote:
@@ -273,10 +350,18 @@ def cmd_prune(args) -> None:
 
 def cmd_server(args) -> None:
     from .server import serve_store
+    from .store.gc import parse_duration
 
+    try:
+        interval = parse_duration(args.gc_interval) if args.gc_interval else None
+        grace = parse_duration(args.grace)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    if interval is not None and interval <= 0:
+        raise SystemExit("--gc-interval must be longer than 0")
     serve_store(args.root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3), no_auth=args.no_auth,
                 ui_port=None if args.no_ui else args.ui_port if args.ui_port is not None else args.port + 1 if args.port else 0,
-                allow_network_fs=args.allow_network_fs)
+                allow_network_fs=args.allow_network_fs, gc_interval=interval, gc_grace=grace)
 
 
 def cmd_ui(args) -> None:
@@ -399,6 +484,12 @@ def main(argv: list[str] | None = None) -> None:
             command.add_argument("--description")
         command.add_argument("--allow-http", action="store_true", help=argparse.SUPPRESS)
         command.set_defaults(run=cmd_project)
+    project_delete = project_commands.add_parser("delete", help="delete a project (refused while it has versions, unless --force)")
+    project_delete.add_argument("name")
+    project_delete.add_argument("--force", action="store_true", help="delete its versions first, protected ones too (owner token)")
+    project_delete.add_argument("--reason", help="why (kept in the tombstones)")
+    project_delete.add_argument("--allow-http", action="store_true", help=argparse.SUPPRESS)
+    project_delete.set_defaults(run=cmd_project_delete)
 
     artifacts = commands.add_parser("artifacts", help="the artifacts of a project (latest version, versions, aliases)")
     artifacts.add_argument("--prefix", help="only names starting with this, e.g. reports/")
@@ -411,6 +502,32 @@ def main(argv: list[str] | None = None) -> None:
     show.add_argument("ref", help="[project:]name[@vN|@uid|@alias|@label]")
     show.add_argument("--offline", action="store_true", help="answer from the cache only")
     show.set_defaults(run=cmd_show)
+    delete = commands.add_parser("delete", help="delete a version (a tombstone: its number and uid are never used again) or a whole artifact")
+    delete.add_argument("ref", nargs="?", help="[project:]name@vN (or @uid, @alias, @label)")
+    delete.add_argument("--artifact", metavar="NAME", help="delete every version of this artifact ([project:]name)")
+    delete.add_argument("--force", action="store_true",
+                        help="delete protected versions too (aliased, inputs of other versions, running); owner token on a server")
+    delete.add_argument("--reason", help="why (kept in the tombstone)")
+    delete.set_defaults(run=cmd_delete)
+    retention = commands.add_parser("retention", help="the retention rules `cairn gc` applies, per project or artifact prefix")
+    retention_commands = retention.add_subparsers(dest="retention_command", required=True)
+    for verb, text in (("show", "a project's rules"), ("set", "add or replace the rule for a prefix"), ("clear", "remove the rule for a prefix")):
+        command = retention_commands.add_parser(verb, help=text)
+        command.add_argument("store_project", metavar="project", help="the store project")
+        if verb != "show":
+            command.add_argument("--prefix", default="", help="artifact names starting with this, e.g. runs/ (default: every artifact)")
+        if verb == "set":
+            command.add_argument("--keep-last", type=int, help="keep the N newest versions of each artifact")
+            command.add_argument("--keep-days", type=float, help="keep versions younger than D days")
+            command.add_argument("--no-keep-aliased", action="store_true",
+                                 help="aliased versions take a --keep-last place like any other (they are still never deleted)")
+        command.add_argument("--allow-http", action="store_true", help=argparse.SUPPRESS)
+        command.set_defaults(run=cmd_retention)
+    gc = commands.add_parser("gc", help="apply the retention rules and remove blobs no version names (a store root, or the configured store)")
+    gc.add_argument("root", nargs="?", type=Path, help="a store root on this machine (default: the configured store; a server needs the owner token)")
+    gc.add_argument("--dry-run", action="store_true", help="only say what would be deleted and freed")
+    gc.add_argument("--grace", default="24h", help="keep unreferenced blobs younger than this, e.g. 24h, 30m (default: 24h)")
+    gc.set_defaults(run=cmd_gc)
     sync = commands.add_parser("sync", help="send this machine's pending versions to the store server now, and refresh known aliases")
     sync.set_defaults(run=cmd_sync)
     status = commands.add_parser("status", help="this machine's versions the store server does not have yet: pending, running, rejected")
@@ -424,7 +541,7 @@ def main(argv: list[str] | None = None) -> None:
     for command in (sync, status):
         command.add_argument("--data-dir", type=Path, help="the data root to use (default: $CAIRN_DATA_DIR, else ~/.local/share/cairn): "
                              "send the pending versions kept there")
-    for command in (artifacts, versions, show, sync, status):
+    for command in (artifacts, versions, show, sync, status, delete, gc):
         command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
 
     store_serve = commands.add_parser("server", help="serve a store folder (a new one gets an owner token); put an HTTPS reverse proxy in front")
@@ -437,6 +554,8 @@ def main(argv: list[str] | None = None) -> None:
     store_serve.add_argument("--no-ui", action="store_true", help="do not start `cairn ui` beside the store")
     store_serve.add_argument("--allow-network-fs", action="store_true",
                              help="serve a root on a network filesystem (NFS, Lustre, GPFS, SMB, ...): only if this server is its only writer")
+    store_serve.add_argument("--gc-interval", help="collect garbage this often, e.g. 24h (retention rules, then unreferenced blobs; default: never)")
+    store_serve.add_argument("--grace", default="24h", help="with --gc-interval: keep unreferenced blobs younger than this (default: 24h)")
     store_serve.set_defaults(run=cmd_server)
     migrate = commands.add_parser("migrate", help="copy an old hub root into a store (the old root is not modified)")
     migrate.add_argument("old_root", type=Path)

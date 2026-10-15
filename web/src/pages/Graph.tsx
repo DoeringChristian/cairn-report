@@ -85,7 +85,7 @@ export function Graph({ root, project }: { root: string; project: string }) {
     setTruncated(t => t || data.truncated);
     setInfo(prev => {
       const next: Info = { ...prev };
-      for (const [ref, node] of Object.entries(data.nodes)) next[ref] = { inputs: node.inputs ?? next[ref]?.inputs ?? null, consumers: node.consumers ?? next[ref]?.consumers ?? null };
+      for (const [ref, node] of Object.entries(data.nodes)) next[ref] = { inputs: node.inputs ?? next[ref]?.inputs ?? null, consumers: node.consumers ?? next[ref]?.consumers ?? null, deleted: node.deleted || next[ref]?.deleted };
       return next;
     });
   };
@@ -130,12 +130,12 @@ export function Graph({ root, project }: { root: string; project: string }) {
             const parsed = parseRef(p.ref), text = label(p.ref, project);
             const go = () => parsed && navigate(artifactHref(parsed.project, parsed.name, parsed.sel));
             return (
-              <g key={p.ref} className={"graph-node" + (p.col === 0 ? " is-root" : "")} transform={`translate(${p.x},${p.y})`}>
+              <g key={p.ref} className={"graph-node" + (p.col === 0 ? " is-root" : "") + (info[p.ref]?.deleted ? " is-deleted" : "")} transform={`translate(${p.x},${p.y})`}>
                 <g role="link" tabIndex={0} onClick={go} onKeyDown={e => { if (e.key === "Enter") go(); }}>
-                  <title>{p.ref}</title>
+                  <title>{p.ref}{info[p.ref]?.deleted ? " (deleted)" : ""}</title>
                   <rect width={W} height={H} rx={10} />
                   <text x={12} y={19} className="graph-name">{text.top.length > 28 ? "…" + text.top.slice(-27) : text.top}</text>
-                  <text x={12} y={35} className="graph-sub">{text.bottom}</text>
+                  <text x={12} y={35} className="graph-sub">{text.bottom}{info[p.ref]?.deleted ? " · deleted" : ""}</text>
                 </g>
                 {expandable(p) && (
                   <g role="button" tabIndex={0} aria-label={`Expand ${p.ref}`} className="graph-expand" transform={`translate(${p.col < 0 ? -10 : W + 10},${H / 2})`}

@@ -491,7 +491,7 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
 
     chain = "study:datasets/toy@v1", "study:toy-fit@v1", "study:reports/summary@v1"
     lineage = api(server, "GET", "/api/v2/lineage?ref=study:reports%2Fsummary@latest")
-    assert lineage == {"ref": chain[2], "inputs": [chain[1]], "consumers": []}
+    assert lineage == {"ref": chain[2], "inputs": [chain[1]], "consumers": [], "deleted": []}
     middle = api(server, "GET", "/api/v2/lineage?ref=study:toy-fit@v1")
     assert middle["inputs"] == [chain[0]] and middle["consumers"] == [chain[2]]
     assert api(server, "GET", "/api/v2/lineage?ref=study:datasets%2Ftoy@v1")["consumers"] == [chain[1]]

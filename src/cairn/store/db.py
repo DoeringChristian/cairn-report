@@ -9,6 +9,11 @@ summary row per artifact, in one SQLite file (`<root>/metadata.sqlite3`, WAL mod
     aliases    (project, name, alias) -> number, position (aliases keep the order they first appeared in)
     alias_log  every alias move, in order: project, name, alias, number, time
     consumers  input ref -> consumer ref, in the order they were recorded
+    retention  (project, prefix) -> rule (JSON: keep_last, keep_days, keep_aliased; see gc.py); made when first set
+    meta       schema, legacy (import state), sweeps (how many blob sweeps ran; gc.py)
+
+A deleted version stays in `versions` as a tombstone (status `deleted`, its file list dropped), so its number and
+uid are never handed out again; `artifacts.versions` counts the versions that are not deleted.
 
 Every write is one short transaction (`BEGIN IMMEDIATE`), so a crash leaves either all of a publish or
 none of it. Writers in one process queue on a lock before they take SQLite's; writers in other processes
@@ -58,6 +63,9 @@ CREATE INDEX IF NOT EXISTS alias_log_by_artifact ON alias_log (project, name, se
 CREATE TABLE IF NOT EXISTS consumers (
     seq INTEGER PRIMARY KEY, input TEXT NOT NULL, consumer TEXT NOT NULL, time TEXT NOT NULL, UNIQUE (input, consumer));
 """
+RETENTION_TABLE = ("CREATE TABLE IF NOT EXISTS retention (project TEXT NOT NULL, prefix TEXT NOT NULL, rule TEXT NOT NULL, "
+                   "PRIMARY KEY (project, prefix)) WITHOUT ROWID")
+TABLES += RETENTION_TABLE + ";\n"
 
 
 class Database:

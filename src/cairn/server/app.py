@@ -1,7 +1,7 @@
 """The store server: a LocalStore root shared over HTTP, behind tokens. Only an artifact store: a JSON API and
 file downloads, no pages (`cairn ui` explores a store in a browser, locally or against this server).
 
-    cairn server <root> [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth]
+    cairn server <root> [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth] [--gc-interval 24h]
 
 A new root gets a fresh owner token on first launch; every launch prints `Store: <url>` and
 `Token: <owner token>` to the terminal (never into a URL). Scoped tokens (one project, read or
@@ -26,8 +26,14 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
                                                                  or this uid was published already)
       POST /api/v2/projects/<p>/artifacts/<name>/aliases         {alias, version}
       GET  /api/v2/resolve?ref=<ref>                             {project, name, version: manifest}
-      GET  /api/v2/lineage?ref=<ref>                             {ref, inputs, consumers}
+      GET  /api/v2/lineage?ref=<ref>                             {ref, inputs, consumers, deleted}
       POST /api/v2/blobs/missing {sha256: [...]}                 PUT /api/v2/blobs/<sha256> (streamed, hash-verified)
+    Deleting (a write token of the project; `force=1` and gc need the owner token; 409 + `protected` when refused)
+      DELETE /api/v2/projects/<p>/artifacts/<name>/versions/<n>  [?force=1&reason=...] -> {deleted: [refs], skipped: []}
+      DELETE /api/v2/projects/<p>/artifacts/<name>               every version of it, under the same rules
+      DELETE /api/v2/projects/<p>                                only when no version is left (or force)
+      GET/PUT /api/v2/projects/<p>/retention                     {rules: [{prefix, keep_last, keep_days, keep_aliased}]}
+      POST /api/v2/gc {dry_run (default true), grace (seconds or "24h")}   retention rules, then the blob sweep
     Files (the name ends at `@`; the path inside the artifact follows `//`)
       GET  /files/<p>/<name>[@v<n>|@uid|@alias|@label]//<path>   ETag, Range, immutable for `@v<n>` or `@uid` of a
                                                                  completed version, `?download=1` for an attachment
@@ -37,8 +43,8 @@ A client may supply a version's `uid` (UUIDv7) when it creates it: sending the s
 answered with the version it made (a client's local replica can retry safely), and a known uid with different content
 is refused with 409.
 
-Tokens are bearer tokens only: there are no cookies and no pages. Everything stored is append-only and the
-server never executes pushed code. Files are served with `Content-Security-Policy: sandbox`.
+Tokens are bearer tokens only: there are no cookies and no pages. A version never changes once final, except to
+be deleted (a tombstone: 410 Gone for its files and references); the server never executes pushed code. Files are served with `Content-Security-Policy: sandbox`.
 
 The server is Starlette on uvicorn (uvloop and httptools: the `[server]` extra). API work runs in worker
 threads, so the event loop never waits on the disk; uploads stream into the blob store in 4 MB pieces
@@ -65,11 +71,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote
 
 from .._version import __version__
-from ..store import BadRange, Conflict, LocalStore, NotFound, Ref, StoreError, refs
+from ..store import BadRange, Conflict, Deleted, LocalStore, MissingBlobs, NotFound, Protected, Ref, StoreError, refs
+from ..store.gc import GRACE, describe_bytes, parse_duration
 from ..store.blobs import SHA256, clean_entries
 from ..store.db import ServerLock
 from ..store.fs import network_filesystem
-from ..store.tokens import Principal, Tokens, init_root, read_token
+from ..store.tokens import OWNER, Principal, Tokens, init_root, read_token
 from ..store.uids import UID, valid_uid
 from .auth import Auth, HttpError, allow
 from .files import serve_file
@@ -87,7 +94,7 @@ else:
 MAX_JSON = 64 * 1024 * 1024
 UPLOAD_PIECE = 4 << 20  # uploads are hashed and written in pieces this large, in worker threads
 WORKERS = int(os.environ.get("CAIRN_SERVER_THREADS", "32"))  # worker threads for store work and file I/O
-METHODS = ("GET", "POST", "PATCH", "PUT")
+METHODS = ("GET", "POST", "PATCH", "PUT", "DELETE")
 
 
 def _require_extra() -> None:
@@ -120,6 +127,12 @@ def _translate(error: Exception) -> Answer:
         return _error(error.status, error.message)
     if isinstance(error, BadRange):
         return Answer(416, b"", {"Content-Range": f"bytes */{error.total}"})
+    if isinstance(error, Deleted):
+        return _error(410, str(error))
+    if isinstance(error, MissingBlobs):
+        return _json(409, {"error": f"upload these blobs first ({error})", "missing": error.missing})
+    if isinstance(error, Protected):
+        return _json(409, {"error": str(error), "protected": error.protected})
     if isinstance(error, NotFound):
         return _error(404, str(error))
     if isinstance(error, Conflict):
@@ -190,7 +203,7 @@ class StoreApp:
                 principal = self.auth.require(request.headers.get("authorization"))
                 query = parse_qs(request.scope.get("query_string", b"").decode("latin-1"))
                 return await serve_file(self, request, principal, raw, query)
-            if method == "PUT":
+            if method == "PUT" and raw.startswith("/api/v2/blobs/"):
                 return self._response(await self._put(request, raw))
             if method not in METHODS:
                 return self._response(_error(501, f"unsupported method {method}"))
@@ -242,6 +255,10 @@ class StoreApp:
                 raise ValueError("payload must be a JSON object")
             if method == "POST":
                 return self._post(principal, segments[3:], payload)
+            if method == "DELETE":
+                return self._delete(principal, segments[3:], parse_qs(query_string.decode("latin-1")), payload)
+            if method == "PUT":
+                return self._put_json(principal, segments[3:], payload)
             return self._patch(principal, segments, payload)
         except Exception as error:  # noqa: BLE001
             return _translate(error)
@@ -299,6 +316,9 @@ class StoreApp:
                 allow(principal, project)
                 store.get_project(project)
                 return self._listing(project)
+            case ["projects", project, "retention"]:
+                allow(principal, project)
+                return _json(200, {"project": project, "rules": store.retention(project)})
             case ["projects", project, "artifacts", name]:
                 allow(principal, project)
                 summary = store.summary(project, name)
@@ -326,8 +346,13 @@ class StoreApp:
                 return _json(200, {"project": project, "name": name, "version": version})
             case ["lineage"]:
                 ref = self._ref(query, principal)
-                project, name, version = store.resolve(ref)
-                found = store.lineage(Ref(project, name, f"v{version['version']}"))
+                try:
+                    project, name, version = store.resolve(ref)
+                except Deleted:  # a deleted version keeps its edges
+                    if not ref.exact:
+                        raise
+                    project, name, version = ref.project, ref.name, store.get_version(ref.project, ref.name, ref.uid or ref.version)
+                found = store.lineage(Ref(project, name, f"v{version['version']}"), marks=True)
                 visible = {key: [item for item in items if principal.can(refs.parse(item).project)] for key, items in found.items()}
                 return _json(200, {"ref": refs.exact(project, name, version["version"]), **visible})
         raise HttpError(404, "no such API route")
@@ -343,6 +368,14 @@ class StoreApp:
                     raise ValueError("sha256 must be a list of hex digests")
                 absent = set(store.missing_hashes(hashes))
                 return _json(200, {"missing": [h for h in hashes if h in absent]})
+            case ["gc"]:
+                if principal != OWNER:
+                    raise HttpError(403, "only the owner token may collect garbage")
+                dry_run = payload.get("dry_run", True)
+                if not isinstance(dry_run, bool):
+                    raise ValueError("dry_run must be true or false")
+                grace = parse_duration(payload["grace"]) if payload.get("grace") is not None else GRACE
+                return _json(200, self.gc(dry_run, grace, by=principal.name))
             case ["projects"]:
                 name = payload.get("name")
                 exists = isinstance(name, str) and any(item["name"] == name for item in store.projects())
@@ -412,6 +445,38 @@ class StoreApp:
                     raise ValueError(f"{key} must be text")
             return _json(200, self.store.update_project(project, payload.get("title"), payload.get("description")))
         raise HttpError(404, "no such API route")
+
+    def _delete(self, principal: Principal, route: list[str], query: dict, payload: dict) -> Answer:
+        """Deleting versions, artifacts, and projects: a write token of the project; forcing needs the owner token."""
+        force = query.get("force", [""])[0].lower() in ("1", "true", "yes") or payload.get("force") is True
+        reason = query.get("reason", [None])[0] or payload.get("reason")
+        store = self.store
+        match route:
+            case ["projects", project, "artifacts", name, "versions", number] if number.isdigit() or UID.fullmatch(number):
+                allow(principal, project, write=True)
+                _owner_for_force(principal, force)
+                return _json(200, store.delete_version(project, name, int(number) if number.isdigit() else number, reason=reason,
+                                                       force=force, by=principal.name))
+            case ["projects", project, "artifacts", name]:
+                allow(principal, project, write=True)
+                _owner_for_force(principal, force)
+                return _json(200, store.delete_artifact(project, name, reason=reason, force=force, by=principal.name))
+            case ["projects", project]:
+                allow(principal, project, write=True)
+                _owner_for_force(principal, force)
+                return _json(200, store.delete_project(project, reason=reason, force=force, by=principal.name))
+        raise HttpError(404, "no such API route")
+
+    def _put_json(self, principal: Principal, route: list[str], payload: dict) -> Answer:
+        match route:
+            case ["projects", project, "retention"]:
+                allow(principal, project, write=True)
+                return _json(200, {"project": project, "rules": self.store.set_retention(project, payload.get("rules"))})
+        raise HttpError(404, "no such API route")
+
+    def gc(self, dry_run: bool = True, grace=GRACE, by: str = "owner") -> dict:
+        """Retention rules and the blob sweep (LocalStore.gc), here: this server is the root's single writer."""
+        return self.store.gc(dry_run=dry_run, grace=grace, by=by)
 
     @staticmethod
     def _uid(payload: dict) -> str | None:
@@ -494,6 +559,30 @@ class StoreApp:
                     pass
             await loop.run_in_executor(self.executor, writer.abort)
         return _json(201 if created else 200, {"sha256": sha, "created": created})
+
+
+def _owner_for_force(principal: Principal, force: bool) -> None:
+    if force and principal != OWNER:
+        raise HttpError(403, "only the owner token may force a deletion")
+
+
+def gc_schedule(app: StoreApp, interval: float, grace: float = GRACE, say=None) -> threading.Event:
+    """Run `app.gc` (not a dry run) every `interval` seconds in a daemon thread; set the returned event to stop it."""
+    stop = threading.Event()
+    say = say or (lambda line: print(line, file=sys.stderr, flush=True))
+
+    def loop():
+        while not stop.wait(interval):
+            try:
+                found = app.gc(dry_run=False, grace=grace, by="gc schedule")
+            except Exception as error:  # noqa: BLE001 - keep serving; try again next time
+                say(f"gc: failed: {error}")
+                continue
+            say(f"gc: deleted {len(found['deleted'])} versions ({len(found['skipped'])} protected, kept), removed "
+                f"{found['blobs']} blobs ({describe_bytes(found['bytes'])}) and {found['temporary']} stale uploads")
+
+    threading.Thread(target=loop, name="cairn-gc", daemon=True).start()
+    return stop
 
 
 def default_log(line: str, client) -> None:
@@ -614,10 +703,12 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
 
 
 def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
-                no_auth: bool = False, ui_port: int | None = None, allow_network_fs: bool = False) -> None:
+                no_auth: bool = False, ui_port: int | None = None, allow_network_fs: bool = False, gc_interval: float | None = None,
+                gc_grace: float = GRACE) -> None:
     """Serve a store; a new root (no token yet) is initialized first. Prints the owner token, which clients
     and `cairn ui` log in with, to the terminal only: never into a URL. With `ui_port` (0: any free
-    port), `cairn ui` runs as a child process beside the store and stops with it."""
+    port), `cairn ui` runs as a child process beside the store and stops with it. With `gc_interval` (seconds),
+    garbage collection (retention rules, then blobs older than `gc_grace`) runs that often."""
     _require_extra()
     _network_root(root, allow_network_fs)  # refused before anything is created
     created = None if (root / "token").exists() else init_root(root)
@@ -642,6 +733,9 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         print(f"Token: {server.owner_token}", flush=True)
         print("  clients read it from CAIRN_STORE_TOKEN or a token_file, and `cairn ui` logs in with it;"
               " `cairn token create` makes project-scoped tokens", flush=True)
+    if gc_interval:
+        gc_schedule(server.app, gc_interval, gc_grace)
+        print(f"Garbage collection every {gc_interval / 3600:g} h (grace {gc_grace / 3600:g} h)", flush=True)
     previous = None
     if threading.current_thread() is threading.main_thread():  # SIGTERM stops the UI child too
         previous = signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))

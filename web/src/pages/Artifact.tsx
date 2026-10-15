@@ -6,7 +6,7 @@ import { artifactHref, bytes, exact, fileHref, isReport, parseRef, previewKind, 
 import { Graph } from "./Graph";
 
 interface ArtifactData { project: string; name: string; summary: Summary; versions: VersionRow[]; aliases: Record<string, number> }
-interface VersionData { project: string; name: string; version: Manifest; consumers: string[] }
+interface VersionData { project: string; name: string; version: Manifest; consumers: string[]; deleted?: string[] }
 
 const TEXT_LIMIT = 64 * 1024, MEDIA_LIMIT = 50 * 1024 * 1024, SHOWN = 200;
 
@@ -73,7 +73,7 @@ function Files({ project, name, version, files }: { project: string; name: strin
   );
 }
 
-function RefList({ title, refs, project, empty }: { title: string; refs: string[]; project: string; empty: string }) {
+function RefList({ title, refs, project, empty, deleted = [] }: { title: string; refs: string[]; project: string; empty: string; deleted?: string[] }) {
   return (
     <section className="data-panel app-panel" aria-label={title}>
       <h2>{title}</h2>
@@ -85,7 +85,7 @@ function RefList({ title, refs, project, empty }: { title: string; refs: string[
               <li className="data-row" key={ref}>
                 <span className="data-name">{p?.name ?? ref}</span>
                 {p ? <Link className="data-version" to={artifactHref(p.project, p.name, p.sel)}>{p.sel}</Link> : <span className="data-version">{ref}</span>}
-                <span className="data-files">{p && p.project !== project ? p.project : ""}</span>
+                <span className="data-files">{p && p.project !== project ? p.project : ""}{deleted.includes(ref) && <> <Pill status="deleted" /></>}</span>
                 <CopyButton text={ref} label="Copy exact version" done="Version copied" />
               </li>
             );
@@ -110,6 +110,7 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
   const number = manifest?.version;
   const report = isReport(name);
   const aliasPills = (list: string[] = []) => list.sort().map(a => <span className="pill alias" key={a}>{a}</span>);
+  const gone = manifest?.status === "deleted";
 
   return (
     <main>
@@ -129,16 +130,23 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             {report && manifest.status === "completed" && <p><a className="comment-trigger open-report" href={reportHref(project, name, number)}>Open report v{number}</a></p>}
           </Hero>
 
+          {gone && (
+            <div className="admonition tombstone-note" role="note">
+              <p className="admonition-title">Deleted</p>
+              <p>v{number} was deleted {when(manifest.deleted_at ?? "")}{manifest.deleted_by ? ` by ${manifest.deleted_by}` : ""}{manifest.reason ? `: ${manifest.reason}` : "."} Its files are gone; its number and uid are never used again, and its lineage is kept.</p>
+            </div>
+          )}
+
           <section className="data-panel app-panel" aria-label="Reference">
             <h2>Reference</h2>
             <ul>
               <li className="data-row"><span className="data-name">Version</span><span className="data-version">{exact(project, name, number)}</span><span className="data-files" /><CopyButton text={exact(project, name, number)} label="Copy exact version" done="Version copied" /></li>
-              <li className="data-row"><span className="data-name">Pull</span><span className="data-version">cairn pull {exact(project, name, number)}</span><span className="data-files" /><CopyButton text={`cairn pull ${exact(project, name, number)}`} label="Copy pull command" done="Command copied" /></li>
+              {!gone && <li className="data-row"><span className="data-name">Pull</span><span className="data-version">cairn pull {exact(project, name, number)}</span><span className="data-files" /><CopyButton text={`cairn pull ${exact(project, name, number)}`} label="Copy pull command" done="Command copied" /></li>}
             </ul>
           </section>
 
           <div className="metric-grid app-metrics">
-            <div className="metric"><span>Files</span><strong>{manifest.files.length}</strong><small>{bytes(manifest.files.reduce((n, f) => n + (f.size ?? 0), 0))}</small></div>
+            <div className="metric"><span>Files</span><strong>{gone ? 0 : manifest.files.length}</strong><small>{gone ? "deleted" : bytes(manifest.files.reduce((n, f) => n + (f.size ?? 0), 0))}</small></div>
             <div className="metric"><span>Created</span><strong className="small-value">{when(manifest.created)}</strong><small>{manifest.source?.host ? `on ${manifest.source.host}` : " "}</small></div>
             <div className="metric"><span>Versions</span><strong>{art.data.versions.length}</strong><small>{manifest.label ? `label ${manifest.label}` : " "}</small></div>
           </div>
@@ -151,10 +159,10 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             </div>
             <Table head={["Version", "Label", "Status", "Created", "Aliases", "Source host"]}>
               {[...art.data.versions].reverse().map(v => (
-                <tr key={v.version} className={v.version === number ? "selected" : ""}>
+                <tr key={v.version} className={[v.version === number ? "selected" : "", v.status === "deleted" ? "tombstone" : ""].join(" ").trim()}>
                   <td className="nowrap"><Link to={artifactHref(project, name, v.version)}><strong>v{v.version}</strong></Link>{report && v.status === "completed" && <> &middot; <a href={reportHref(project, name, v.version)}>open</a></>}</td>
                   <td>{v.label}</td>
-                  <td><Pill status={v.status} /></td>
+                  <td><Pill status={v.status} />{v.status === "deleted" && <span className="muted tombstone-reason" title={`deleted ${v.deleted_at ?? ""}${v.deleted_by ? " by " + v.deleted_by : ""}`}> {v.reason || when(v.deleted_at ?? "")}</span>}</td>
                   <td className="muted nowrap">{when(v.created)}</td>
                   <td>{aliasPills(byVersion[v.version])}</td>
                   <td className="muted">{v.source?.host}</td>
@@ -165,16 +173,16 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
 
           <section className="app-section">
             <div className="section-head"><h2>Lineage of v{number}</h2></div>
-            {manifest.status === "completed" ? <Graph root={exact(project, name, number)} project={project} /> : <p className="hint">Lineage is available once the version has completed.</p>}
+            {manifest.status === "completed" || gone ? <Graph root={exact(project, name, number)} project={project} /> : <p className="hint">Lineage is available once the version has completed.</p>}
           </section>
 
           <section className="app-section">
             <div className="section-head"><h2>Files of v{number}</h2></div>
-            {manifest.files.length ? <Files project={project} name={name} version={number} files={manifest.files} /> : <p className="hint">This version has no files.</p>}
+            {gone ? <p className="hint">This version was deleted: its files are gone.</p> : manifest.files.length ? <Files project={project} name={name} version={number} files={manifest.files} /> : <p className="hint">This version has no files.</p>}
           </section>
 
-          <RefList title="Inputs" refs={manifest.inputs} project={project} empty="No inputs recorded." />
-          <RefList title="Consumers" refs={ver.data!.consumers} project={project} empty="No consumers yet." />
+          <RefList title="Inputs" refs={manifest.inputs} project={project} empty="No inputs recorded." deleted={ver.data!.deleted} />
+          <RefList title="Consumers" refs={ver.data!.consumers} project={project} empty="No consumers yet." deleted={ver.data!.deleted} />
 
           <section className="app-section">
             <div className="section-head"><h2>Metadata</h2></div>

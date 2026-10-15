@@ -170,6 +170,19 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
        no extra space until either side changes.
    - A performance test in the suite catches regressions, and the benchmark script gives the real
      numbers.
+   - **Deleting and garbage collection** (owner-approved: an artifact store, not a tracker; on branch `gc`):
+     - a deleted version is a tombstone (status `deleted`, `deleted_at`/`deleted_by`/reason, its file list
+       dropped): its number and uid are never reused, references fail with "deleted" (410), lineage keeps the edge
+       and marks the node; `latest` moves back;
+     - protected versions (an alias other than `latest`, an input of any version that is not deleted, in any
+       project, running) are refused (409) unless forced (owner token); an artifact deletes all or nothing; a
+       project only when empty, or forced;
+     - retention rules per project or artifact prefix (`keep_last`, `keep_days`, `keep_aliased`) in the metadata,
+       applied by `cairn gc` (and `cairn server --gc-interval`), never to protected versions (skipped, reported);
+     - the blob sweep (store/gc.py): unreferenced in every project and older than the grace period (24 h), re-checked
+       inside the transaction that removes it; publishes check their blobs inside their own transaction after a
+       sweep, so a racing publish gets 409 + `missing` and the client uploads again;
+     - `cairn delete`, `cairn project delete`, `cairn retention show|set|clear`, `cairn gc`; the UI shows tombstones.
 6. **Release v0.13.0 / the first Cairn release** (merged to main after the owner's OK).
 7. **Repo renames**, each confirmed by the owner:
    1. rename `DoeringChristian/cairn` to `cairn-track`;
