@@ -49,7 +49,7 @@ from plotly.offline import get_plotlyjs, get_plotlyjs_version
 from .._version import __version__
 from ..client.open import open_store
 from ..config import Config, load_config, protect
-from ..formats import METRICS, fold_scalars, read_jsonl
+from ..formats import METRICS, fold_scalars, fold_series, read_jsonl
 from ..client.offline import local_folder, resolve_version
 from ..client.replica import exact_ref
 from ..store import StoreError, default_root, refs, data_root
@@ -758,8 +758,12 @@ def render(build: Build) -> str:
         return read_jsonl(build.track(file))
 
     def read_scalars(folder):
-        """Latest value per scalar name from the append-only metrics.jsonl in a folder (e.g. an input)."""
+        """Latest value per key from the append-only metrics.jsonl in a folder (e.g. an input)."""
         return fold_scalars(read_events(Path(folder) / METRICS))
+
+    def read_series(folder, key):
+        """Every logged value of one key from a folder's metrics.jsonl, as {"value", "step", "time"}."""
+        return fold_series(read_events(Path(folder) / METRICS), key)
 
     def metric(label: str, value, detail: str = "", fmt: str | None = None):
         shown = format(value, fmt) if fmt else str(value)
@@ -778,6 +782,7 @@ def render(build: Build) -> str:
         "read_csv": read_csv,
         "read_jsonl": read_events,
         "read_scalars": read_scalars,
+        "read_series": read_series,
         "track": build.track,
         "metric": metric,
         "report_html": lambda markup: emitted.append(str(markup)),
