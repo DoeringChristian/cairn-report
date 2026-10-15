@@ -46,7 +46,7 @@ from ..store.errors import MissingBlobs, NotFound, StoreError, Unreachable
 from ..store.uids import new_uid
 from . import replica
 from .http import Client, HashCache, entries_for, scan
-from .remote import RemoteStore
+from .remote import Remote
 
 RETRIES = 3  # sends of a version whose blobs the server's garbage collection removed meanwhile
 
@@ -136,7 +136,7 @@ def restage(entries: list[dict], sources: dict[str, Path], cache: HashCache) -> 
 class Replica:
     """The replica's records for one store server (see the module doc)."""
 
-    def __init__(self, remote: RemoteStore, timeout: float | None = None):
+    def __init__(self, remote: Remote, timeout: float | None = None):
         self.remote = remote
         self.timeout = replica.heartbeat_timeout() if timeout is None else timeout
 
@@ -396,7 +396,7 @@ _threads: dict[str, threading.Thread] = {}
 _threads_lock = threading.Lock()
 
 
-def start_uploader(remote: RemoteStore, first_delay: float = 1.0, max_delay: float = 60.0) -> threading.Thread:
+def start_uploader(remote: Remote, first_delay: float = 1.0, max_delay: float = 60.0) -> threading.Thread:
     """A daemon thread that flushes this server's pending versions until none are left (backing off while it is down).
     One per server and process; it stops with the interpreter (what is left is sent by the next flush)."""
     with _threads_lock:
@@ -430,13 +430,13 @@ def has_pending(url: str) -> bool:
     return any(record["sync"] in ("pending", "running") and replica.belongs(record, url, uid) for record in replica.records())
 
 
-def quick(remote: RemoteStore, timeout: float = 10) -> RemoteStore:
+def quick(remote: Remote, timeout: float = 10) -> Remote:
     """The same server with a short timeout, for attempts that must not hold up a command."""
     client = remote.client
     fast = Client.__new__(Client)
     fast.__dict__.update(client.__dict__)
     fast.timeout = timeout
-    copy = RemoteStore(fast, remote.project)
+    copy = Remote(fast, remote.project)
     copy._uid = remote._uid
     return copy
 
@@ -449,9 +449,9 @@ def flush_configured(config, report=None, timeout: float = 10) -> dict | None:
     url = (config.store.get("url") or "").rstrip("/")
     if not url or not has_pending(url):
         return None
-    from .open import open_store
+    from .open import open_repo
 
     try:
-        return Replica(quick(open_store(config), timeout), replica.heartbeat_timeout(config)).flush(report)
+        return Replica(quick(open_repo(config), timeout), replica.heartbeat_timeout(config)).flush(report)
     except (StoreError, OSError):
         return None

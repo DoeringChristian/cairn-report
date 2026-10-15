@@ -183,11 +183,11 @@ class Draft(Writer):
     def store(self):
         """The object API's Store this draft publishes to (opened on first use; None: the configured store)."""
         if self._store is None:
-            from .objects import Store
-            from .open import as_store
+            from .objects import Repo
+            from .open import as_repo
 
             arg = self._store_arg
-            self._store = arg if isinstance(arg, Store) else Store(as_store(arg))
+            self._store = arg if isinstance(arg, Repo) else Repo(as_repo(arg))
         return self._store
 
     @property
@@ -424,11 +424,11 @@ class Draft(Writer):
 
     def _fail_running(self) -> None:
         """A kept or abandoned watch draft's running version on a local store: fail it (a server fails it by heartbeat)."""
-        from ..store import LocalStore
+        from ..store import LocalRepo
 
         running = self.record["running"]
         backend = self.store.backend
-        if isinstance(backend, LocalStore):
+        if isinstance(backend, LocalRepo):
             target = self.target
             try:
                 if backend.get_version(target.project.name, target.name, running["number"])["status"] == "running":

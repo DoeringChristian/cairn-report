@@ -2,7 +2,7 @@
 
     cairn ui [--store URL|PATH] [--host 127.0.0.1] [--port 8801] [--no-auth] [--allow-http] [--insecure-cookies]
 
-It reaches the store only through the store interface (`RemoteStore` for a store server, `LocalStore` for
+It reaches the store only through the store interface (`Remote` for a store server, `LocalRepo` for
 a folder), so it runs next to the store or on a laptop against a remote one. It serves the React app
 (web/, built into static/) and a small JSON API for it:
 

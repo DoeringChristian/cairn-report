@@ -5,7 +5,7 @@ shared memory) and the server's flock are safe between processes on one host wit
 Over NFS and other network filesystems they are not: locks are unreliable, WAL needs memory shared by
 every reader, and attribute caching hides fresh writes for seconds. So a store root on a network
 filesystem has one writer process (`cairn server`) or none: `cairn server` refuses such a root unless told
-it is the only process using it (`--allow-network-fs`), and a LocalStore that writes to one warns once.
+it is the only process using it (`--allow-network-fs`), and a LocalRepo that writes to one warns once.
 (The pull cache is NFS-safe on its own: it only ever writes once and renames, see cache.py.)
 """
 

@@ -352,7 +352,7 @@ def test_a_sigkilled_run_does_not_stay_running(script_project, capsys):
     deadline = time.time() + 60
     while not (script_project / "started").exists() and time.time() < deadline:
         time.sleep(0.05)
-    store = cairn.LocalStore(script_project / ".cairn" / "store", "study")
+    store = cairn.LocalRepo(script_project / ".cairn" / "store", "study")
     [run] = store.versions("study", "runs/job")
     assert run["status"] == "running" and (store.root / "heartbeats" / run["uid"]).is_file()
     process.kill()  # SIGKILL: no handler, no atexit
@@ -360,17 +360,17 @@ def test_a_sigkilled_run_does_not_stay_running(script_project, capsys):
     assert process.returncode == -signal.SIGKILL
     main(["status"])  # `cairn status` opens the store, which fails the version whose process is gone
     assert f"failed study:runs/job@v1: the process died (no heartbeat since " in capsys.readouterr().out
-    after = cairn.LocalStore(store.root, "study").get_version("study", "runs/job", 1)
+    after = cairn.LocalRepo(store.root, "study").get_version("study", "runs/job", 1)
     assert after["status"] == "failed" and after["error"].startswith("the process died (no heartbeat since ")
     assert not (store.root / "heartbeats" / run["uid"]).exists()
     assert cairn.connect().version("runs/job@v1").status == "failed"  # also through the object API
-    assert cairn.LocalStore(store.root).aliases("study", "runs/job") == {}  # `latest` never moved to it
+    assert cairn.LocalRepo(store.root).aliases("study", "runs/job") == {}  # `latest` never moved to it
 
 
 def test_a_local_version_is_failed_by_age_or_dead_owner_and_never_while_alive(tmp_path):
     from cairn.store.uids import new_uid
 
-    store = cairn.LocalStore(tmp_path / "store", "p")
+    store = cairn.LocalRepo(tmp_path / "store", "p")
     store.create_project("p")
     mine, stale, foreign, bare = new_uid(), new_uid(), new_uid(), new_uid()
     for uid in (mine, stale, foreign, bare):
@@ -380,7 +380,7 @@ def test_a_local_version_is_failed_by_age_or_dead_owner_and_never_while_alive(tm
     now = time.time()
     (beats / stale).write_text(json.dumps({"time": now - 10_000, "host": "other-host", "pid": 1}))  # too old
     (beats / foreign).write_text(json.dumps({"time": now - 5, "host": "other-host", "pid": 2 ** 22}))  # recent, elsewhere
-    reaped = dict(cairn.LocalStore(tmp_path / "store", "p", heartbeat_timeout=600).reaped)
+    reaped = dict(cairn.LocalRepo(tmp_path / "store", "p", heartbeat_timeout=600).reaped)
     assert list(reaped) == ["p:run@v2"] and "no heartbeat since" in reaped["p:run@v2"]
     states = {version["uid"]: version["status"] for version in store.versions("p", "run")}
     assert states == {mine: "running", stale: "failed", foreign: "running", bare: "running"}  # `bare` never had a heartbeat

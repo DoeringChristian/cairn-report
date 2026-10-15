@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 
 import cairn
-from cairn import LocalStore
+from cairn import LocalRepo
 from cairn.client.http import Client
-from cairn.client.remote import RemoteStore
+from cairn.client.remote import Remote
 from cairn.server import make_server
 from cairn.store.errors import Conflict
 from cairn.store.tokens import init_root
@@ -50,12 +50,12 @@ class Server:
             self.httpd.server_close()
             self.httpd = None
 
-    def remote(self, project="study") -> RemoteStore:
-        return RemoteStore(Client(self.url, self.token), project)
+    def remote(self, project="study") -> Remote:
+        return Remote(Client(self.url, self.token), project)
 
     def versions(self, name="data"):
         try:
-            return cairn.LocalStore(self.root).versions("study", name)
+            return cairn.LocalRepo(self.root).versions("study", name)
         except cairn.NotFound:
             return []
 
@@ -92,9 +92,9 @@ def test_refs_accept_uids_and_reserve_their_form():
 
 
 def test_store_uid_and_version_uids(tmp_path):
-    local = LocalStore(tmp_path / "s")
+    local = LocalRepo(tmp_path / "s")
     assert UID.fullmatch(local.uid) and json.loads((tmp_path / "s" / "store.json").read_text())["uid"] == local.uid
-    assert LocalStore(tmp_path / "s").uid == local.uid and LocalStore(tmp_path / "t").uid != local.uid
+    assert LocalRepo(tmp_path / "s").uid == local.uid and LocalRepo(tmp_path / "t").uid != local.uid
     local.create_project("p")
     one = local.publish("p", "run", put(local, {"a.txt": "1"}))
     manifest = local.get_version("p", "run", one)
@@ -105,7 +105,7 @@ def test_store_uid_and_version_uids(tmp_path):
 
 
 def test_client_supplied_uids_are_idempotent_and_conflicts_refused(tmp_path):
-    local = LocalStore(tmp_path / "s")
+    local = LocalRepo(tmp_path / "s")
     local.create_project("p")
     entries, uid = put(local, {"a.txt": "1"}), new_uid()
     assert local.publish("p", "run", entries, uid=uid, metadata={"k": 1}) == 1
@@ -129,7 +129,7 @@ def test_cache_is_keyed_by_uid_and_two_stores_never_collide(env, tmp_path, monke
     monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / "scratch"))
     paths = []
     for name, text in (("one", "first store"), ("two", "second store")):
-        local = LocalStore(tmp_path / name, project="study")
+        local = LocalRepo(tmp_path / name, project="study")
         local.create_project("study")
         local.publish("study", "data", put(local, {"a.txt": text}))
         path = cairn.pull("data@v1", store=local, record=False)
@@ -146,9 +146,9 @@ def _pull_in_a_process(url, token, ref, cache, barrier, results):
     os.environ["CAIRN_CACHE_DIR"] = cache
     import cairn
     from cairn.client.http import Client
-    from cairn.client.remote import RemoteStore
+    from cairn.client.remote import Remote
 
-    store = RemoteStore(Client(url, token), "study")
+    store = Remote(Client(url, token), "study")
     barrier.wait()
     path = cairn.pull(ref, store=store, record=False)
     results.put({str(file.relative_to(path)): file.read_text() for file in sorted(path.rglob("*.txt"))})
@@ -203,7 +203,7 @@ def test_server_keeps_client_uids_and_exposes_the_store_uid(tmp_path, env):
 
         assert call("GET", "/api/v2/store", token=None)[0] == 401
         status, answer = call("GET", "/api/v2/store")
-        assert status == 200 and answer["uid"] == LocalStore(server.root).uid and answer["version"] == cairn.__version__
+        assert status == 200 and answer["uid"] == LocalRepo(server.root).uid and answer["version"] == cairn.__version__
         assert remote.uid == answer["uid"]
         remote.create_project("study")
         sha = __import__("hashlib").sha256(b"x").hexdigest()

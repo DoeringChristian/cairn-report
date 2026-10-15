@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from ..client.http import HashCache, entries_for, scan
-from ..client.open import open_store, versions_of
+from ..client.open import open_repo, versions_of
 from ..client.publishing import describe, publish
 from ..config import Config
 from ..store import StoreError, refs
@@ -40,7 +40,7 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
     metadata = {field: data[field] for field in ("title", "status", "summary")}
     inputs = list(dict.fromkeys(item["resolved"] for item in build.inputs.values()))
     name = f"reports/{slug}"
-    store = open_store(config)
+    store = open_repo(config)
     with tempfile.TemporaryDirectory(prefix="cairn-") as temporary:
         stage = Path(temporary) / slug
         shutil.copytree(folder, stage / "source", symlinks=True)

@@ -12,7 +12,7 @@
   last answer this machine got for it, if that version is in the cache, with a warning that names the
   version; that exact version is what a pull records as the input.
 
-A local store (`LocalStore`) is always reachable, so it is asked directly.
+A local store (`LocalRepo`) is always reachable, so it is asked directly.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from ..store.errors import Deleted, NotFound, StoreError, Unreachable
 from ..store.inputs import record_input
 from ..store.refs import Ref
 from . import replica
-from .remote import RemoteStore
+from .remote import Remote
 
 
 def cached(uid: str | None) -> dict | None:
@@ -53,7 +53,7 @@ def _alive(project: str, name: str, manifest: dict) -> dict:
     return manifest
 
 
-def pending_match(store: RemoteStore, project: str, name: str, selector: str) -> dict | None:
+def pending_match(store: Remote, project: str, name: str, selector: str) -> dict | None:
     """The newest pending version of this machine that `project:name@selector` (an alias, a label, `latest`) names."""
     uid = replica.known_uid(store.url) or store._uid
     found = [record for record in replica.records() if replica.usable(record) and replica.belongs(record, store.url, uid)
@@ -70,7 +70,7 @@ def _pending_warning(key: str, record: dict) -> str:
 def resolve_version(store, ref: Ref | str, offline: bool = False, warn=None) -> tuple[str, str, dict]:
     """(project, name, manifest) for a reference, through the replica as the module doc says."""
     ref = refs.parse(ref) if isinstance(ref, str) else ref
-    if not isinstance(store, RemoteStore):
+    if not isinstance(store, Remote):
         return store.resolve(ref)
     say = warn or _warn
     project = ref.project or store.project

@@ -4,7 +4,7 @@ import json
 import pytest
 
 from cairn.cli import main
-from cairn import LocalStore
+from cairn import LocalRepo
 from cairn.server import make_server
 from cairn.store.tokens import init_root
 
@@ -65,7 +65,7 @@ def test_migrate(old_hub, tmp_path, capsys):
     assert "1 older report versions" in out and "Bad Name" in out and "inputs:" in out
     assert sorted(str(p) for p in old_hub.rglob("*")) == before
 
-    store = LocalStore(new)
+    store = LocalRepo(new)
     assert [p["name"] for p in store.projects()] == ["demo"]
     versions = store.versions("demo", "descent")
     assert [(v["label"], v["status"]) for v in versions] == [

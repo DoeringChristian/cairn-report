@@ -1,4 +1,4 @@
-"""The HTTP client and folder helpers behind `RemoteStore` and `publish`.
+"""The HTTP client and folder helpers behind `Remote` and `publish`.
 
 `Client` talks to a store server (bearer token, HTTPS unless the host is local or `allow_http`);
 `scan`, `HashCache`, `entries_for` and `upload_missing` turn a folder into manifest entries and

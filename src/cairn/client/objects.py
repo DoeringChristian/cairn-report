@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import Config, load_config
-from ..store import IncompleteRun, LocalStore, StoreError, read_inputs, record_input, refs, run_status
+from ..store import IncompleteRun, LocalRepo, StoreError, read_inputs, record_input, refs, run_status
 from ..store.blobs import resolve_entry
 from ..store.cache import cache_root
 from ..store.errors import Deleted, MissingBlobs, NotFound, Unreachable
@@ -40,7 +40,7 @@ from ..store.refs import Ref
 from ..store.uids import UID
 from . import offline as fallback, replica
 from .http import HashCache
-from .remote import RemoteStore
+from .remote import Remote
 
 
 @dataclass(frozen=True)
@@ -56,18 +56,18 @@ def _source(local: Path) -> dict:
     return {"host": socket.gethostname(), "folder": str(local)}
 
 
-class Store:
-    """A store, local (`LocalStore`) or a server (`RemoteStore`), as `backend`."""
+class Repo:
+    """A store, local (`LocalRepo`) or a server (`Remote`), as `backend`."""
 
-    def __init__(self, backend: LocalStore | RemoteStore):
+    def __init__(self, backend: LocalRepo | Remote):
         self.backend = backend
 
     def __repr__(self) -> str:
-        return f"<cairn.Store {getattr(self.backend, 'url', None) or self.backend.root}>"
+        return f"<cairn.Repo {getattr(self.backend, 'url', None) or self.backend.root}>"
 
     @property
     def remote(self) -> bool:
-        return isinstance(self.backend, RemoteStore)
+        return isinstance(self.backend, Remote)
 
     @property
     def uid(self) -> str | None:
@@ -174,13 +174,13 @@ class Store:
         return result
 
     def gc(self, dry_run: bool = True, grace: float | str = GRACE) -> dict:
-        """Apply the retention rules and remove unreferenced blobs older than `grace` (LocalStore.gc; on a server,
+        """Apply the retention rules and remove unreferenced blobs older than `grace` (LocalRepo.gc; on a server,
         the owner token only). `dry_run` (the default) only says what would go."""
         return self.backend.gc(dry_run=dry_run, grace=grace)
 
 
 class Project:
-    def __init__(self, store: Store, name: str, record: dict | None = None):
+    def __init__(self, store: Repo, name: str, record: dict | None = None):
         self.store, self.name, self._record = store, name, record
 
     def __repr__(self) -> str:
@@ -246,7 +246,7 @@ class Artifact:
         return f"<cairn.Artifact {self.project.name}:{self.name}>"
 
     @property
-    def store(self) -> Store:
+    def store(self) -> Repo:
         return self.project.store
 
     @property
@@ -400,7 +400,7 @@ class Version:
         self.artifact, self._manifest, self._selector = artifact, manifest, selector
 
     @classmethod
-    def from_record(cls, store: Store, record: dict) -> "Version":
+    def from_record(cls, store: Repo, record: dict) -> "Version":
         """A version from a replica record (one the server does not have yet, or a synced one)."""
         return cls(store.project(record["project"]).artifact(record["name"]), replica.manifest_of(record))
 
@@ -423,7 +423,7 @@ class Version:
         artifact, selector = self.artifact, self._selector
         project, name, backend = artifact.project.name, artifact.name, artifact.backend
         if refs.VERSION.fullmatch(selector) or UID.fullmatch(selector):  # any status, like versions()
-            remote = isinstance(backend, RemoteStore)
+            remote = isinstance(backend, Remote)
             if remote and UID.fullmatch(selector):
                 record = replica.load(selector)
                 if record and (record["project"], record["name"]) == (project, name):
@@ -606,7 +606,7 @@ class Version:
             touch(version_folder(cache_root(), self.uid))
         if local.is_file():
             handle = local.open("rb")
-        elif isinstance(backend, LocalStore):
+        elif isinstance(backend, LocalRepo):
             handle = backend.blob_path(entry["sha256"]).open("rb")
         else:
             read = backend.read_file(self.artifact.project.name, self.artifact.name, f"v{self.number}", path)
@@ -643,24 +643,24 @@ class _Chunks(io.RawIOBase):
 # -------------------------------------------------------------------- connect
 
 
-def connect(url_or_path: str | Path | None = None, *, token: str | None = None, project: str | None = None) -> Store:
+def connect(url_or_path: str | Path | None = None, *, token: str | None = None, project: str | None = None) -> Repo:
     """A store: None for the one `[store]` in cairn.toml names, a server URL, or a store folder.
 
     `project` is the default project (default: the configured one). Connecting to a server for which this
     machine has pending versions starts the background uploader."""
     from .http import Client, connect as client_for, project_name
-    from .open import open_store
+    from .open import open_repo
 
-    if isinstance(url_or_path, Store):
+    if isinstance(url_or_path, Repo):
         return url_or_path
-    if isinstance(url_or_path, (LocalStore, RemoteStore)):
+    if isinstance(url_or_path, (LocalRepo, Remote)):
         backend = url_or_path
     elif url_or_path is None:
         config = load_config()
-        backend = open_store(config)
+        backend = open_repo(config)
         if project:
             backend.project = refs.valid_project(project)
-        if isinstance(backend, RemoteStore) and token is not None:
+        if isinstance(backend, Remote) and token is not None:
             backend.client.token = token
     else:
         try:
@@ -672,10 +672,10 @@ def connect(url_or_path: str | Path | None = None, *, token: str | None = None, 
         if text.startswith(("http://", "https://")):
             client = Client(text, token, allow_http=bool(config and config.store.get("allow_http"))) if token is not None \
                 else client_for(config, text)
-            backend = RemoteStore(client, default)
+            backend = Remote(client, default)
         else:
-            backend = LocalStore(Path(text).expanduser(), default)
-    store = Store(backend)
+            backend = LocalRepo(Path(text).expanduser(), default)
+    store = Repo(backend)
     if store.remote:
         from .sync import has_pending, start_uploader
 

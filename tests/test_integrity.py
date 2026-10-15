@@ -11,7 +11,7 @@ import stat
 import pytest
 
 import cairn as store
-from cairn import LocalStore, StoreError
+from cairn import LocalRepo, StoreError
 from cairn.store import cache as cache_module
 from cairn.store.cache import cache_root
 from cairn.store.digest import canonical, manifest_digest
@@ -49,7 +49,7 @@ def test_digest_canonical_form_golden_value():
 
 
 def test_local_digest_depends_on_files_only(env):
-    local = LocalStore(env / ".store", "study")
+    local = LocalRepo(env / ".store", "study")
     for text in ("1", "2"):
         local.put_blob(sha(text), io.BytesIO(text.encode()), len(text))
     local.create_project("study")
@@ -86,7 +86,7 @@ def test_object_api_cli_and_pull_see_the_digest(env, capsys):
 def test_server_rejects_a_wrong_client_digest(server, env):
     r = use_remote(env, server)
     r.create_project("study")
-    local = LocalStore(server.root)
+    local = LocalRepo(server.root)
     entries = entries_of({"a.txt": "hi"})
     r.put_blob(sha("hi"), io.BytesIO(b"hi"), 2)
     good = manifest_digest(entries)
@@ -131,7 +131,7 @@ def test_pending_version_has_its_digest_before_upload(down, env):
 
 def test_existing_versions_get_digests_when_the_store_opens(tmp_path):
     root = tmp_path / "old"
-    local = LocalStore(root, "study")
+    local = LocalRepo(root, "study")
     local.create_project("study")
     local._blobs.put_blob(sha("hi"), io.BytesIO(b"hi"), 2)
     local.publish("study", "a", entries_of({"x.txt": "hi"}))
@@ -146,7 +146,7 @@ def test_existing_versions_get_digests_when_the_store_opens(tmp_path):
     connection.execute("DELETE FROM meta WHERE key = 'digests'")
     connection.commit()
     connection.close()
-    reopened = LocalStore(root, "study")
+    reopened = LocalRepo(root, "study")
     assert [version.get("digest") for version in reopened.versions("study", "a")] == [
         manifest_digest(entries_of({"x.txt": "hi"})), manifest_digest(entries_of({"y.txt": "hi"})), None]
     assert "digest" not in reopened.get_version("study", "a", running)
@@ -182,7 +182,7 @@ def can_clone(tmp_path) -> bool:
 
 
 def local_pull(env, text="hello"):
-    backend = LocalStore(env / ".store", "study")
+    backend = LocalRepo(env / ".store", "study")
     version = store.connect(env / ".store").artifact("data").publish(folder(env, "d", {"a.txt": text}))
     return backend, version
 
@@ -305,7 +305,7 @@ def test_verify_pending_versions(down, env, capsys):
 
 def make_store(tmp_path):
     root = tmp_path / "root"
-    local = LocalStore(root, "study")
+    local = LocalRepo(root, "study")
     local.create_project("study")
     for text in ("one", "two", "three"):
         local._blobs.put_blob(sha(text), io.BytesIO(text.encode()), len(text))
@@ -340,7 +340,7 @@ def test_verify_a_store_checks_manifest_digests(tmp_path):
     connection.execute("UPDATE versions SET manifest = ? WHERE name = 'a'", (json.dumps(state),))
     connection.commit()
     connection.close()
-    assert [problem.kind for problem in LocalStore(root, "study").verify().problems] == ["digest"]
+    assert [problem.kind for problem in LocalRepo(root, "study").verify().problems] == ["digest"]
 
 
 def test_object_api_verify(env):

@@ -69,7 +69,7 @@ def test_publish_while_down_is_queued_and_synced_with_its_uid(down, env, capsys)
     assert out.count("uploaded study:data@v") == 2 and version.uid in out
     first, second = down.versions()
     assert first["uid"] == version.uid and first["metadata"] == {"n": 1} and first["status"] == "completed"
-    assert cairn.LocalStore(down.root).aliases("study", "data")["paper"] == 1
+    assert cairn.LocalRepo(down.root).aliases("study", "data")["paper"] == 1
     assert (cairn.pull(f"data@{version.uid}//a.txt", record=False)).read_text() == "as published"
     assert (cairn.pull("data@v2//a.txt", record=False)).read_text() == "changed after publishing"
     assert run(capsys, "sync")[0].startswith("nothing to sync")  # a second sync sends nothing

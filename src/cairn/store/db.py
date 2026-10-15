@@ -168,7 +168,7 @@ def export(database: Database, folder: Path) -> dict[str, int]:
 
 class ServerLock:
     """`<root>/server.lock`: locked (flock, exclusive) by the `cairn server` serving the root, for as long as it
-    runs, so a second server is refused and other processes know not to write (LocalStore checks `held`).
+    runs, so a second server is refused and other processes know not to write (LocalRepo checks `held`).
     flock is reliable on local filesystems only, which is all a store root may live on (fs.py)."""
 
     def __init__(self, root: Path):

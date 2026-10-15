@@ -1,4 +1,4 @@
-"""The store server: a LocalStore root shared over HTTP, behind tokens. Only an artifact store: a JSON API and
+"""The store server: a LocalRepo root shared over HTTP, behind tokens. Only an artifact store: a JSON API and
 file downloads, no pages (`cairn ui` explores a store in a browser, locally or against this server).
 
     cairn server <root> [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth] [--gc-interval 24h]

@@ -14,7 +14,7 @@ import pytest
 import cairn as store
 from cairn.cli import main
 from cairn.client.http import Client
-from cairn import BadRange, LocalStore, RemoteStore, StoreError
+from cairn import BadRange, LocalRepo, Remote, StoreError
 from cairn.server import make_server, serve_store
 from cairn.store.tokens import create_token, init_root, list_tokens, revoke_token
 
@@ -58,8 +58,8 @@ def api(server, method, path, body=None, token="owner", expect=200):
     return json.loads(data) if data else None
 
 
-def remote(server, token=None, project="study") -> RemoteStore:
-    return RemoteStore(Client(server.url, token or server.token), project)
+def remote(server, token=None, project="study") -> Remote:
+    return Remote(Client(server.url, token or server.token), project)
 
 
 def use_remote(env, server, project="study"):
@@ -246,7 +246,7 @@ def test_files_answer_range_etag_and_download(server, env):
     assert call(server, "GET", "/files/study/data@v9//big.txt")[0] == 404
 
 
-# ------------------------------------------------------- RemoteStore round trip
+# ------------------------------------------------------- Remote round trip
 
 
 def test_remote_store_round_trip(server, env):
@@ -299,7 +299,7 @@ def test_pull_materializes_once_and_never_downloads_a_blob_twice(server, env, tm
 def test_pull_records_inputs_like_the_local_store(server, env):
     r = use_remote(env, server)
     store.publish("data", folder(env, "d", {"a.txt": "1"}), store=r)
-    store.Store(r).pull("data@latest")  # the object API outside a run: recorded in the working directory
+    store.Repo(r).pull("data@latest")  # the object API outside a run: recorded in the working directory
     assert (env / ".cairn-inputs.jsonl").read_text().count("study:data@v1") == 1
     published = store.publish("fit", folder(env, "out", {"r.txt": "r", ".cairn-inputs.jsonl": (env / ".cairn-inputs.jsonl").read_text()}), store=r)
     assert store.versions("fit", store=r)[published - 1]["inputs"] == ["study:data@v1"]
@@ -397,7 +397,7 @@ def test_overview_summary_and_file_list_routes(server, env):
 def test_remote_store_read_file_streams_ranges(server, env):
     r = use_remote(env, server)
     store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10}), store=r)
-    local = LocalStore(server.root)
+    local = LocalRepo(server.root)
     for reader in (r, local):  # the same answers from both store kinds
         whole = reader.read_file("study", "data", "v1", "big.txt")
         assert (whole.total, whole.size, whole.partial, whole.immutable) == (100, 100, False, True)

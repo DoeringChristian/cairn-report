@@ -27,7 +27,7 @@ and the object API and shortcuts:
     cairn.lineage("models/student@v2")             # through the run: the data it came from, what consumed it
 
 `store=None` means the configured store (`[store]` in cairn.toml): a store server when `url`
-is set (`RemoteStore`; the token comes from CAIRN_STORE_TOKEN or `token_file`), else a local folder,
+is set (`Remote`; the token comes from CAIRN_STORE_TOKEN or `token_file`), else a local folder,
 `path` (default `.cairn/store` in the project root). `project` names the default project (default: the
 project folder's slug). The run (cairn/client/runs.py) points `$CAIRN_INPUTS` at its folder, so what the
 process and its plain subprocesses pull are its inputs; outside a run every pull appends the exact version to
@@ -41,7 +41,7 @@ and sent later (`cairn status`, `cairn sync`). Pulls of exact versions, or of al
 resolution, work from the throwaway cache root (`$CAIRN_CACHE_DIR`, else `.cairn/cache` in the project; `$CAIRN_DIR` moves the whole `.cairn` folder).
 
 The parts are packages: `cairn.store` (the core), `cairn.client` (HTTP client, the object API, publishing,
-the replica, drafts and runs, `RemoteStore`), `cairn.server`, `cairn.ui`, `cairn.reports`, and `cairn.runs`
+the replica, drafts and runs, `Remote`), `cairn.server`, `cairn.ui`, `cairn.reports`, and `cairn.runs`
 (Hydra); each is imported only when used.
 """
 
@@ -51,22 +51,22 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._version import __version__
-from .store import (BadRange, Conflict, Deleted, FileRead, Forbidden, LocalStore, MissingBlobs, NotFound, Protected, Ref, StoreError,
+from .store import (BadRange, Conflict, Deleted, FileRead, Forbidden, LocalRepo, MissingBlobs, NotFound, Protected, Ref, StoreError,
                     Unauthorized, Unreachable)
 
 if TYPE_CHECKING:
     from .client.drafts import Draft
     from .client.runs import Run
-    from .client.objects import Artifact, File, Project, Store, Version
-    from .client.remote import RemoteStore
+    from .client.objects import Artifact, File, Project, Repo, Version
+    from .client.remote import Remote
 
-__all__ = ["__version__", "Artifact", "BadRange", "Conflict", "Deleted", "Draft", "File", "FileRead", "Forbidden", "LocalStore", "MissingBlobs",
+__all__ = ["__version__", "Artifact", "BadRange", "Conflict", "Deleted", "Draft", "File", "FileRead", "Forbidden", "LocalRepo", "MissingBlobs",
            "NotFound", "Project", "Protected",
-           "Ref", "RemoteStore", "Run", "Store", "StoreError", "Unauthorized", "Unreachable", "Version", "alias", "connect", "lineage",
-           "Publication", "current_draft", "draft", "init", "open_store", "publish", "pull", "run", "use", "versions"]
+           "Ref", "Remote", "Run", "Repo", "StoreError", "Unauthorized", "Unreachable", "Version", "alias", "connect", "lineage",
+           "Publication", "current_draft", "draft", "init", "open_repo", "publish", "pull", "run", "use", "versions"]
 
-_CLIENT = {"RemoteStore": "remote", "open_store": "open", "Publication": "publishing", "publish": "publishing",
-           "connect": "objects", "Store": "objects", "Project": "objects", "Artifact": "objects", "Version": "objects",
+_CLIENT = {"Remote": "remote", "open_repo": "open", "Publication": "publishing", "publish": "publishing",
+           "connect": "objects", "Repo": "objects", "Project": "objects", "Artifact": "objects", "Version": "objects",
            "File": "objects", "Draft": "drafts", "draft": "drafts", "current_draft": "drafts", "Run": "runs", "init": "runs"}
 
 
@@ -79,12 +79,12 @@ def __getattr__(name: str):
     raise AttributeError(f"module 'cairn' has no attribute {name!r}")
 
 
-def _store(store) -> "Store":
+def _store(store) -> "Repo":
     """The object API's Store for `store=` (None: the configured store; a store; a folder)."""
-    from .client.objects import Store
-    from .client.open import as_store
+    from .client.objects import Repo
+    from .client.open import as_repo
 
-    return store if isinstance(store, Store) else Store(as_store(store))
+    return store if isinstance(store, Repo) else Repo(as_repo(store))
 
 
 def run() -> "Run | None":
@@ -100,7 +100,7 @@ def _start_run(store) -> None:
     runs.ensure(store)
 
 
-def use(ref: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None, offline: bool = False) -> "Version":
+def use(ref: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None, offline: bool = False) -> "Version":
     """The exact version a reference names, resolved now, as an input of this process's run (started if needed).
 
     Returns the `Version` (its files are listed lazily; `.path` is its read-only local folder, materialized on
@@ -116,7 +116,7 @@ def use(ref: str, *, store: "Store | LocalStore | RemoteStore | Path | str | Non
     return version
 
 
-def pull(ref: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None, record: bool = True,
+def pull(ref: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None, record: bool = True,
          offline: bool = False) -> Path:
     """A read-only local copy of an artifact version (or of the file after `//`), recorded as an input of the run.
 
@@ -129,18 +129,18 @@ def pull(ref: str, *, store: "Store | LocalStore | RemoteStore | Path | str | No
     return _store(store).pull(ref, record=record, offline=offline)
 
 
-def alias(ref: str, alias: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None) -> None:
+def alias(ref: str, alias: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None) -> None:
     """Point `alias` at the version `ref` names (which must be completed)."""
     version = _store(store).version(ref)
     version.artifact.alias(alias, version)
 
 
-def versions(name: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None) -> list[dict]:
+def versions(name: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None) -> list[dict]:
     """Every version of an artifact (its manifest), oldest first, whatever its status; this machine's pending ones last."""
     return [version.manifest for version in _store(store).artifact(name).versions()]
 
 
-def lineage(ref: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None,
+def lineage(ref: str, *, store: "Repo | LocalRepo | Remote | Path | str | None" = None,
             through_runs: bool = True) -> dict[str, list[str]]:
     """One level up (`inputs`) and down (`consumers`) from a version, as exact references.
 

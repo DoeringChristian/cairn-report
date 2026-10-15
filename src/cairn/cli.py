@@ -71,10 +71,10 @@ def cmd_pull(args) -> None:
     import shutil
 
     from .client.offline import pull
-    from .client.open import open_store
+    from .client.open import open_repo
 
     config = with_options(load_config(args.project), args)
-    path = pull(open_store(config), args.ref, record=not args.no_record, offline=args.offline)
+    path = pull(open_repo(config), args.ref, record=not args.no_record, offline=args.offline)
     if args.into is None:
         return print(path)
     target = args.into
@@ -90,10 +90,10 @@ def cmd_pull(args) -> None:
 
 def open_objects(args):
     """The object API's Store for the configured store (no background uploader: commands flush synchronously)."""
-    from .client.objects import Store
-    from .client.open import open_store
+    from .client.objects import Repo
+    from .client.open import open_repo
 
-    return Store(open_store(with_options(load_config(args.project), args)))
+    return Repo(open_repo(with_options(load_config(args.project), args)))
 
 
 def report(line: str) -> None:
@@ -317,7 +317,7 @@ def cmd_retention(args) -> None:
 
 
 def cmd_gc(args) -> None:
-    from .store import LocalStore
+    from .store import LocalRepo
     from .store.gc import describe_bytes, parse_duration
 
     try:
@@ -327,7 +327,7 @@ def cmd_gc(args) -> None:
     if args.root is not None:
         if not (args.root / "store.json").is_file():
             raise SystemExit(f"{args.root} is not a store root (no store.json)")
-        backend = LocalStore(args.root)
+        backend = LocalRepo(args.root)
         result = _store_errors(lambda: backend.gc(dry_run=args.dry_run, grace=grace))
     else:
         store = open_objects(args)
@@ -376,9 +376,9 @@ def cmd_status(args) -> None:
     config = load_config(args.project)
     url = (config.store.get("url") or "").rstrip("/")
     if not url:
-        from .client.open import open_store
+        from .client.open import open_repo
 
-        for ref, why in open_store(config).reaped:  # opening the store fails the versions whose process died
+        for ref, why in open_repo(config).reaped:  # opening the store fails the versions whose process died
             print(f"failed {ref}: {why}")
     if not url and not args.all:
         print("the configured store is a local folder: nothing is ever pending (--all shows every server's versions)")
@@ -426,7 +426,7 @@ def cmd_prune(args) -> None:
 
 
 def cmd_verify(args) -> None:
-    from .store import LocalStore, StoreError
+    from .store import LocalRepo, StoreError
 
     if sum(bool(item) for item in (args.ref, args.cache, args.store is not None, args.all)) > 1:
         raise SystemExit("verify takes one of REF, --cache, --store, --all")
@@ -436,7 +436,7 @@ def cmd_verify(args) -> None:
         if args.store:  # a store root given: no configuration needed
             if not (args.store / "store.json").is_file():
                 raise SystemExit(f"{args.store} is not a store root (no store.json)")
-            report = LocalStore(args.store, allow_network_fs=True).verify()  # only reads
+            report = LocalRepo(args.store, allow_network_fs=True).verify()  # only reads
         else:
             report = open_objects(args).verify(args.ref, cache=args.cache, store=args.store is not None, all=args.all, repair=args.repair)
     except (StoreError, ValueError) as error:
@@ -511,12 +511,12 @@ def cmd_migrate(args) -> None:
 
 
 def cmd_export_metadata(args) -> None:
-    from .store import LocalStore
+    from .store import LocalRepo
 
     root = args.root
     if not (root / "store.json").is_file():
         raise SystemExit(f"{root} is not a store root (no store.json)")
-    counts = LocalStore(root).export_metadata(args.folder)
+    counts = LocalRepo(root).export_metadata(args.folder)
     for file, count in counts.items():
         print(f"{args.folder / file}  {count} rows")
 

@@ -35,7 +35,7 @@ Completion: at exit (`atexit`), the open drafts of the run are published, then t
 logs/error.txt and `metadata.exit_code`; `sys.exit(0)` and `sys.exit()` complete it) or SIGTERM (when no other
 handler is installed) fails it, keeping its folder and writing logs/error.txt. A process killed without a chance to
 run any of this (SIGKILL, the OOM killer) leaves the version `running` until the store notices the missing
-heartbeat: it fails it the next time anything opens the store (local store: `LocalStore.reap`; store server: a
+heartbeat: it fails it the next time anything opens the store (local store: `LocalRepo.reap`; store server: a
 flusher, see sync.py). `run.finish()` ends it earlier (a Hydra job does, cairn/runs/hydra.py), after which the process may
 start another one.
 """

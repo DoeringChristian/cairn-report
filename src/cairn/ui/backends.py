@@ -7,9 +7,9 @@ import hmac
 from pathlib import Path
 
 from ..client.http import Client, connect
-from ..client.remote import RemoteStore
+from ..client.remote import Remote
 from ..config import Config, load_config, protect
-from ..store import LocalStore, Unauthorized
+from ..store import LocalRepo, Unauthorized
 from ..store.tokens import OWNER, Tokens, read_token
 from .sessions import Session
 
@@ -22,7 +22,7 @@ class LocalBackend:
         if not root.is_dir():
             raise SystemExit(f"no store folder {root}")
         self.root, self.describe = root, str(root)
-        self.store = LocalStore(root)
+        self.store = LocalRepo(root)
         if not no_auth:
             if not (root / "token").is_file():
                 raise SystemExit(f"{root} has no owner token (not a store root?); use --no-auth to browse it without a login")
@@ -48,8 +48,8 @@ class RemoteBackend:
         self.client = Client(url, token, allow_http=allow_http)  # refuses plain HTTP to a non-local host
         self.url, self.describe, self.allow_http, self.token = self.client.url, self.client.url, allow_http, token
 
-    def _store(self, token: str) -> RemoteStore:
-        return RemoteStore(Client(self.url, token, allow_http=self.allow_http))
+    def _store(self, token: str) -> Remote:
+        return Remote(Client(self.url, token, allow_http=self.allow_http))
 
     def anonymous(self) -> Session:
         return Session(self._store(self.token), None)

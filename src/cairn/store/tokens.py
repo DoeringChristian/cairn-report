@@ -49,7 +49,7 @@ def read_token(path: Path) -> str:
 
 def init_root(root: Path) -> Path:
     """Create a store root with a fresh random owner token, readable only by its owner."""
-    from .local import LocalStore
+    from .local import LocalRepo
 
     root.mkdir(parents=True, exist_ok=True)
     os.chmod(root, 0o700)
@@ -60,7 +60,7 @@ def init_root(root: Path) -> Path:
     with os.fdopen(descriptor, "w") as handle:
         os.fchmod(handle.fileno(), 0o600)  # explicit: default ACLs may ignore the creation mode
         handle.write(secrets.token_urlsafe(32) + "\n")
-    LocalStore(root)
+    LocalRepo(root)
     return token_file
 
 
@@ -109,13 +109,13 @@ class Tokens:
 
 def create_token(root: Path, project: str, write: bool = False, name: str | None = None) -> str:
     """A new scoped token for `project` (created if it does not exist); returns the token, which is shown only now."""
-    from .local import LocalStore
+    from .local import LocalRepo
 
     root = Path(root)
     if not (root / "token").is_file():
         raise SystemExit(f"{root} is not a store root (no token file); `cairn server {root}` creates one")
     refs.valid_project(project)
-    LocalStore(root).create_project(project)
+    LocalRepo(root).create_project(project)
     tokens = Tokens(root)
     identifier = secrets.token_hex(4)
     name = name or f"{project}-{'write' if write else 'read'}-{identifier}"

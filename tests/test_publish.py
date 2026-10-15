@@ -119,7 +119,7 @@ def test_inputs_pulled_by_the_command_are_recorded(env, capsys, monkeypatch):
         main(["publish", str(out), "fit", "--interval", "0.5", "--", sys.executable, "-c", script])
     assert exit.value.code == 0
     [version] = store.versions("fit")
-    assert version["inputs"] == [f"{store.open_store().project}:datasets/toy@v1"]
+    assert version["inputs"] == [f"{store.open_repo().project}:datasets/toy@v1"]
     assert [e["path"] for e in version["files"]] == ["r.txt"]
 
 
@@ -140,7 +140,7 @@ def test_study_folder_merges_every_trial_inputs_record(env, capsys):
     main(["publish", str(folder(env, "d1", {"x": "1"})), "data"])
     main(["publish", str(folder(env, "d2", {"x": "2"})), "data"])
     capsys.readouterr()
-    project = store.open_store().project
+    project = store.open_repo().project
     study = folder(env, "runs/study", {"0/metrics.csv": "a", "1/metrics.csv": "b", "summary.txt": "s"})
     row = lambda ref: json.dumps({"ref": f"{project}:{ref}", "time": "t"}) + "\n"
     (study / "0" / ".cairn-inputs.jsonl").write_text(row("data@v1"))

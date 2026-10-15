@@ -1,4 +1,4 @@
-"""The store server: a LocalStore root shared over HTTP, behind tokens. Only an artifact store: a JSON API and
+"""The store server: a LocalRepo root shared over HTTP, behind tokens. Only an artifact store: a JSON API and
 file downloads, no pages (`cairn ui` explores a store in a browser, locally or against this server).
 
     cairn server <root> [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth] [--gc-interval 24h]
@@ -74,7 +74,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote
 
 from .._version import __version__
-from ..store import BadRange, Conflict, Deleted, LocalStore, MissingBlobs, NotFound, Protected, Ref, StoreError, refs
+from ..store import BadRange, Conflict, Deleted, LocalRepo, MissingBlobs, NotFound, Protected, Ref, StoreError, refs
 from ..store.gc import GRACE, describe_bytes, parse_duration
 from ..store.blobs import SHA256, clean_entries
 from ..store.db import ServerLock
@@ -165,7 +165,7 @@ class StoreApp:
     one dispatch is cheaper than a middleware stack). API work runs in worker threads (the store blocks on
     files); uploads and downloads stream on the event loop with their disk work in worker threads."""
 
-    def __init__(self, store: LocalStore, auth: Auth, max_blob: int, workers: int = WORKERS):
+    def __init__(self, store: LocalRepo, auth: Auth, max_blob: int, workers: int = WORKERS):
         self.store, self.auth, self.max_blob = store, auth, max_blob
         self.executor = ThreadPoolExecutor(workers, thread_name_prefix="cairn-store")
         self.log = default_log
@@ -287,7 +287,7 @@ class StoreApp:
         return ref
 
     def _listing(self, project: str) -> Answer:
-        """The artifact listing, serialized once per change of the project (LocalStore.summaries_stamped)."""
+        """The artifact listing, serialized once per change of the project (LocalRepo.summaries_stamped)."""
         stamp, summaries = self.store.summaries_stamped(project)
         cached = self._listings.get(project)
         if cached is None or cached[0] != stamp:
@@ -484,7 +484,7 @@ class StoreApp:
         raise HttpError(404, "no such API route")
 
     def gc(self, dry_run: bool = True, grace=GRACE, by: str = "owner") -> dict:
-        """Retention rules and the blob sweep (LocalStore.gc), here: this server is the root's single writer."""
+        """Retention rules and the blob sweep (LocalRepo.gc), here: this server is the root's single writer."""
         return self.store.gc(dry_run=dry_run, grace=grace, by=by)
 
     @staticmethod
@@ -711,7 +711,7 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     lock = ServerLock(root)
     lock.acquire()  # one server per root, and other processes leave its metadata alone (store/db.py)
     try:
-        store = LocalStore(root, allow_network_fs=True)  # checked above
+        store = LocalRepo(root, allow_network_fs=True)  # checked above
         app = StoreApp(store, Auth(read_token(root / "token"), Tokens(root), no_auth), max_blob)
         server = StoreServer(app, host, port, app.auth.owner_token)
     except BaseException:

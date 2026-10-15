@@ -47,7 +47,7 @@ from mdit_py_plugins.front_matter import front_matter_plugin
 from plotly.offline import get_plotlyjs, get_plotlyjs_version
 
 from .._version import __version__
-from ..client.open import open_store
+from ..client.open import open_repo
 from ..config import Config, load_config, protect
 from ..formats import METRICS, fold_scalars, fold_series, read_jsonl
 from ..client.offline import local_folder, resolve_version
@@ -494,7 +494,7 @@ class Build:
             raise BuildError(f"{self.markdown}: inputs: must map local names to artifact references, e.g. descent: descent@latest")
         if not declared:
             return
-        store = open_store(CONFIG)
+        store = open_repo(CONFIG)
         self.store_root = getattr(store, "root", None)  # a remote store has no folder
         for name, text in declared.items():
             where = f"{self.markdown}: inputs.{name}"

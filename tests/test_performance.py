@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from cairn import LocalStore
+from cairn import LocalRepo
 from cairn.store.tokens import init_root
 
 from test_server import server  # noqa: F401  (a store server in a thread)
@@ -74,16 +74,16 @@ def test_concurrent_small_publishes(server, same):
     assert elapsed < 60, f"100 small publishes took {elapsed:.1f} s"
     if same:
         assert sorted(numbers) == list(range(1, 101))  # every publish got its own number
-        assert [v["version"] for v in LocalStore(server.root).versions("perf", "shared")] == list(range(1, 101))
+        assert [v["version"] for v in LocalRepo(server.root).versions("perf", "shared")] == list(range(1, 101))
     else:
-        assert set(numbers) == {1} and len(LocalStore(server.root).artifacts("perf")) == 100
+        assert set(numbers) == {1} and len(LocalRepo(server.root).artifacts("perf")) == 100
 
 
 def seed_artifacts(root: Path, project: str, count: int) -> None:
     """`count` artifacts with one completed version each (as the server's owner: the server holds the root)."""
     import io
 
-    store = LocalStore(root)
+    store = LocalRepo(root)
     store.create_project(project)
     data = b"x"
     sha = hashlib.sha256(data).hexdigest()
@@ -183,7 +183,7 @@ def test_writes_of_a_second_process_are_seen_at_once(tmp_path):
     import io
 
     root = tmp_path / "root"
-    store = LocalStore(root)
+    store = LocalRepo(root)
     store.create_project("p")
     data = b"one"
     sha = hashlib.sha256(data).hexdigest()
@@ -192,7 +192,7 @@ def test_writes_of_a_second_process_are_seen_at_once(tmp_path):
     store.publish("p", "x", entries, metadata={"n": 1})
     assert [item["name"] for item in store.summaries("p")] == ["x"]  # the listing is cached now
     script = (
-        "import sys; from cairn import LocalStore; s = LocalStore(sys.argv[1]); e = [{'path': 'a.txt', 'sha256': sys.argv[2], 'size': 3}]\n"
+        "import sys; from cairn import LocalRepo; s = LocalRepo(sys.argv[1]); e = [{'path': 'a.txt', 'sha256': sys.argv[2], 'size': 3}]\n"
         "s.publish('p', 'x', e, metadata={'n': 2}); s.publish('p', 'y/z', e); s.set_alias('p', 'x', 'best', 1)\n")
     subprocess.run([sys.executable, "-c", script, str(root), sha], check=True)
     assert [v["metadata"]["n"] for v in store.versions("p", "x")] == [1, 2]
@@ -203,16 +203,16 @@ def test_writes_of_a_second_process_are_seen_at_once(tmp_path):
 
 
 def _start_versions(root, count, barrier, results):
-    from cairn import LocalStore
+    from cairn import LocalRepo
 
-    store = LocalStore(root)
+    store = LocalRepo(root)
     barrier.wait()
     results.put([store.start_version("p", "shared") for _ in range(count)])
 
 
 def test_version_numbers_stay_unique_across_processes(tmp_path):
     root = tmp_path / "root"
-    LocalStore(root).create_project("p")
+    LocalRepo(root).create_project("p")
     context = multiprocessing.get_context("spawn")
     barrier, results = context.Barrier(3), context.Queue()
     processes = [context.Process(target=_start_versions, args=(str(root), 15, barrier, results)) for _ in range(3)]
@@ -223,7 +223,7 @@ def test_version_numbers_stay_unique_across_processes(tmp_path):
         process.join(60)
         assert process.exitcode == 0
     assert sorted(numbers) == list(range(1, 46))  # no number handed out twice, and none lost
-    assert sorted(v["version"] for v in LocalStore(root).versions("p", "shared")) == list(range(1, 46))
+    assert sorted(v["version"] for v in LocalRepo(root).versions("p", "shared")) == list(range(1, 46))
 
 
 def test_caching_headers(server):

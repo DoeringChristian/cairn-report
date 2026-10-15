@@ -1,7 +1,7 @@
 """Retention rules and garbage collection of a store root.
 
-Deleting a version (LocalStore.delete_version) leaves a tombstone in the metadata: its number and uid are never
-handed out again, its file list is dropped, and its blobs may become garbage. `LocalStore.gc` then
+Deleting a version (LocalRepo.delete_version) leaves a tombstone in the metadata: its number and uid are never
+handed out again, its file list is dropped, and its blobs may become garbage. `LocalRepo.gc` then
 
 1. applies the retention rules (per project, or per artifact-name prefix; the longest matching prefix wins):
 

@@ -15,7 +15,7 @@ pending and is sent like any publish. While it runs, a heartbeat thread rewrites
 (time, host, pid) every few seconds; a flusher on any host fails the version once the heartbeat is
 older than `[store] heartbeat_timeout`. A running version in a local store has a heartbeat too
 (`<store>/heartbeats/<uid>`): opening the store fails it once its process is dead or the heartbeat is old
-(LocalStore.reap), so a killed job never stays `running`.
+(LocalRepo.reap), so a killed job never stays `running`.
 """
 
 from __future__ import annotations
@@ -31,17 +31,17 @@ import time
 from pathlib import Path
 
 from ..config import Config, load_config
-from ..store import INPUTS_ENV, INPUTS_FILE, LocalStore, StoreError, drop_inputs, read_inputs, refs
+from ..store import INPUTS_ENV, INPUTS_FILE, LocalRepo, StoreError, drop_inputs, read_inputs, refs
 from ..store.digest import manifest_digest
 from ..store.errors import Unreachable
 from .http import HashCache, entries_for, scan  # noqa: F401
-from .open import as_store, open_store, versions_of
-from .remote import RemoteStore
+from .open import as_repo, open_repo, versions_of
+from .remote import Remote
 
 SETTLE = 2.0  # seconds without new changes before a changed folder is synced
 
 
-def _target(name: str, store: LocalStore | RemoteStore) -> tuple[str, str]:
+def _target(name: str, store: LocalRepo | Remote) -> tuple[str, str]:
     """(project, artifact name) for a publish target."""
     target = refs.parse(name)
     if target.selector or target.path:
@@ -52,7 +52,7 @@ def _target(name: str, store: LocalStore | RemoteStore) -> tuple[str, str]:
     return project, target.name
 
 
-def stage_local(store: LocalStore, local: Path, config: Config, cache: HashCache, link: bool = False) -> list[dict]:
+def stage_local(store: LocalRepo, local: Path, config: Config, cache: HashCache, link: bool = False) -> list[dict]:
     """Entries for a folder's files (its inputs record excluded) with their blobs put in a local store (`link`: hard
     links where no clone is possible, for a folder deleted right after, see `BlobStore.put_file`)."""
     files = scan(local, "", config, exclude=config.store.get("exclude", []))
@@ -65,7 +65,7 @@ def stage_local(store: LocalStore, local: Path, config: Config, cache: HashCache
 
 
 def publish(name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-            inputs=None, store: LocalStore | RemoteStore | Path | str | None = None, config: Config | None = None,
+            inputs=None, store: LocalRepo | Remote | Path | str | None = None, config: Config | None = None,
             allow_incomplete: bool = False) -> int | None:
     """Store a folder as the next version of artifact `name`; returns the version number (`Artifact.publish`).
 
@@ -75,11 +75,11 @@ def publish(name: str, folder: Path | str, *, metadata: dict | None = None, alia
     store server did not answer: the version is pending in the local replica (`cairn status`), usable here
     by its uid, and uploaded later.
     """
-    from .objects import Store
+    from .objects import Repo
 
-    backend = as_store(store)
+    backend = as_repo(store)
     project, artifact = _target(name, backend)
-    version = Store(backend).project(project).artifact(artifact).publish(folder, metadata=metadata, aliases=aliases,
+    version = Repo(backend).project(project).artifact(artifact).publish(folder, metadata=metadata, aliases=aliases,
                                                                           label=label, inputs=inputs, config=config,
                                                                           allow_incomplete=allow_incomplete)
     return version.number
@@ -99,9 +99,9 @@ class Publication:
     """
 
     def __init__(self, name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                 inputs=None, store: LocalStore | RemoteStore | Path | str | None = None, uid: str | None = None):
+                 inputs=None, store: LocalRepo | Remote | Path | str | None = None, uid: str | None = None):
         self.local = Path(folder).resolve()
-        self.store = as_store(store)
+        self.store = as_repo(store)
         self.project, self.name = _target(name, self.store)
         self.config = load_config()
         self.cache = HashCache(self.config.project)
@@ -116,7 +116,7 @@ class Publication:
         from .replica import heartbeat_timeout
 
         self.timeout = heartbeat_timeout(self.config)
-        if isinstance(self.store, RemoteStore):
+        if isinstance(self.store, Remote):
             from .sync import Replica
 
             self._replica = Replica(self.store, self.timeout)
@@ -298,7 +298,7 @@ def describe(version: dict) -> str:
 def publish_folder(config: Config, folder: Path, name: str, label: str | None, aliases: list[str], meta: dict,
                    allow_incomplete: bool = False) -> None:
     """Publish one folder and print what happened."""
-    store = open_store(config)
+    store = open_repo(config)
     try:
         before = max((v["version"] for v in versions_of(store, name)), default=0)
     except StoreError:  # also a server that does not answer: the version stays pending below
@@ -349,7 +349,7 @@ def watch_folder(config: Config, folder: Path, name: str, label: str | None, ali
 
 
 def _follow(config, folder, name, label, aliases, meta, command, interval, settle, tick, stopped) -> int:
-    pub = Publication(name, folder, metadata=meta, aliases=aliases, label=label, store=open_store(config))
+    pub = Publication(name, folder, metadata=meta, aliases=aliases, label=label, store=open_repo(config))
     for attempt in range(5):  # a local store that errors; a store server that does not answer is no reason to wait
         try:
             pub.start()

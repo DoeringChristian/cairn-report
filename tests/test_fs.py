@@ -1,4 +1,4 @@
-"""Network filesystems: detecting them, `cairn server` refusing a root on one, and the LocalStore warning."""
+"""Network filesystems: detecting them, `cairn server` refusing a root on one, and the LocalRepo warning."""
 
 import pytest
 
@@ -6,7 +6,7 @@ import cairn.server.app as app_module
 import cairn.store.local as local_module
 from cairn.cli import main
 from cairn.server import make_server
-from cairn.store import LocalStore
+from cairn.store import LocalRepo
 from cairn.store.fs import is_network_type, network_filesystem, type_from_mounts
 from cairn.store.tokens import init_root
 
@@ -96,19 +96,19 @@ def test_the_cli_passes_allow_network_fs(tmp_path, monkeypatch):
 
 
 def test_a_local_store_on_a_network_filesystem_refuses_writes(tmp_path, on_nfs):
-    store = LocalStore(tmp_path / "shared")
+    store = LocalRepo(tmp_path / "shared")
     store.projects()  # opening and reading are fine
     with pytest.raises(StoreError, match=r"network filesystem \(nfs4\).*\[store\] url.*allow_network_fs"):
         store.create_project("p")
-    LocalStore(tmp_path / "allowed", allow_network_fs=True).create_project("p")  # one writer, by the user's word
+    LocalRepo(tmp_path / "allowed", allow_network_fs=True).create_project("p")  # one writer, by the user's word
 
 
 def test_allow_network_fs_comes_from_cairn_toml(tmp_path, on_nfs, monkeypatch):
-    from cairn.client.open import open_store
+    from cairn.client.open import open_repo
     from cairn.config import load_config
 
     (tmp_path / "cairn.toml").write_text('[store]\nproject = "p"\nallow_network_fs = true\n')
-    assert open_store(load_config(tmp_path)).projects()[0]["name"] == "p"
+    assert open_repo(load_config(tmp_path)).projects()[0]["name"] == "p"
     (tmp_path / "cairn.toml").write_text('[store]\nproject = "q"\nallow_network_fs = "yes"\n')
     with pytest.raises(ValueError, match="allow_network_fs must be true or false"):
         load_config(tmp_path)

@@ -24,7 +24,7 @@ import yaml
 from .formats import read_jsonl
 from .store import refs
 from .store.blobs import clean_entries
-from .store.local import LocalStore
+from .store.local import LocalRepo
 
 FRONT = re.compile(r"---\n(.*?)\n---", re.S)
 
@@ -45,7 +45,7 @@ class _Project:
         return out
 
 
-def _copy_blobs(old: Path, store: LocalStore, entries: list[dict]) -> list[str]:
+def _copy_blobs(old: Path, store: LocalRepo, entries: list[dict]) -> list[str]:
     """Hard-link (else copy) the entries' blobs into the store; the missing ones are returned."""
     missing = []
     for entry in entries:
@@ -76,7 +76,7 @@ def _status(old: Path, entries: list[dict]) -> str:
     return "failed"
 
 
-def _runs(old: Path, store: LocalStore, project: str, report: _Project) -> None:
+def _runs(old: Path, store: LocalRepo, project: str, report: _Project) -> None:
     latest: dict[str, dict] = {}
     for row in read_jsonl(old / "projects" / project / "runs.jsonl"):
         if isinstance(row, dict) and isinstance(row.get("path"), str):
@@ -128,7 +128,7 @@ def _title(old: Path, entry: dict, fallback: str) -> str:
     return fallback
 
 
-def _reports(old: Path, store: LocalStore, project: str, report: _Project) -> None:
+def _reports(old: Path, store: LocalRepo, project: str, report: _Project) -> None:
     versions = [row for row in read_jsonl(old / "projects" / project / "report.jsonl") if isinstance(row, dict) and "entries" in row]
     if not versions:
         return
@@ -202,7 +202,7 @@ def migrate(old_root: Path | str, new_root: Path | str) -> list[str]:
         raise SystemExit(f"{old} is not a hub root (no blobs/ and projects/)")
     if old == new:
         raise SystemExit("the old and new roots must differ")
-    store = LocalStore(new)
+    store = LocalRepo(new)
     lines: list[str] = []
     for folder in sorted((old / "projects").iterdir()):
         if not folder.is_dir():

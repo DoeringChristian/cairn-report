@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ..store import LocalStore, refs
+from ..store import LocalRepo, refs
 from ..store.cache import blob_cache, cache_root, files_folder
 from ..store.digest import manifest_digest, sha256_file
 from ..store.verify import Report, check_entries, verify_cache, verify_store
@@ -57,7 +57,7 @@ def verify_ref(store, ref: str, repair: bool = False) -> Report:
                     if repair and root == cache_root():
                         blob.unlink(missing_ok=True)
                         problem.repaired = True
-    if isinstance(store, LocalStore):
+    if isinstance(store, LocalRepo):
         for entry in entries:
             if "sha256" not in entry:
                 continue
@@ -74,14 +74,14 @@ def verify_ref(store, ref: str, repair: bool = False) -> Report:
 
 def verify(store, ref: str | None = None, *, cache: bool = False, local_store: bool = False, everything: bool = False,
            repair: bool = False) -> Report:
-    """See the module doc; `store` is a backend (LocalStore or RemoteStore). Nothing selected means the cache."""
+    """See the module doc; `store` is a backend (LocalRepo or Remote). Nothing selected means the cache."""
     report = Report()
     if ref:
         report.merge(verify_ref(store, ref, repair))
     if cache or everything or not (ref or local_store):
         report.merge(verify_replica(repair))
     if local_store or everything:
-        if isinstance(store, LocalStore):
+        if isinstance(store, LocalRepo):
             report.merge(store.verify())
         elif local_store:
             raise ValueError("the configured store is a server: only a local store folder can be verified (the server's own folder: `cairn verify --store <root>`)")

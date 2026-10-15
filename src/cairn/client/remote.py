@@ -1,4 +1,4 @@
-"""RemoteStore: the LocalStore interface over HTTP, against `cairn server`.
+"""Remote: the LocalRepo interface over HTTP, against `cairn server`.
 
 It offers what `cairn` and `Publication` use: projects, blob upload, versions, aliases,
 `resolve`, `lineage`, and `blob_file` for the pull cache. HTTP, the token, and the HTTPS rule are
@@ -30,7 +30,7 @@ def q(text: str) -> str:
     return quote(text, safe="")
 
 
-class RemoteStore:
+class Remote:
     def __init__(self, client: Client, project: str | None = None):
         """`project` is the default for references without one."""
         self.client, self.project = client, project
@@ -123,7 +123,7 @@ class RemoteStore:
         return target
 
     def read_file(self, project: str, name: str, selector: str | None, path: str, range_header: str | None = None) -> FileRead:
-        """`LocalStore.read_file` through the server's `/files` route, which gets the Range header as is."""
+        """`LocalRepo.read_file` through the server's `/files` route, which gets the Range header as is."""
         where = f"/files/{q(project)}/{quote(name)}@{selector or 'latest'}//{quote(path)}"
         try:
             status, headers, chunks = self.client.stream(where, {"Range": range_header} if range_header else None)
@@ -226,7 +226,7 @@ class RemoteStore:
         return "?" + "&".join(flags) if flags else ""
 
     def delete_version(self, project: str, name: str, version: int | str, *, reason: str | None = None, force: bool = False) -> dict:
-        """`LocalStore.delete_version` on the server (a write token; `force` needs the owner token)."""
+        """`LocalRepo.delete_version` on the server (a write token; `force` needs the owner token)."""
         if isinstance(version, str) and refs.VERSION.fullmatch(version):
             version = int(version[1:])
         if isinstance(version, str) and not UID.fullmatch(version):

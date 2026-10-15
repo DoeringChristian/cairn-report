@@ -11,7 +11,7 @@ import threading
 
 import pytest
 
-from cairn import LocalStore, RemoteStore, StoreError
+from cairn import LocalRepo, Remote, StoreError
 from cairn.cli import main
 from cairn.server import make_server
 from cairn.store.errors import Conflict
@@ -30,7 +30,7 @@ def blob(root, text: str) -> dict:
 
 def test_export_metadata(tmp_path, capsys):
     root = tmp_path / "root"
-    store = LocalStore(root)
+    store = LocalRepo(root)
     for project in ("data", "models"):
         store.create_project(project)
     one, two = blob(root, "one"), blob(root, "two")
@@ -51,7 +51,7 @@ def test_export_metadata(tmp_path, capsys):
 
 
 def fresh(tmp_path):
-    store = LocalStore(tmp_path / "root")
+    store = LocalRepo(tmp_path / "root")
     store.create_project("p")
     data = b"payload"
     sha = hashlib.sha256(data).hexdigest()
@@ -66,7 +66,7 @@ def test_a_failure_inside_a_publish_stores_none_of_it(tmp_path, monkeypatch):
     def broken(*args, **kwargs):
         raise RuntimeError("crash between the version and its alias")
 
-    monkeypatch.setattr(LocalStore, "_completed", broken)
+    monkeypatch.setattr(LocalRepo, "_completed", broken)
     with pytest.raises(RuntimeError):
         store.publish("p", "x", entries, metadata={"n": 2})
     monkeypatch.undo()
@@ -78,13 +78,13 @@ def test_a_failure_inside_a_publish_stores_none_of_it(tmp_path, monkeypatch):
 def test_a_process_killed_inside_a_publish_stores_none_of_it(tmp_path):
     store, entries = fresh(tmp_path)
     store.publish("p", "x", entries)
-    script = ("import os, sys, json; from cairn import LocalStore\n"
+    script = ("import os, sys, json; from cairn import LocalRepo\n"
               "def die(*args, **kwargs): os._exit(3)  # killed: no rollback, no cleanup\n"
-              "LocalStore._completed = die\n"
-              "LocalStore(sys.argv[1]).publish('p', 'x', json.loads(sys.argv[2]), metadata={'n': 2})\n")
+              "LocalRepo._completed = die\n"
+              "LocalRepo(sys.argv[1]).publish('p', 'x', json.loads(sys.argv[2]), metadata={'n': 2})\n")
     result = subprocess.run([sys.executable, "-c", script, str(store.root), json.dumps(entries)])
     assert result.returncode == 3
-    again = LocalStore(store.root)
+    again = LocalRepo(store.root)
     assert [v["version"] for v in again.versions("p", "x")] == [1] and again.aliases("p", "x") == {"latest": 1}
     with sqlite3.connect(store.root / "metadata.sqlite3") as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -110,7 +110,7 @@ def test_processes_on_the_host_write_a_served_root_directly(tmp_path, capsys):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        beside = LocalStore(root)  # a script on the server's host: the folder itself, not the server's URL
+        beside = LocalRepo(root)  # a script on the server's host: the folder itself, not the server's URL
         beside.create_project("p")
         with pytest.raises(SystemExit, match="already served"):
             make_server(root, port=0)  # one server per root
@@ -118,8 +118,8 @@ def test_processes_on_the_host_write_a_served_root_directly(tmp_path, capsys):
         with pytest.raises(SystemExit, match="in use"):  # a taken port is an error: clients' [store] url names it
             make_server(tmp_path / "other", port=server.server_address[1])
         client = Client(f"http://127.0.0.1:{server.server_address[1]}", read_token(root / "token"))
-        assert [p["name"] for p in RemoteStore(client).projects()] == ["p"]  # the server sees the direct write
+        assert [p["name"] for p in Remote(client).projects()] == ["p"]  # the server sees the direct write
     finally:
         server.shutdown()
         server.server_close()
-    LocalStore(root).create_project("q")
+    LocalRepo(root).create_project("q")

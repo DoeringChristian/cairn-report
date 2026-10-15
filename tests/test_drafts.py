@@ -257,7 +257,7 @@ def test_cli_lists_publishes_and_discards_kept_drafts(configured, env, capsys):
 
 
 def test_outside_a_project_drafts_live_in_the_data_root(tmp_path):
-    local = cairn.LocalStore(tmp_path / "store-root", "loose")
+    local = cairn.LocalRepo(tmp_path / "store-root", "loose")
     with cairn.draft("loose", store=local) as run:
         assert run.path.parent.parent == tmp_path / "data" / "drafts"
         (run.path / "a.txt").write_text("a")

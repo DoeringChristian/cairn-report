@@ -1,4 +1,4 @@
-"""LocalStore: projects, artifacts, and immutable versions in a folder.
+"""LocalRepo: projects, artifacts, and immutable versions in a folder.
 
     <root>/
       store.json                 the store's uid (UUIDv7), made once, never changed
@@ -140,7 +140,7 @@ def _stamp(state: dict) -> str:
 _SUMMARY = "SELECT name, latest, versions, aliases, updated, metadata FROM artifacts"
 
 
-class LocalStore:
+class LocalRepo:
     def __init__(self, root: Path | str, project: str | None = None, allow_network_fs: bool = False,
                  heartbeat_timeout: float = 600.0):
         """`project` is the default for references without one. Writing a root on a network filesystem is refused

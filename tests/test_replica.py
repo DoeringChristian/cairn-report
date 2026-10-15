@@ -150,8 +150,8 @@ def test_pending_version_is_usable_before_upload(down, env, capsys, monkeypatch)
     down.start()
     run(capsys, "sync")
     assert down.versions("fit")[0]["inputs"] == ["study:data@v1"]  # the server turned the uid input into the number
-    assert cairn.LocalStore(down.root).lineage("study:data@v1")["consumers"] == ["study:fit@v1"]
-    assert cairn.LocalStore(down.root).aliases("study", "data")["best"] == 1
+    assert cairn.LocalRepo(down.root).lineage("study:data@v1")["consumers"] == ["study:fit@v1"]
+    assert cairn.LocalRepo(down.root).aliases("study", "data")["best"] == 1
 
 
 def test_a_running_version_is_not_usable(down, env, capsys):
@@ -216,10 +216,10 @@ def test_a_publication_beats_and_its_owner_learns_it_was_failed(down, env, monke
 def _flush_in_a_process(url, token, state, cache, barrier, results):
     os.environ["CAIRN_DATA_DIR"], os.environ["CAIRN_CACHE_DIR"] = state, cache
     from cairn.client.http import Client
-    from cairn.client.remote import RemoteStore
+    from cairn.client.remote import Remote
     from cairn.client.sync import Replica
 
-    replica_ = Replica(RemoteStore(Client(url, token), "study"))
+    replica_ = Replica(Remote(Client(url, token), "study"))
     barrier.wait()
     result = replica_.flush()
     results.put(sorted(record["uid"] for record in result["sent"]))

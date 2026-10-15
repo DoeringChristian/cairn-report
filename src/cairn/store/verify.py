@@ -4,7 +4,7 @@
     sha256_file(path)                   (hex digest, size) of a file
     check_entries(folder, entries, ...) a materialized `files/` folder against the manifest entries it was made from
     verify_cache(root, repair)          a cache or data root: every version folder, and every downloaded/staged blob
-    verify_store(store)                 a LocalStore: every blob matches its name, every version's blobs exist and
+    verify_store(store)                 a LocalRepo: every blob matches its name, every version's blobs exist and
                                         its manifest digest matches its files
 
 Nothing here changes anything except `repair=True` on a cache root, which removes what is broken (a version
@@ -185,7 +185,7 @@ def verify_cache(root: Path | str, repair: bool = False, synced: bool | None = N
 
 
 def verify_store(store) -> Report:
-    """A LocalStore: every blob matches its name; every version's blobs exist (with the recorded size) and a
+    """A LocalRepo: every blob matches its name; every version's blobs exist (with the recorded size) and a
     completed version's manifest digest matches its files."""
     report = Report()
     check_blobs(store.root / "blobs", report)

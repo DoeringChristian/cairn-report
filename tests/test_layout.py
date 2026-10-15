@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cairn.client.open import open_store
+from cairn.client.open import open_repo
 from cairn.config import cairn_base, load_config
 from cairn.runs.snapshot import _denied
 from cairn.store import cache
@@ -111,7 +111,7 @@ def test_gitignore_is_written_once_with_a_star(proj):
 
 
 def test_every_creator_writes_the_gitignore(proj):
-    open_store(load_config())
+    open_repo(load_config())
     assert (proj / ".cairn" / ".gitignore").read_text() == "*\n"
 
 

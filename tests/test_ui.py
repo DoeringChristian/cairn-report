@@ -12,7 +12,7 @@ import pytest
 
 import cairn as store
 from cairn.cli import main
-from cairn import LocalStore, RemoteStore
+from cairn import LocalRepo, Remote
 from cairn.store.tokens import create_token, revoke_token
 from cairn.ui import server as ui_server
 from cairn.ui.server import LocalBackend, RemoteBackend, make_ui_server
@@ -448,7 +448,7 @@ def test_ui_command_wires_the_configured_store(env, server, monkeypatch, capsys)
     main(["ui", "--store", str(server.root), "--port", "9999", "--insecure-cookies"])
     assert isinstance(seen["backend"], LocalBackend) and seen["port"] == 9999 and seen["secure_cookie"] is False
     (env / "cairn.toml").write_text('[store]\npath = "mystore"\n')
-    LocalStore(env / "mystore")
+    LocalRepo(env / "mystore")
     main(["ui", "--no-auth"])
     assert seen["backend"].root == (env / "mystore").resolve() and seen["no_auth"] is True
     with pytest.raises(SystemExit, match="no store folder"):

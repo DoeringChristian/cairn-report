@@ -7,7 +7,7 @@ import sys
 import pytest
 
 import cairn as store
-from cairn import LocalStore, NotFound, StoreError
+from cairn import LocalRepo, NotFound, StoreError
 from cairn.store import refs
 from cairn.store.cache import materialize
 
@@ -79,7 +79,7 @@ def put(local, files):
 
 @pytest.fixture
 def local(tmp_path):
-    s = LocalStore(tmp_path / "s", project="p")
+    s = LocalRepo(tmp_path / "s", project="p")
     s.create_project("p")
     return s
 
@@ -219,10 +219,10 @@ def test_materialize_read_only_and_idempotent(local, tmp_path):
 
 
 def test_pull_records_inputs_in_cwd_and_env(env, tmp_path, monkeypatch):
-    s = LocalStore(tmp_path / "s", project="study")
+    s = LocalRepo(tmp_path / "s", project="study")
     s.create_project("study")
     s.publish("study", "datasets/crops", put(s, {"a.txt": "1"}))
-    objects = store.Store(s)  # the object API outside a run: the working directory's file, or $CAIRN_INPUTS
+    objects = store.Repo(s)  # the object API outside a run: the working directory's file, or $CAIRN_INPUTS
     path = objects.pull("datasets/crops@v1")
     assert (path / "a.txt").read_text() == "1"
     rows = [json.loads(line) for line in (env / ".cairn-inputs.jsonl").read_text().splitlines()]
@@ -280,19 +280,19 @@ def test_publish_follows_symlinked_folder_and_labels_by_target(env, tmp_path):
 def test_remote_store_without_a_token_and_plain_http(env, monkeypatch):
     monkeypatch.delenv("CAIRN_STORE_TOKEN", raising=False)
     (env / "cairn.toml").write_text('[store]\nurl = "https://store.example.org"\n')
-    assert store.open_store().client.token == ""  # only a --no-auth server answers; others say a token is needed
+    assert store.open_repo().client.token == ""  # only a --no-auth server answers; others say a token is needed
     monkeypatch.setenv("CAIRN_STORE_TOKEN", "t" * 40)
     (env / "cairn.toml").write_text('[store]\nurl = "http://store.example.org"\n')
     with pytest.raises(SystemExit, match="plain HTTP"):
-        store.open_store()
+        store.open_repo()
     (env / "cairn.toml").write_text('[store]\nurl = "http://store.example.org"\nallow_http = true\n')
-    assert isinstance(store.open_store(), store.RemoteStore)
+    assert isinstance(store.open_repo(), store.Remote)
 
 
 def test_a_hub_table_is_an_unknown_key(env):
     (env / "cairn.toml").write_text('[hub]\nurl = "https://hub.example.org"\n')
     with pytest.raises(ValueError, match=r"unknown keys \['hub'\]"):
-        store.open_store()
+        store.open_repo()
 
 
 def test_store_config_validation(env):

@@ -13,7 +13,7 @@ Scenarios (each prints a row of the table at the end):
                                    the OS page cache holds the file both times (dropping it needs root)
   pull/curl x1, x4                 the same file with curl (a faster client than Python's http.client), one at a
                                    time and four at once (aggregate MB/s), with the server's CPU time per GB sent
-  pull/client                      the same file through the real client (`RemoteStore.blob_file`: download,
+  pull/client                      the same file through the real client (`Remote.blob_file`: download,
                                    verify, place in the cache)
   range                            `--ranges` random 64 KB Range requests on that file from `--meta-clients` clients
   meta/*                           the UI's metadata queries on a project of `--artifacts` artifacts with
@@ -289,9 +289,9 @@ def pull_curl(port: int, token: str, size: int, repeats: int, server: subprocess
 
 def pull_client(port: int, token: str, size: int, sha: str) -> dict:
     from cairn.client.http import Client
-    from cairn.client.remote import RemoteStore
+    from cairn.client.remote import Remote
 
-    store = RemoteStore(Client(f"http://127.0.0.1:{port}", token), PROJECT)
+    store = Remote(Client(f"http://127.0.0.1:{port}", token), PROJECT)
     cache = Path(tempfile.mkdtemp(prefix="cairn-bench-cache-"))
     try:
         started = time.perf_counter()
@@ -300,7 +300,7 @@ def pull_client(port: int, token: str, size: int, sha: str) -> dict:
     finally:
         shutil.rmtree(cache, ignore_errors=True)
     return summarize("pull/client", [elapsed], elapsed, count=1, unit="MB/s",
-                     extra="RemoteStore.blob_file: download + verify + place") | {"rate": size / 1e6 / elapsed}
+                     extra="Remote.blob_file: download + verify + place") | {"rate": size / 1e6 / elapsed}
 
 
 def bench_ranges(port: int, token: str, size: int, args) -> dict:
@@ -333,10 +333,10 @@ def bench_ranges(port: int, token: str, size: int, args) -> dict:
 
 def seed_metadata(root: Path, artifacts: int, versions: int) -> None:
     """`artifacts` artifacts with `versions` versions each, written straight into the folder (no server)."""
-    from cairn.store import LocalStore
+    from cairn.store import LocalRepo
     from cairn.store.blobs import BlobStore
 
-    store = LocalStore(root)
+    store = LocalRepo(root)
     blobs = BlobStore(root)
     store.create_project(PROJECT, "Bench")
     payload = b"x" * 100

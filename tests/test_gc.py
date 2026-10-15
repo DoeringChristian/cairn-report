@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import cairn
-from cairn import Conflict, Deleted, LocalStore, MissingBlobs, NotFound, Protected, RemoteStore
+from cairn import Conflict, Deleted, LocalRepo, MissingBlobs, NotFound, Protected, Remote
 from cairn.cli import main
 from cairn.client.http import Client
 from cairn.store.gc import DAY, parse_duration
@@ -36,7 +36,7 @@ def publish(store, project, name, text, **options) -> int:
 
 @pytest.fixture
 def local(tmp_path):
-    store = LocalStore(tmp_path / "root")
+    store = LocalRepo(tmp_path / "root")
     for project in ("p", "q"):
         store.create_project(project)
     return store
@@ -255,7 +255,7 @@ def test_a_sweep_between_the_check_and_the_commit_fails_the_publish_cleanly(loca
     entry = blob(local, "garbage")
     local.publish("p", "g", [entry])
     local.delete_version("p", "g", 1)
-    original = LocalStore.missing
+    original = LocalRepo.missing
 
     def check_then_sweep(self, entries):
         found = original(self, entries)
@@ -264,7 +264,7 @@ def test_a_sweep_between_the_check_and_the_commit_fails_the_publish_cleanly(loca
         return found
 
     swept = []
-    monkeypatch.setattr(LocalStore, "missing", check_then_sweep)
+    monkeypatch.setattr(LocalRepo, "missing", check_then_sweep)
     with pytest.raises(MissingBlobs) as caught:
         local.publish("p", "x", [entry])
     assert caught.value.missing == [entry["sha256"]] and swept[0]["blobs"] == 1
@@ -398,14 +398,14 @@ def test_a_publish_racing_a_server_sweep_uploads_again(server, env, monkeypatch)
     project = store.project("study")
     data = folder(env, "data", {"a.txt": "garbage soon"})
     project.artifact("garbage").publish(data).delete()
-    original, swept = RemoteStore.publish, []
+    original, swept = Remote.publish, []
 
     def sweep_first(self, *args, **kwargs):
         if not swept:
-            swept.append(RemoteStore(Client(server.url, server.token)).gc(dry_run=False, grace=0))
+            swept.append(Remote(Client(server.url, server.token)).gc(dry_run=False, grace=0))
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(RemoteStore, "publish", sweep_first)
+    monkeypatch.setattr(Remote, "publish", sweep_first)
     version = project.artifact("x").publish(data)
     assert swept[0]["blobs"] == 1 and version.status == "completed"
     assert call(server, "GET", "/files/study/x@v1//a.txt")[2] == b"garbage soon"
@@ -415,7 +415,7 @@ def test_a_publish_racing_a_server_sweep_uploads_again(server, env, monkeypatch)
 def test_publishes_racing_server_sweeps_end_complete_and_downloadable(server, env, tmp_path):
     use_remote(env, server)
     store = cairn.connect()
-    owner = RemoteStore(Client(server.url, server.token))
+    owner = Remote(Client(server.url, server.token))
     stop, errors, sweeps = threading.Event(), [], [0]
 
     def sweeper():
@@ -529,7 +529,7 @@ def test_cli_gc_on_a_served_root_runs_beside_the_server(server, capsys):
 def test_the_server_collects_garbage_on_a_schedule(tmp_path):
     from cairn.server.app import gc_schedule
 
-    store = LocalStore(tmp_path / "root")
+    store = LocalRepo(tmp_path / "root")
     store.create_project("p")
     publish(store, "p", "x", "one")
     store.delete_version("p", "x", 1)
