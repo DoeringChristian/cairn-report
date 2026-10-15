@@ -68,6 +68,15 @@ def make_run(project: Path, status: str = "completed") -> Path:
     return run
 
 
+@pytest.fixture(autouse=True)
+def isolated_roots(tmp_path, monkeypatch):
+    """Every test gets its own replica state root (and no inherited root overrides)."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.delenv("CAIRN_STATE_DIR", raising=False)
+    monkeypatch.delenv("CAIRN_CACHE_DIR", raising=False)
+
+
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     """A project with a local store holding `descent`, two reports, and a run under outputs/."""

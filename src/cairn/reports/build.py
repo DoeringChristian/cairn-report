@@ -50,9 +50,9 @@ from .._version import __version__
 from ..client.open import open_store
 from ..config import Config, load_config
 from ..formats import METRICS, fold_scalars, read_jsonl
-from ..client.offline import resolve_version
-from ..store import StoreError, default_root, refs
-from ..store.cache import materialize_version
+from ..client.offline import local_folder, resolve_version
+from ..client.replica import exact_ref
+from ..store import StoreError, default_root, refs, state_root
 
 PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
@@ -362,7 +362,8 @@ class Guard:
     def __init__(self, build: "Build", line):
         self.build, self.line, self.busy = build, line, False
         self.allowed = build.allowed_roots()
-        self.watched = [real(PROJECT), real(default_root()), *([real(build.store_root)] if build.store_root else [])]
+        self.watched = [real(PROJECT), real(default_root()), real(state_root()),
+                        *([real(build.store_root)] if build.store_root else [])]
         self.environment = environment_roots()
         self.violations: list[str] = []
 
@@ -505,10 +506,10 @@ class Build:
                 raise BuildError(f"{where}: {error}") from error
             if ref.path:
                 raise BuildError(f"{where}: {text!r} names a file; an input is a whole artifact version (use {name}/<file> in the report)")
-            try:  # a store server that does not answer: exact versions from the cache, aliases by their last resolution
+            try:  # through the replica: this machine's pending versions; with the server down, the cache and last answers
                 project, artifact, version = resolve_version(store, ref)
-                exact = refs.exact(project, artifact, version["version"])
-                folder = materialize_version(store, project, artifact, version, default_root())
+                exact = exact_ref(project, artifact, version)
+                folder = local_folder(store, project, artifact, version)
             except StoreError as error:
                 raise BuildError(f"{where}: {error}") from error
             self.inputs[name] = {"requested": str(text), "resolved": exact, "files": len(version["files"]), "path": folder}

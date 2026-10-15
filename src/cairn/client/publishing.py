@@ -8,9 +8,12 @@ changing (a burst of writes goes out as one sync). A store that errors only warn
 the final sync must succeed. The version completes when the command exits 0, or when watching is
 stopped without a command, and fails otherwise, so `latest` never moves to a broken run.
 
-On a store server both go through the outbox (outbox.py): a running version lives in the outbox
-first and is created on the server (under its uid) as soon as the server answers, so a job starts
-and finishes while the server is down; its completion or failure is queued like any publish.
+On a store server both go through the local replica (replica.py, sync.py): a running version is a
+state record first (sync `running`) and is created on the server (under its uid) as soon as the server
+answers, so a job starts and finishes while the server is down; its completion or failure turns it
+pending and is sent like any publish. While it runs, a heartbeat thread rewrites its `heartbeat`
+(time, host, pid) every few seconds; a flusher on any host fails the version once the heartbeat is
+older than `[store] heartbeat_timeout`.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -65,7 +69,8 @@ def publish(name: str, folder: Path | str, *, metadata: dict | None = None, alia
 
     A symlinked folder is followed (the label defaults to the resolved folder's name). When nothing
     changed since the latest version, no version is created and its number is returned. None means the
-    store server did not answer: the version waits in the outbox (`cairn status`) and is uploaded later.
+    store server did not answer: the version is pending in the local replica (`cairn status`), usable here
+    by its uid, and uploaded later.
     """
     from .objects import Store
 
@@ -102,11 +107,13 @@ class Publication:
         self.queued = False  # the server did not answer at the last attempt
         self._sent: dict[str, tuple] = {}
         self._entry: dict | None = None
-        self._outbox = None
+        self._replica = None
+        self._beating: threading.Event | None = None
         if isinstance(self.store, RemoteStore):
-            from .outbox import Outbox
+            from .replica import heartbeat_timeout
+            from .sync import Replica
 
-            self._outbox = Outbox(self.store)
+            self._replica = Replica(self.store, heartbeat_timeout(self.config))
 
     @property
     def source(self) -> dict:
@@ -118,9 +125,10 @@ class Publication:
         return refs.exact(self.project, self.name, self.version) if self.version is not None else f"{self.project}:{self.name}@{self.uid}"
 
     def _push(self) -> bool:
-        """Send the outbox entry; False (and queued) when the server does not answer."""
+        """Send the record; False (and `queued`) when the server does not answer. Once it is no longer running,
+        other flushers may send it too, so it is claimed first."""
         try:
-            done = self._outbox.send(self._entry)
+            done = self._replica.send(self._entry, claim=self._entry["sync"] != "running")
         except Unreachable:
             self.queued = True
             return False
@@ -129,12 +137,44 @@ class Publication:
         self.queued = False
         return done
 
+    def _save(self) -> None:
+        """Save the record, unless a flusher failed it meanwhile (its heartbeat expired): then this job lost it."""
+        from . import replica
+
+        current = replica.load(self.uid)
+        if current is not None and current["status"] == "failed" and self._entry["status"] != "failed":
+            self._stop_beating()
+            raise StoreError(f"{self.ref} was failed by another flusher ({current.get('error')}); publish the folder again")
+        self._replica.save(self._entry)
+        if self._entry["sync"] == "running":
+            replica.beat(self.uid)
+
+    def _start_beating(self) -> None:
+        """A daemon thread that rewrites the heartbeat while the version runs (it stops with the process)."""
+        from . import replica
+
+        stop = self._beating = threading.Event()
+        every = max(0.05, min(60.0, self._replica.timeout / 5))
+        uid = self.uid
+
+        def loop():
+            while not stop.wait(every):
+                replica.beat(uid)
+
+        threading.Thread(target=loop, name=f"cairn-heartbeat {uid}", daemon=True).start()
+
+    def _stop_beating(self) -> None:
+        if self._beating is not None:
+            self._beating.set()
+            self._beating = None
+
     def start(self) -> int | None:
-        if self._outbox is not None:
+        if self._replica is not None:
             if self._entry is None:
-                self._entry = self._outbox.add("running", self.project, self.name, label=self.label, metadata=self.metadata,
-                                               source=self.source)
+                self._entry = self._replica.add("running", self.project, self.name, label=self.label, metadata=self.metadata,
+                                                source=self.source)
                 self.uid = self._entry["uid"]
+                self._start_beating()
                 self._push()
             return self.version
         if self.version is None:
@@ -146,20 +186,20 @@ class Publication:
     def sync(self) -> int:
         """Add the files that are new or changed since the last sync; returns how many."""
         self.start()
-        if self._outbox is not None:
-            from .outbox import stage
+        if self._replica is not None:
+            from .sync import restage, stage
 
-            entries, staged = stage(self.local, self.config, self.cache)
+            entries, sources = stage(self.local, self.config, self.cache)
         else:
             entries = stage_local(self.store, self.local, self.config, self.cache)
         fresh = [entry for entry in entries if self._sent.get(entry["path"]) != (entry.get("sha256"), entry.get("link"))]
         self._sent.update({entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in fresh})
-        if self._outbox is not None:
+        if self._replica is not None:
             files = {item["path"]: item for item in self._entry["files"]}
             files.update({entry["path"]: entry for entry in fresh})
             self._entry["files"] = sorted(files.values(), key=lambda item: item["path"])
-            self._entry["staged"] = sorted({*self._entry["staged"], *staged})
-            self._outbox.save(self._entry)
+            self._save()
+            restage(entries, sources, self.cache)
             self._push()
         elif fresh:
             self.store.add_files(self.project, self.name, self.version, fresh)
@@ -167,14 +207,15 @@ class Publication:
 
     def complete(self) -> int | None:
         """Sync a last time, freeze the version, move `latest`, and apply the aliases. On a store server that does
-        not answer, the completion is queued (`queued` is True) and the number is None until it is sent."""
+        not answer, the completed version is pending (`queued` is True) and the number is None until it is sent."""
         self.sync()
         merged = [*read_inputs(self.local), *(str(item) for item in self.inputs or [])]
-        if self._outbox is not None:
-            self._entry.update(state="completed", inputs=merged, aliases=list(self.aliases))
-            self._outbox.save(self._entry)
+        if self._replica is not None:
+            self._entry.update(sync="pending", status="completed", inputs=merged, aliases=list(self.aliases))
+            self._save()
+            self._stop_beating()
             if not self._push():
-                from .outbox import start_uploader
+                from .sync import start_uploader
 
                 start_uploader(self.store)
             return self.version
@@ -184,12 +225,13 @@ class Publication:
         return self.version
 
     def fail(self) -> None:
-        if self._outbox is not None:
+        if self._replica is not None:
             if self._entry is not None:
-                self._entry["state"] = "failed"
-                self._outbox.save(self._entry)
+                self._entry.update(sync="pending", status="failed")
+                self._save()
+                self._stop_beating()
                 if not self._push():
-                    from .outbox import start_uploader
+                    from .sync import start_uploader
 
                     start_uploader(self.store)
             return
@@ -231,12 +273,12 @@ def publish_folder(config: Config, folder: Path, name: str, label: str | None, a
     store = open_store(config)
     try:
         before = max((v["version"] for v in versions_of(store, name)), default=0)
-    except StoreError:  # also a server that does not answer: the version is queued below
+    except StoreError:  # also a server that does not answer: the version stays pending below
         before = 0
     number = publish(name, folder, metadata=meta, aliases=aliases, label=label, store=store, config=config)
     target = refs.parse(name)
     if number is None:
-        return print(f"queued {target.name} in the outbox; `cairn status` lists it, `cairn sync` sends it", flush=True)
+        return print(f"pending {target.name}: the store does not answer; `cairn status` lists it, `cairn sync` sends it", flush=True)
     if number <= before:
         print(f"{target.name}@v{number} unchanged", flush=True)
     else:
@@ -289,7 +331,7 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             print(f"warning: could not start the version ({error}); retrying", file=sys.stderr, flush=True)
             time.sleep(1)
     if pub.version is None:
-        print(f"publishing {folder} as {pub.name}@{pub.uid} (running, in the outbox: the store does not answer yet) every {interval:g} s",
+        print(f"publishing {folder} as {pub.name}@{pub.uid} (running, pending: the store does not answer yet) every {interval:g} s",
               flush=True)
     else:
         print(f"publishing {folder} as {pub.name}@v{pub.version} (running) every {interval:g} s", flush=True)
@@ -307,7 +349,7 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             added = pub.sync()
             synced, last, failures = current, time.monotonic(), 0
             if added:
-                where = f"{pub.name}@v{pub.version}" if pub.version is not None else f"{pub.name}@{pub.uid} (outbox)"
+                where = f"{pub.name}@v{pub.version}" if pub.version is not None else f"{pub.name}@{pub.uid} (pending)"
                 print(f"synced {added} files to {where}", flush=True)
             return True
         except (StoreError, OSError) as error:
@@ -347,7 +389,7 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             else:
                 number = pub.complete()
                 if number is None or pub.queued:
-                    print(f"queued {pub.name}@{pub.uid} as completed: the store does not answer; it is uploaded when it does"
+                    print(f"pending {pub.name}@{pub.uid} (completed): the store does not answer; it is uploaded when it does"
                           " (`cairn status` lists it, `cairn sync` sends it)", flush=True)
                 else:
                     state = pub.store.resolve(refs.exact(pub.project, pub.name, number))[2]

@@ -67,7 +67,7 @@ def test_object_api_end_to_end(configured, env, monkeypatch):
     with pytest.raises(cairn.NotFound):
         v1.open("nope.txt")
     path = v1.pull()
-    assert path.name == v1.uid and (path / "a.txt").read_text() == "one"
+    assert path.parent.name == v1.uid and path.name == "files" and (path / "a.txt").read_text() == "one"
     assert [json.loads(line)["ref"] for line in inputs.read_text().splitlines()] == [
         "study:datasets/crops@v1", "study:datasets/crops@v2", "study:datasets/crops@v1"]
 
@@ -145,6 +145,6 @@ def test_cli_projects_artifacts_versions_show(configured, env, capsys):
     assert "consumers    study:models/fit@v1" in out and "aliases      latest, paper" in out and "  b.txt\t2" in out
     assert "inputs       study:datasets/crops@v1" in run(capsys, "show", "models/fit")
     status = run(capsys, "status")
-    assert ("nothing queued" if configured else "local folder") in status
+    assert ("nothing pending" if configured else "local folder") in status
     sync = run(capsys, "sync")
-    assert ("nothing to sync" if configured else "no outbox") in sync
+    assert ("nothing to sync" if configured else "needs no sync") in sync

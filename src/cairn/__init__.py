@@ -26,12 +26,13 @@ project folder's slug). Every `pull` appends the exact version to `$CAIRN_INPUTS
 along as the version's `inputs`, which is how lineage is recorded without any framework hook.
 
 Every version has a uid (UUIDv7), and `name@<uid>` names it as exactly as `name@v<n>`. Publishing to a
-store server goes through a local outbox, so it works while the server is down (`cairn status`,
-`cairn sync`), and pulls of exact versions, or of aliases by their last known resolution, work from
-the cache (`<cache>` is `$CAIRN_CACHE_DIR`, else `~/.cache/cairn`).
+store server goes through a local replica, so it works while the server is down: the version is pending
+in the durable state root (`$CAIRN_STATE_DIR`, else `~/.local/state/cairn`), usable at once by its uid,
+and sent later (`cairn status`, `cairn sync`). Pulls of exact versions, or of aliases by their last known
+resolution, work from the throwaway cache root (`$CAIRN_CACHE_DIR`, else `~/.cache/cairn`).
 
 The parts are packages: `cairn.store` (the core), `cairn.client` (HTTP client, the object API, publishing,
-the outbox, `RemoteStore`), `cairn.server`, `cairn.ui`, `cairn.reports`, and `cairn.runs`; each is
+the replica, `RemoteStore`), `cairn.server`, `cairn.ui`, `cairn.reports`, and `cairn.runs`; each is
 imported only when used.
 """
 
@@ -91,7 +92,7 @@ def alias(ref: str, alias: str, *, store: "Store | LocalStore | RemoteStore | Pa
 
 
 def versions(name: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None) -> list[dict]:
-    """Every version of an artifact (its manifest), oldest first, whatever its status; queued ones last (`pending`)."""
+    """Every version of an artifact (its manifest), oldest first, whatever its status; this machine's pending ones last."""
     return [version.manifest for version in _store(store).artifact(name).versions()]
 
 

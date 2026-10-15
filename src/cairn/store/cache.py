@@ -1,17 +1,21 @@
-"""The local cache: read-only copies of artifact versions, keyed by version uid, shared by every run.
+"""The local replica's two roots, and the cache half of it: read-only copies of versions, keyed by version uid.
 
-    <cache>/versions/<uid>/        one version's files (read-only), with `.cairn-complete` (its manifest, JSON)
-    <cache>/blobs/<aa>/<sha256>    file contents downloaded from a store server, or staged by the outbox
-    <cache>/outbox/, resolved/     the client's offline state (cairn.client.outbox)
+    <cache>/versions/<uid>/manifest.json   the record: {"uid", "sync": "synced", "store", "project", "name",
+                                           "version", "manifest", "accessed"}
+    <cache>/versions/<uid>/files/          the version's files, read-only: what `pull` returns
+    <cache>/blobs/<aa>/<sha256>            file contents downloaded from a store server
+    <state>/...                            versions not on the server yet (cairn.client.replica)
 
-`<cache>` is `$CAIRN_CACHE_DIR`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`; on a cluster,
-point it at node-local scratch. A version's folder is named by its uid, never by project, name, and
-number, so two stores never collide in one cache.
+`<cache>` is throwaway: `$CAIRN_CACHE_DIR`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`; on a
+cluster it may be node-local scratch, and `cairn prune` trims it. `<state>` is durable: `$CAIRN_STATE_DIR`,
+else `$XDG_STATE_HOME/cairn`, else `~/.local/state/cairn`; it holds what only this machine has (pending
+versions and their blobs) and must sit on persistent storage. A version's folder is named by its uid,
+never by project, name, and number, so two stores never collide.
 
-The cache may sit on NFS and be filled by many jobs at once, so nothing locks: a folder or a blob is
-written under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place in one
-step. If the target appeared meanwhile, another process won the race and its copy is used; ours is
-discarded. Only renamed folders are ever visible, so a reader never sees a half-written version.
+Either root may sit on NFS and be filled by many jobs at once, so nothing locks: a folder, a blob, or a
+record is written under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place in
+one step. If a version folder appeared meanwhile, another process won the race and its copy is used;
+ours is discarded. Only renamed folders are ever visible, so a reader never sees a half-written version.
 """
 
 from __future__ import annotations
@@ -21,14 +25,19 @@ import os
 import secrets
 import shutil
 import socket
+import time
 from pathlib import Path
 
 from . import refs
+from .blobs import now
 from .errors import NotFound, StoreError
 from .inputs import record_input
 
-MARKER = ".cairn-complete"
 CACHE_ENV = "CAIRN_CACHE_DIR"
+STATE_ENV = "CAIRN_STATE_DIR"
+RECORD = "manifest.json"  # a version folder's record; the folder counts only once it exists
+FILES = "files"
+ACCESS_EVERY = 60.0  # seconds: how stale `accessed` may get before a pull rewrites it
 
 
 def cache_root() -> Path:
@@ -38,14 +47,25 @@ def cache_root() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "cairn"
 
 
+def state_root() -> Path:
+    """`$CAIRN_STATE_DIR`, else `$XDG_STATE_HOME/cairn`, else `~/.local/state/cairn`."""
+    if os.environ.get(STATE_ENV):
+        return Path(os.environ[STATE_ENV]).expanduser()
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "cairn"
+
+
 def default_root() -> Path:
     """The cache root (kept for callers of the earlier name)."""
     return cache_root()
 
 
+def hostname() -> str:
+    return socket.gethostname()
+
+
 def scratch(target: Path) -> Path:
     """A private name beside `target` to build it under: host, pid, and a random suffix (unique on NFS too)."""
-    host = "".join(char if char.isalnum() or char in "-_" else "_" for char in socket.gethostname())[:40] or "host"
+    host = "".join(char if char.isalnum() or char in "-_" else "_" for char in hostname())[:40] or "host"
     return target.with_name(f"{target.name}.tmp-{host}-{os.getpid()}-{secrets.token_hex(4)}")
 
 
@@ -64,19 +84,97 @@ def place(temporary: Path, target: Path) -> bool:
 
 
 def version_folder(root: Path | str, uid: str) -> Path:
+    """`<root>/versions/<uid>`: the record and, under `files/`, the files."""
     return Path(root) / "versions" / uid
 
 
-def read_marker(folder: Path) -> dict | None:
-    """What a materialized folder holds (store, project, name, version, uid, manifest), or None if it is not one."""
+def files_folder(root: Path | str, uid: str) -> Path:
+    """`<root>/versions/<uid>/files`: the read-only folder `pull` returns."""
+    return version_folder(root, uid) / FILES
+
+
+# ------------------------------------------------------------------ records
+
+
+def read_json(path: Path, default=None):
     try:
-        return json.loads((folder / MARKER).read_text() or "{}")
+        return json.loads(Path(path).read_text())
     except (OSError, ValueError):
+        return default
+
+
+def write_json(path: Path, value) -> None:
+    """Write-temp-and-rename: a reader sees the old file or the new one, never a partial one."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = scratch(path)
+    temporary.write_text(json.dumps(value, indent=1))
+    os.replace(temporary, path)
+
+
+def read_record(folder: Path) -> dict | None:
+    """A version folder's record, or None if the folder is not a finished one."""
+    record = read_json(Path(folder) / RECORD)
+    return record if isinstance(record, dict) and record.get("uid") else None
+
+
+def cached(uid: str | None) -> dict | None:
+    """The record of a synced version in the cache (with `manifest`), or None."""
+    if not uid:
         return None
+    folder = version_folder(cache_root(), uid)
+    record = read_record(folder)
+    return record if record and record.get("sync") == "synced" and (folder / FILES).is_dir() else None
+
+
+def touch(folder: Path, record: dict | None = None) -> None:
+    """Note that a cached version was used now (`accessed`, what `cairn prune` goes by); throttled, never fails."""
+    record = record or read_record(folder)
+    if not record or record.get("sync") != "synced":
+        return
+    if time.time() - record.get("accessed_at", 0) < ACCESS_EVERY:
+        return
+    try:
+        write_json(Path(folder) / RECORD, {**record, "accessed": now(), "accessed_at": time.time()})
+    except OSError:
+        pass
+
+
+def link_files(entries: list[dict], target: Path, blob) -> None:
+    """Fill `target` with the entries' files: `blob(entry)` gives each content's path, hard-linked when it can be."""
+    target.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        path = target / entry["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if "link" in entry:
+            os.symlink(entry["link"], path)
+            continue
+        source = blob(entry)
+        try:
+            os.link(source, path)
+        except OSError:
+            shutil.copyfile(source, path)
+        os.chmod(path, 0o444)
+
+
+def install(build: Path, folder: Path) -> None:
+    """Rename a finished version folder into place; a finished folder already there wins (ours is discarded)."""
+    if folder.exists() and read_record(folder) is None:  # not a finished folder (an interrupted one): move it aside
+        aside = scratch(folder)
+        try:
+            os.rename(folder, aside)
+            remove(aside)
+        except OSError:
+            pass
+    try:
+        os.rename(build, folder)
+    except OSError:
+        if read_record(folder) is None:  # we lost the race only if the winner finished
+            raise
 
 
 def materialize_version(store, project: str, name: str, version: dict, cache_root: Path | str) -> Path:
-    """Write a resolved version's files into the cache (once) and return its folder.
+    """Write a resolved version's files into the cache (once) and return its `files/` folder.
 
     Files are hard-linked from the store's blobs (a remote store keeps them in the blob cache) when both
     are on one filesystem, else copied, and made read-only (a hard link shares its blob, so the blob is
@@ -86,47 +184,26 @@ def materialize_version(store, project: str, name: str, version: dict, cache_roo
     if not uid:
         raise StoreError(f"{project}:{name}@v{version['version']} has no uid: the store server is older than this client")
     folder = version_folder(cache_root, uid)
-    if (folder / MARKER).is_file():
-        return folder
+    record = read_record(folder)
+    if record and (folder / FILES).is_dir():
+        touch(folder, record)
+        return folder / FILES
     folder.parent.mkdir(parents=True, exist_ok=True)
     build = scratch(folder)
     try:
         build.mkdir()
-        for entry in version["files"]:
-            target = build / entry["path"]
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if "link" in entry:
-                os.symlink(entry["link"], target)
-                continue
-            source = store.blob_file(project, name, version["version"], entry, cache_root)
-            try:
-                os.link(source, target)
-            except OSError:
-                shutil.copyfile(source, target)
-            os.chmod(target, 0o444)
-        record = {"store": getattr(store, "uid", None), "project": project, "name": name, "version": version["version"],
-                  "uid": uid, "manifest": version}
-        (build / MARKER).write_text(json.dumps(record))
-        os.chmod(build / MARKER, 0o444)
-        if folder.exists() and not (folder / MARKER).is_file():  # not a finished folder: move it out of the way
-            aside = scratch(folder)
-            try:
-                os.rename(folder, aside)
-                _remove(aside)
-            except OSError:
-                pass
-        try:
-            os.rename(build, folder)
-        except OSError:
-            if not (folder / MARKER).is_file():  # we lost the race only if the winner finished
-                raise
+        link_files(version["files"], build / FILES, lambda entry: store.blob_file(project, name, version["version"], entry, cache_root))
+        write_json(build / RECORD, {"uid": uid, "sync": "synced", "store": getattr(store, "uid", None), "project": project,
+                                    "name": name, "version": version["version"], "manifest": version, "accessed": now(),
+                                    "accessed_at": time.time()})
+        install(build, folder)
     finally:
         if build.exists():
-            _remove(build)
-    return folder
+            remove(build)
+    return folder / FILES
 
 
-def _remove(folder: Path) -> None:
+def remove(folder: Path) -> None:
     shutil.rmtree(folder, ignore_errors=True)  # read-only files go too: removing needs a writable folder, not file
 
 
@@ -141,7 +218,7 @@ def inside(folder: Path, ref: refs.Ref, label: str) -> Path:
 
 
 def materialize(store, ref, cache_root: Path | str) -> Path:
-    """Resolve `ref`, materialize its version, and return the folder (or the file after `//`)."""
+    """Resolve `ref`, materialize its version, and return the `files/` folder (or the file after `//`)."""
     ref = refs.parse(ref) if isinstance(ref, str) else ref
     project, name, version = store.resolve(ref)
     folder = materialize_version(store, project, name, version, cache_root)
@@ -152,7 +229,7 @@ def pull(store, ref: str, record: bool = True) -> Path:
     """A read-only local copy of an artifact version (or of the file after `//`) from an open store.
 
     `record=False` leaves the inputs file alone: the report builder records a report's inputs in the
-    report's own manifest instead. (`cairn.pull` adds offline fallbacks for store servers.)
+    report's own manifest instead. (`cairn.pull` adds the replica's pending versions and offline fallbacks.)
     """
     parsed = refs.parse(ref)
     project, name, version = store.resolve(parsed)

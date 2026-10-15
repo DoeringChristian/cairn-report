@@ -2,6 +2,7 @@ import http.client
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -278,7 +279,12 @@ def test_pull_materializes_once_and_never_downloads_a_blob_twice(server, env, tm
     r = use_remote(env, server)
     store.publish("data", folder(env, "d", {"a.txt": "shared", "b.txt": "only in v1"}), store=r)
     store.publish("data", folder(env, "d2", {"a.txt": "shared", "c.txt": "only in v2"}), store=r)
+    from cairn.store.cache import cache_root
+
     before = blob_gets(server)
+    assert (store.pull("data@v1", store=r) / "b.txt").read_text() == "only in v1"  # publishing left it in the cache
+    assert blob_gets(server) == before
+    shutil.rmtree(cache_root())  # the cache is throwaway: pulls download again
     first = store.pull("data@v1", store=r)
     assert blob_gets(server) - before == 2
     assert store.pull("data@v1", store=r) == first and blob_gets(server) - before == 2  # materialized already

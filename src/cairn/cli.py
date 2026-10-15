@@ -1,8 +1,9 @@
 """Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | sync | status |
-server | ui | token | migrate | finalize-study`.
+prune | server | ui | token | migrate | finalize-study`.
 
-Every command that talks to the store first tries to send what the outbox holds for it (quietly, and only
-when something is queued); `sync` does that by hand and says what happened."""
+Every command that talks to the store first tries to send this machine's pending versions for it (quietly,
+and only when something is pending); `sync` does that by hand, says what happened, and refreshes what the
+replica knows about aliases."""
 
 from __future__ import annotations
 
@@ -65,7 +66,6 @@ def cmd_pull(args) -> None:
 
     from .client.offline import pull
     from .client.open import open_store
-    from .store import MARKER
 
     config = with_options(load_config(args.project), args)
     path = pull(open_store(config), args.ref, record=not args.no_record, offline=args.offline)
@@ -78,7 +78,7 @@ def cmd_pull(args) -> None:
         return print(target / path.name)
     if target.exists() and any(target.iterdir()):
         raise SystemExit(f"{target} is not empty")
-    shutil.copytree(path, target, symlinks=True, copy_function=shutil.copyfile, ignore=shutil.ignore_patterns(MARKER), dirs_exist_ok=True)
+    shutil.copytree(path, target, symlinks=True, copy_function=shutil.copyfile, dirs_exist_ok=True)
     print(target)
 
 
@@ -95,8 +95,8 @@ def report(line: str) -> None:
 
 
 def flush_first(args) -> None:
-    """Try to send the outbox of the configured store server before a command (see the module doc)."""
-    from .client.outbox import flush_configured
+    """Try to send this machine's pending versions for the configured store server first (see the module doc)."""
+    from .client.sync import flush_configured
 
     try:
         config = with_options(load_config(args.project), args)
@@ -190,45 +190,81 @@ def cmd_show(args) -> None:
 
 
 def cmd_sync(args) -> None:
-    from .client.outbox import Outbox
-
     store = open_objects(args)
     if not store.remote:
-        return print("a local store has no outbox: publishing writes it directly")
-    result = Outbox(store.backend).flush(report=lambda line: print(line, flush=True))
-    waiting = [entry for entry in result["waiting"] if entry["state"] != "running"]
-    running = [entry for entry in result["waiting"] if entry["state"] == "running"]
+        return print("a local store needs no sync: publishing writes it directly")
+    result = store.sync(report=lambda line: print(line, flush=True))
+    waiting = [record for record in result["waiting"] if record["sync"] != "running"]
+    running = [record for record in result["waiting"] if record["sync"] == "running"]
     if not (result["sent"] or result["rejected"] or result["waiting"]):
-        return print("nothing to sync")
+        print("nothing to sync")
     if waiting:
-        print(f"{len(waiting)} versions still queued: the store at {store.backend.url} does not answer", file=sys.stderr)
+        print(f"{len(waiting)} versions still pending: the store at {store.backend.url} does not answer", file=sys.stderr)
     if running:
         print(f"{len(running)} running versions are sent by the jobs that run them", flush=True)
+    if result.get("refreshed"):
+        print(f"refreshed the aliases of {result['refreshed']} artifacts", flush=True)
     if waiting or result["rejected"]:
         raise SystemExit(1)
 
 
+def _age(seconds: float) -> str:
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds / size:.0f}{unit}"
+    return f"{max(seconds, 0):.0f}s"
+
+
 def cmd_status(args) -> None:
-    from .client.outbox import all_entries
+    import time
+
+    from .client import replica
 
     config = load_config(args.project)
     url = (config.store.get("url") or "").rstrip("/")
-    entries = [entry for entry in all_entries() if args.all or not url or entry.get("url") == url]
     if not url and not args.all:
-        print("the configured store is a local folder: nothing is ever queued (--all shows every server's outbox)")
+        print("the configured store is a local folder: nothing is ever pending (--all shows every server's versions)")
         return
-    for entry in entries:
-        number = f"v{entry['number']}" if entry.get("number") else "-"
-        size = sum(item.get("size", 0) for item in entry.get("files", []))
-        line = (f"{entry['state']}\t{entry['project']}:{entry['name']}\t{number}\t{entry['uid']}\t{entry['created'][:19]}\t"
-                f"{len(entry.get('files', []))} files, {size / 1e6:.1f} MB")
+    uid = replica.known_uid(url) if url else None
+    rows = replica.records() + (replica.synced_records() if args.all else [])
+    rows = [row for row in rows if args.all or replica.belongs(row, url, uid)]
+    now = time.time()
+    for row in sorted(rows, key=lambda row: row["uid"]):
+        if row["sync"] == "synced":
+            manifest = row.get("manifest") or {}
+            number, status, files = row.get("version"), manifest.get("status", "completed"), manifest.get("files", [])
+            host, age = "", now - (row.get("accessed_at") or replica.epoch(row.get("accessed")))
+        else:
+            number, status, files = row.get("number"), row["status"], row.get("files", [])
+            host, age = (row.get("owner") or {}).get("host", ""), now - replica.epoch(row.get("created"))
+        size = sum(item.get("size", 0) for item in files)
+        line = (f"{row['sync']}\t{row['project']}:{row['name']}\t{f'v{number}' if number else '-'}\t{row['uid']}\t{status}\t"
+                f"{host}\t{_age(age)}\t{len(files)} files, {size / 1e6:.1f} MB")
+        if row["sync"] == "running":
+            line += f"\theartbeat {_age(now - replica.last_beat(row))} ago"
         if args.all:
-            line += f"\t{entry['url']}"
-        if entry.get("error"):
-            line += f"\t{entry['error']}"
+            line += f"\t{row.get('url') or row.get('store') or ''}"
+        if row.get("error"):
+            line += f"\t{row['error']}"
         print(line)
-    if not entries:
-        print("nothing queued: every version is on the server")
+    if not rows:
+        print("nothing pending: the server has every version of this machine")
+
+
+def cmd_prune(args) -> None:
+    from .client.prune import describe_size, parse_age, parse_size, prune
+
+    try:
+        older = parse_age(args.older_than) if args.older_than else None
+        size = parse_size(args.max_size) if args.max_size else None
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    if older is None and size is None:
+        older = parse_age("30d")
+    result = prune(older, size, dry_run=args.dry_run)
+    verb = "would remove" if args.dry_run else "removed"
+    print(f"{verb} {len(result['versions'])} versions and {result['blobs']} blobs ({describe_size(result['freed'])}); "
+          f"the cache holds {describe_size(result['size'])}")
 
 
 def cmd_server(args) -> None:
@@ -329,9 +365,9 @@ def main(argv: list[str] | None = None) -> None:
     publish.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
     pull = commands.add_parser("pull", help="materialize an artifact version locally and print its path")
     pull.add_argument("ref", help="[project:]name[@vN|@alias|@label][//file], e.g. datasets/crops@v3")
-    pull.add_argument("--into", type=Path, help="copy it into this folder instead of printing the cache path")
+    pull.add_argument("--into", type=Path, help="copy it into this folder instead of printing the read-only path")
     pull.add_argument("--no-record", action="store_true", help="do not append the version to the inputs file ($CAIRN_INPUTS or .cairn-inputs.jsonl)")
-    pull.add_argument("--offline", action="store_true", help="do not ask the store server: exact versions from the cache, aliases by their last known resolution")
+    pull.add_argument("--offline", action="store_true", help="do not ask the store server: pending versions of this machine, exact versions from the cache, aliases by their last known resolution")
     pull.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
     pull.set_defaults(run=cmd_pull)
 
@@ -359,11 +395,16 @@ def main(argv: list[str] | None = None) -> None:
     show.add_argument("ref", help="[project:]name[@vN|@uid|@alias|@label]")
     show.add_argument("--offline", action="store_true", help="answer from the cache only")
     show.set_defaults(run=cmd_show)
-    sync = commands.add_parser("sync", help="send the versions queued in the outbox to the store server now")
+    sync = commands.add_parser("sync", help="send this machine's pending versions to the store server now, and refresh known aliases")
     sync.set_defaults(run=cmd_sync)
-    status = commands.add_parser("status", help="the versions waiting in the outbox for the store server")
-    status.add_argument("--all", action="store_true", help="every server's outbox, not only the configured one")
+    status = commands.add_parser("status", help="this machine's versions the store server does not have yet: pending, running, rejected")
+    status.add_argument("--all", action="store_true", help="every version in the replica (synced ones in the cache too), of every server")
     status.set_defaults(run=cmd_status)
+    prune = commands.add_parser("prune", help="trim the cache root by last access (pending and running versions are never touched)")
+    prune.add_argument("--older-than", help="remove synced versions not pulled for this long, e.g. 30d, 12h (default: 30d)")
+    prune.add_argument("--max-size", help="then remove the least recently pulled until the cache is under this, e.g. 20G")
+    prune.add_argument("--dry-run", action="store_true", help="only say what would be removed")
+    prune.set_defaults(run=cmd_prune)
     for command in (artifacts, versions, show, sync, status):
         command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
 

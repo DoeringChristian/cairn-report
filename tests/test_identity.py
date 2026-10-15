@@ -161,7 +161,7 @@ def test_cache_is_keyed_by_uid_and_two_stores_never_collide(env, tmp_path, monke
         local.publish("study", "data", put(local, {"a.txt": text}))
         path = cairn.pull("data@v1", store=local, record=False)
         assert (path / "a.txt").read_text() == text
-        assert path == tmp_path / "scratch" / "versions" / local.get_version("study", "data", 1)["uid"]
+        assert path == tmp_path / "scratch" / "versions" / local.get_version("study", "data", 1)["uid"] / "files"
         paths.append(path)
     assert paths[0] != paths[1]
     assert (paths[0] / "a.txt").read_text() == "first store"  # the second pull did not touch the first
