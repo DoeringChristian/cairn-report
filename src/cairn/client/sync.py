@@ -446,9 +446,7 @@ def flush_configured(config, report=None, timeout: float = 10) -> dict | None:
 
     Looks at the data root first, so a command with nothing pending makes no request. Never raises for a
     server that does not answer: what is left stays pending."""
-    from .http import store_url
-
-    url = store_url(config)
+    url = (config.store.get("url") or "").rstrip("/")
     if not url or not has_pending(url):
         return None
     from .open import open_store

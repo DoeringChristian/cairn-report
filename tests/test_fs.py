@@ -95,15 +95,20 @@ def test_the_cli_passes_allow_network_fs(tmp_path, monkeypatch):
     assert seen["allow_network_fs"] is False
 
 
-def test_a_local_store_on_a_network_filesystem_warns_once_when_written(tmp_path, on_nfs, capsys):
+def test_a_local_store_on_a_network_filesystem_refuses_writes(tmp_path, on_nfs):
     store = LocalStore(tmp_path / "shared")
-    store.projects()
-    assert "network filesystem" not in capsys.readouterr().err  # opening and reading are fine
-    store.create_project("p")
-    err = capsys.readouterr().err
-    assert "network filesystem (nfs4)" in err and "cairn server" in err
-    store.create_project("q")
-    LocalStore(tmp_path / "shared").create_project("r")  # once per root and process
-    assert "network filesystem" not in capsys.readouterr().err
-    LocalStore(tmp_path / "quiet", network_warning=False).create_project("p")
-    assert "network filesystem" not in capsys.readouterr().err
+    store.projects()  # opening and reading are fine
+    with pytest.raises(StoreError, match=r"network filesystem \(nfs4\).*\[store\] url.*allow_network_fs"):
+        store.create_project("p")
+    LocalStore(tmp_path / "allowed", allow_network_fs=True).create_project("p")  # one writer, by the user's word
+
+
+def test_allow_network_fs_comes_from_cairn_toml(tmp_path, on_nfs, monkeypatch):
+    from cairn.client.open import open_store
+    from cairn.config import load_config
+
+    (tmp_path / "cairn.toml").write_text('[store]\nproject = "p"\nallow_network_fs = true\n')
+    assert open_store(load_config(tmp_path)).projects()[0]["name"] == "p"
+    (tmp_path / "cairn.toml").write_text('[store]\nproject = "q"\nallow_network_fs = "yes"\n')
+    with pytest.raises(ValueError, match="allow_network_fs must be true or false"):
+        load_config(tmp_path)

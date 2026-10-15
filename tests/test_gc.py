@@ -519,11 +519,11 @@ def test_cli_delete_retention_gc(configured, env, capsys):
         assert "removed 2 blobs" in capsys.readouterr().out
 
 
-def test_cli_gc_on_a_served_root_is_refused(server, capsys):
-    with pytest.raises(SystemExit, match="served by `cairn server`"):
-        main(["gc", str(server.root)])
-    main(["gc", str(server.root), "--dry-run"])  # reading is fine
+def test_cli_gc_on_a_served_root_runs_beside_the_server(server, capsys):
+    main(["gc", str(server.root), "--dry-run"])
     assert "would delete 0 versions" in capsys.readouterr().out
+    main(["gc", str(server.root)])  # gc rechecks inside its transaction, so the server's own writes stay safe
+    assert "deleted 0 versions" in capsys.readouterr().out
 
 
 def test_the_server_collects_garbage_on_a_schedule(tmp_path):

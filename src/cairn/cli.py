@@ -373,10 +373,8 @@ def cmd_status(args) -> None:
 
     from .client import replica
 
-    from .client.http import store_url
-
     config = load_config(args.project)
-    url = store_url(config)
+    url = (config.store.get("url") or "").rstrip("/")
     if not url:
         from .client.open import open_store
 
@@ -438,7 +436,7 @@ def cmd_verify(args) -> None:
         if args.store:  # a store root given: no configuration needed
             if not (args.store / "store.json").is_file():
                 raise SystemExit(f"{args.store} is not a store root (no store.json)")
-            report = LocalStore(args.store, network_warning=False).verify()
+            report = LocalStore(args.store, allow_network_fs=True).verify()  # only reads
         else:
             report = open_objects(args).verify(args.ref, cache=args.cache, store=args.store is not None, all=args.all, repair=args.repair)
     except (StoreError, ValueError) as error:
@@ -482,24 +480,17 @@ def cmd_ui(args) -> None:
     except (SystemExit, ValueError):
         if args.store is None:
             raise
-    from .client.http import connect, served
-    from .store.tokens import init_root, read_token
-    from .ui.backends import RemoteBackend
+    from .client.http import connect
+    from .store.tokens import init_root
 
     login = ""  # the token the one-time login link logs in with
-    if args.store is None and not config.store.get("url"):  # the project's own store folder (.cairn/store)
+    if args.store is None and not config.store.get("url"):  # the project's own store folder (.cairn/store), opened directly
         root = config.store_path
-        info = served(config)
-        if info:  # a `cairn server` serves it: browse through that server
-            print(f"{root} is served by `cairn server` (pid {info['pid']})", flush=True)
-            backend = RemoteBackend(info["url"], allow_http=True, token=read_token(root / "token") if args.no_auth else "")
-            login = read_token(root / "token")
-        else:
-            protect(config.cairn_dir, root)
-            if not args.no_auth and not (root / "token").is_file():
-                print(f"Created store {root} with a new owner token ({init_root(root)}, owner-only)", flush=True)
-            backend = open_backend(None, config, no_auth=args.no_auth, allow_http=args.allow_http)
-            login = getattr(backend, "owner", "")
+        protect(config.cairn_dir, root)
+        if not args.no_auth and not (root / "token").is_file():
+            print(f"Created store {root} with a new owner token ({init_root(root)}, owner-only)", flush=True)
+        backend = open_backend(None, config, no_auth=args.no_auth, allow_http=args.allow_http)
+        login = getattr(backend, "owner", "")
     else:
         backend = open_backend(args.store, config, no_auth=args.no_auth, allow_http=args.allow_http)
         login = getattr(backend, "owner", "")

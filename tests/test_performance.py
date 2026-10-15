@@ -83,7 +83,7 @@ def seed_artifacts(root: Path, project: str, count: int) -> None:
     """`count` artifacts with one completed version each (as the server's owner: the server holds the root)."""
     import io
 
-    store = LocalStore(root, served=True)
+    store = LocalStore(root)
     store.create_project(project)
     data = b"x"
     sha = hashlib.sha256(data).hexdigest()

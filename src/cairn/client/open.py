@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..config import Config, load_config, protect
 from ..store import LocalStore, StoreError, refs
-from .http import connect, project_name, served
+from .http import connect, project_name
 from .replica import heartbeat_timeout
 from .remote import RemoteStore
 
@@ -14,10 +14,11 @@ def open_store(config: Config | None = None) -> LocalStore | RemoteStore:
     config = config or load_config()
     settings = config.store
     project = project_name(config)
-    if settings.get("url") or served(config):  # a running `cairn server` on the local folder takes its writes
+    if settings.get("url"):
         return RemoteStore(connect(config), project)
     protect(config.cairn_dir, config.store_path)
-    store = LocalStore(config.store_path, project, heartbeat_timeout=heartbeat_timeout(config))
+    store = LocalStore(config.store_path, project, allow_network_fs=bool(settings.get("allow_network_fs")),
+                       heartbeat_timeout=heartbeat_timeout(config))
     store.create_project(store.project)
     return store
 

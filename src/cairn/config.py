@@ -22,6 +22,7 @@ something, add a `cairn.toml` at the project root:
     exclude = ["*.pkl"]                # files never published: gitignore-style globs on project paths
     interval = 30                      # seconds between syncs of `cairn publish --watch`
     heartbeat_timeout = 600            # seconds without a heartbeat before a running version counts as dead
+    allow_network_fs = false           # a path on NFS/Lustre/...: only if one process on one host ever writes it
     publish = [{ folder = "runs/descent/latest", name = "descent" }]  # folders `cairn publish` syncs
 
 The project root is the nearest folder, starting at the working directory, that
@@ -178,14 +179,15 @@ def load_config(project: Path | str | None = None) -> Config:
     if "token" in store:
         raise ValueError(f"{source}: never put the store token in the config; use token_file or CAIRN_STORE_TOKEN")
     unknown_store = set(store) - {"path", "url", "project", "token_file", "exclude", "publish", "interval", "allow_http",
-                                     "heartbeat_timeout"}
+                                     "heartbeat_timeout", "allow_network_fs"}
     if unknown_store:
         raise ValueError(f"{source}: unknown [store] keys {sorted(unknown_store)}")
     for key in ("path", "url", "project", "token_file"):
         if not isinstance(store.get(key, ""), str):
             raise ValueError(f"{source}: [store] {key} must be text")
-    if not isinstance(store.get("allow_http", False), bool):
-        raise ValueError(f"{source}: [store] allow_http must be true or false")
+    for key in ("allow_http", "allow_network_fs"):
+        if not isinstance(store.get(key, False), bool):
+            raise ValueError(f"{source}: [store] {key} must be true or false")
     if not isinstance(store.get("exclude", []), list) or not all(isinstance(item, str) for item in store.get("exclude", [])):
         raise ValueError(f"{source}: [store] exclude must be a list of glob patterns")
     if isinstance(store.get("interval", 30), bool) or not isinstance(store.get("interval", 30), (int, float)):

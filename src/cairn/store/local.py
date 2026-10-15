@@ -16,11 +16,11 @@ handed out inside the transaction, so they are unique however many threads and p
 Every version has a `uid` (a UUIDv7, see uids.py), made when it starts or supplied by the client
 that created it (a client's local replica); a uid names one version for good, in the whole store.
 
-One writer process per root: while `cairn server` serves a root it locks `server.lock`, and other
-processes may read the root but not change its metadata (they publish through the server's URL);
-owner commands on the server's host (`cairn token create`) are the exception, and SQLite's locking
-keeps their small writes safe. Without a server, several processes on one host may write a root
-(SQLite serializes them). Never write a root over a network filesystem (fs.py).
+Every process on the root's host opens the root directly, whether or not `cairn server` serves it: scripts,
+commands, `cairn ui`, and the server itself. Any number may write at once: each write is one SQLite transaction
+(serialized by SQLite's lock), caches follow the projects' generations, and gc rechecks inside a transaction
+(gc.py). Other hosts reach a root only through `cairn server`. At most one server serves a root (`server.lock`,
+db.ServerLock). Never write a root over a network filesystem (fs.py).
 
 Deleting a version leaves a tombstone (status `deleted`: number, uid, label, metadata, and inputs kept, the file
 list dropped), so a number or uid is never used again; references to it fail with Deleted, and lineage keeps its
@@ -36,7 +36,6 @@ import os
 import secrets
 import socket
 import sqlite3
-import sys
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -46,7 +45,7 @@ from ..ranges import byte_range
 from . import gc, refs
 from .cache import pid_alive
 from .blobs import CHUNK, BlobStore, BlobWriter, clean_entries, now, resolve_entry
-from .db import RETENTION_TABLE, Database, ServerLock, export
+from .db import RETENTION_TABLE, Database, export
 from .digest import manifest_digest
 from .errors import BadRange, Conflict, Deleted, Forbidden, MissingBlobs, NotFound, Protected, StoreError, Unauthorized  # noqa: F401
 from .fs import network_filesystem
@@ -138,24 +137,19 @@ def _check_tree(entries: list[dict]) -> None:
 def _stamp(state: dict) -> str:
     return state.get("completed") or state.get("created") or ""
 
-
-_WARNED: set[str] = set()
 _SUMMARY = "SELECT name, latest, versions, aliases, updated, metadata FROM artifacts"
 
 
 class LocalStore:
-    def __init__(self, root: Path | str, project: str | None = None, network_warning: bool = True, served: bool = False,
+    def __init__(self, root: Path | str, project: str | None = None, allow_network_fs: bool = False,
                  heartbeat_timeout: float = 600.0):
-        """`project` is the default for references without one. A store root on a network filesystem warns once
-        per process when it is first written (pass `network_warning=False` when the caller has decided).
-        `served`: this process may change the metadata while a server holds the root (the server itself, and
-        owner commands on the server's host; see the module doc). Opening the store fails the running versions whose
-        owner is gone (`reap`; `heartbeat_timeout` seconds without a heartbeat, or its process dead on this host);
+        """`project` is the default for references without one. Writing a root on a network filesystem is refused
+        (StoreError) unless `allow_network_fs`: the caller has made sure one process on one host is its only writer,
+        as `cairn server --allow-network-fs` does. Opening the store fails the running versions whose owner is gone (`reap`; `heartbeat_timeout` seconds without a heartbeat, or its process dead on this host);
         what it failed is in `self.reaped`."""
         self.root, self.project = Path(root), project
         self._blobs = BlobStore(self.root)  # creates blobs/, projects/, tmp/
-        self._network_checked = not network_warning
-        self._served = served
+        self._network_checked = allow_network_fs
         self.uid = store_uid(self.root)
         self._db = Database(self.root, self.uid)
         self._add_digests()
@@ -208,9 +202,9 @@ class LocalStore:
     def reap(self, timeout: float = 600.0) -> list[tuple[str, str]]:
         """Fail the running versions whose owner is gone: no heartbeat for `timeout` seconds, or its process (on
         this host) is dead. Only versions that have a heartbeat (`beat`) are judged. Returns [(ref, reason)].
-        Skipped while a server holds the root and on a read-only root."""
+        Skipped on a read-only root."""
         folder = self.root / "heartbeats"
-        if not folder.is_dir() or (not self._served and ServerLock.held(self.root)):
+        if not folder.is_dir():
             return []
         failed = []
         for path in sorted(folder.iterdir()):
@@ -234,31 +228,25 @@ class LocalStore:
                         self._save(connection, project, name, {**state, "status": "failed", "completed": now(), "error": reason})
                         failed.append((refs.exact(project, name, state["version"]), reason))
             except (StoreError, sqlite3.OperationalError, OSError):
-                continue  # served, read-only, or busy: the next open tries again
+                continue  # read-only or busy: the next open tries again
             self._clear_beat(path.name)
         return failed
 
     def _writing(self) -> None:
-        """Warn once if this root lies on a network filesystem (several writers there can corrupt it, see fs.py)."""
+        """Refuse a root on a network filesystem, where several writers (jobs on several nodes) corrupt it (fs.py)."""
         if self._network_checked:
             return
-        self._network_checked = True
-        key = str(self.root.resolve())
-        if key in _WARNED:
-            return
-        _WARNED.add(key)
         fstype = network_filesystem(self.root)
         if fstype:
-            print(f"warning: the store folder {self.root} is on a network filesystem ({fstype}); writes from several "
-                  "processes or hosts can corrupt it. Run `cairn server` on one machine and point clients at its URL.",
-                  file=sys.stderr, flush=True)
+            raise StoreError(f"the store folder {self.root} is on a network filesystem ({fstype}), where writers on "
+                             "several hosts corrupt it: run `cairn server` on a machine with a local disk and set "
+                             "[store] url (jobs that cannot reach it keep their versions pending for `cairn sync`), "
+                             "or set [store] allow_network_fs = true if one process on one host is its only writer")
+        self._network_checked = True
 
     def _write(self):
-        """A metadata write transaction (db.Database.write); refused while another process serves this root."""
+        """A metadata write transaction (db.Database.write)."""
         self._writing()
-        if not self._served and ServerLock.held(self.root):
-            raise StoreError(f"{self.root} is served by `cairn server`: change it through the server's URL "
-                             "(a second writer beside the server is refused)")
         return self._db.write()
 
     def verify(self):

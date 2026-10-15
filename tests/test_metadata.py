@@ -11,11 +11,12 @@ import threading
 
 import pytest
 
-from cairn import LocalStore, StoreError
+from cairn import LocalStore, RemoteStore, StoreError
 from cairn.cli import main
 from cairn.server import make_server
 from cairn.store.errors import Conflict
-from cairn.store.tokens import create_token, init_root
+from cairn.client.http import Client
+from cairn.store.tokens import init_root, read_token
 from cairn.store.uids import new_uid
 
 
@@ -101,7 +102,7 @@ def test_a_uid_names_one_version_in_the_whole_store(tmp_path):
         store.start_version("p", "y", uid=uid)
 
 
-def test_a_served_root_has_one_writer(tmp_path, capsys):
+def test_processes_on_the_host_write_a_served_root_directly(tmp_path, capsys):
     root = tmp_path / "root"
     init_root(root)
     server = make_server(root, port=0)
@@ -109,15 +110,16 @@ def test_a_served_root_has_one_writer(tmp_path, capsys):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        beside = LocalStore(root)
-        with pytest.raises(StoreError, match="served by `cairn server`"):
-            beside.create_project("p")
-        assert beside.projects() == []  # reading is fine
+        beside = LocalStore(root)  # a script on the server's host: the folder itself, not the server's URL
+        beside.create_project("p")
         with pytest.raises(SystemExit, match="already served"):
             make_server(root, port=0)  # one server per root
-        create_token(root, "p", write=True)  # an owner command on the server's host may still write
-        assert [p["name"] for p in beside.projects()] == ["p"]
+        init_root(tmp_path / "other")
+        with pytest.raises(SystemExit, match="in use"):  # a taken port is an error: clients' [store] url names it
+            make_server(tmp_path / "other", port=server.server_address[1])
+        client = Client(f"http://127.0.0.1:{server.server_address[1]}", read_token(root / "token"))
+        assert [p["name"] for p in RemoteStore(client).projects()] == ["p"]  # the server sees the direct write
     finally:
         server.shutdown()
         server.server_close()
-    LocalStore(root).create_project("q")  # no server: writes are fine again
+    LocalStore(root).create_project("q")
