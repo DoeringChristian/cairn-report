@@ -550,7 +550,7 @@ class UIHandler(BaseHTTPRequestHandler):
         if first == "":
             return self._send(303, b"", headers={"Location": f"/p/{quote(project)}/"})
         if first == "site.json" and len(rest) == 1:
-            return self._json(200, self._site(store, project))
+            return self._json(200, self._site(session, project))
         if first == "_static" and len(rest) == 2:
             return self._static(store, project, rest[1])
         slug, at, selector = first.partition("@")
@@ -596,17 +596,31 @@ class UIHandler(BaseHTTPRequestHandler):
         self._stream(store.read_file(project, name, f"v{number}", f"site/_static/{file}"), entry_type(file), True)
 
     @staticmethod
-    def _site(store, project: str) -> dict:
-        """What a report page's navigation reads (site.json): the project's reports, latest versions."""
-        reports = []
-        for summary in store.summaries(project):
+    def _site(session: Session, project: str) -> dict:
+        """What a report page's navigation reads (site.json): the project's reports, latest versions, and `groups`,
+        the sections of the app's own rail (Projects, then this project's Reports, Artifacts, Runs), as the app lists them."""
+        store, base = session.store, f"/p/{quote(project)}/"
+        reports, artifacts, runs = [], [], []
+        for summary in sorted(store.summaries(project), key=lambda item: item["updated"], reverse=True):
             name = summary["name"]
-            if is_report(name) and summary["latest"]:
-                slug, meta = name.split("/", 1)[1], summary["metadata"]
-                reports.append({"key": slug, "title": meta.get("title") or slug, "subtitle": "", "status": meta.get("status", ""),
-                                "summary": meta.get("summary", ""), "href": f"{slug}/", "updated": summary["updated"]})
+            if is_report(name):
+                if summary["latest"]:
+                    slug, meta = name.split("/", 1)[1], summary["metadata"]
+                    reports.append({"key": slug, "title": meta.get("title") or slug, "subtitle": "", "status": meta.get("status", ""),
+                                    "summary": meta.get("summary", ""), "href": f"{slug}/", "updated": summary["updated"]})
+            elif name.startswith("runs/"):
+                last = f"@v{summary['versions']}" if summary["versions"] else ""
+                runs.append({"title": name[len("runs/"):], "href": f"{base}a/{quote(name)}{last}", "plain": True})
+            else:
+                artifacts.append({"title": name, "href": f"{base}a/{quote(name)}", "plain": True})
         reports.sort(key=lambda item: (item["title"].lower(), item["key"]))
-        return {"title": store.get_project(project)["title"], "reports": reports, "copy_preamble": ""}
+        projects = [{"title": item["title"] or item["name"], "href": f"/p/{quote(item['name'])}/", "plain": True, "current": item["name"] == project}
+                    for item in sorted(store.overviews(), key=lambda item: item["updated"], reverse=True) if can(session.principal, item["name"])]
+        groups = [{"label": "Projects", "items": projects},
+                  {"label": "Reports", "items": [{"key": r["key"], "title": r["title"], "href": f"{base}r/{quote(r['key'])}/"} for r in reports]},
+                  {"label": "Artifacts", "items": artifacts}, {"label": "Runs", "items": runs}]
+        return {"title": store.get_project(project)["title"], "brand": "Cairn", "mark": "C", "reports": reports,
+                "groups": [g for g in groups if g["items"]]}
 
     # ------------------------------------------------------------------ login
 

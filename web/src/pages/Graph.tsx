@@ -145,11 +145,11 @@ export function Graph({ root, project }: { root: string; project: string }) {
         <span className="muted">Inputs on the left, consumers on the right. Click a node to open it, + to expand one more level.</span>
         {hasRuns && (
           <span className="graph-toggle" role="group" aria-label="Runs in the graph">
-            <button className="comment-trigger small" aria-pressed={!dataOnly} onClick={() => setDataOnly(false)}>Show runs</button>
-            <button className="comment-trigger small" aria-pressed={dataOnly} onClick={() => setDataOnly(true)}>Data only</button>
+            <button className="action-button small" aria-pressed={!dataOnly} onClick={() => setDataOnly(false)}>Show runs</button>
+            <button className="action-button small" aria-pressed={dataOnly} onClick={() => setDataOnly(true)}>Data only</button>
           </span>
         )}
-        <button className="comment-trigger" disabled={busy || !anyExpandable} onClick={async () => {
+        <button className="action-button" disabled={busy || !anyExpandable} onClick={async () => {
           setBusy(true);
           try { merge(await api<Lineage>(paths.lineage(root, 3))); } catch (e) { setError((e as Error).message); }
           setBusy(false);

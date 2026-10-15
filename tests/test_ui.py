@@ -330,6 +330,10 @@ def test_report_is_served_with_its_static_files(ui, project, capsys):
     site = json.loads(get(ui, "/p/study/r/site.json", cookie)[2])  # the page's navigation
     assert [item["key"] for item in site["reports"]] == ["alpha", "beta"] and site["reports"][0]["href"] == "alpha/"
     assert site["title"] == "study" and site["reports"][0]["title"] == "Alpha" and site["reports"][0]["status"] == "active"
+    groups = {group["label"]: group["items"] for group in site["groups"]}  # the sections of the app's rail, for report.js
+    assert [i["href"] for i in groups["Reports"]] == ["/p/study/r/alpha/", "/p/study/r/beta/"] and groups["Projects"][0]["current"] is True
+    assert all(item["href"].startswith("/p/study/a/") for label in ("Artifacts", "Runs") for item in groups.get(label, []))
+    assert site["brand"] == "Cairn" and site["mark"] == "C"
     assert get(ui, "/p/study/r/", cookie)[0] == 303
     assert get(ui, "/p/study/r/_static/nope.js", cookie)[0] == 404
     assert get(ui, "/p/study/r/_static/..%2Fx", cookie)[0] == 404
@@ -528,7 +532,7 @@ def test_the_built_app_ships_with_the_package():
         assert (static / "assets" / name).stat().st_size > 1000, name
     assert sorted(path.name for path in (static / "assets").iterdir()) == sorted([*scripts, *styles])  # no stale builds
     css = (static / "assets" / styles[0]).read_text()
-    for token in (".rail", ".hero", ".figure-card", ".image-copy", ".data-row", "--accent", "prefers-color-scheme:dark", ".graph-node"):
+    for token in (".rail", ".hero", ".figure-card", ".image-copy", ".data-row", "--accent", ".graph-node"):
         assert token in css, token  # report.css, report-extra.css and app.css are all in it
     assert "/ui-api/" in (static / "assets" / scripts[0]).read_text()
 

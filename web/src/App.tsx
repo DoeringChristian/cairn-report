@@ -1,66 +1,56 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, NavLink, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { Link, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { api, paths, useApi, type Me, type Project, type Summary } from "./api";
 import { Hero, Loading } from "./components";
 import { ArtifactPage } from "./pages/Artifact";
 import { ProjectPage } from "./pages/Project";
 import { ProjectsPage } from "./pages/Projects";
-import { artifactHref, isReport, isRunName, enc } from "./util";
+import { artifactHref, isReport, isRunName, reportHref } from "./util";
+
+type RailItem = { key: string; title: string; to: string; plain?: boolean; current: boolean };
+
+/** The report sidebar's own markup and classes: a labelled list per section, the current item marked. */
+function RailSection({ label, items }: { label: string; items: RailItem[] }) {
+  if (!items.length) return null;
+  return (
+    <section className="report-list" aria-label={label}>
+      <p className="rail-label">{label} · {items.length}</p>
+      <nav>
+        {items.map(item => {
+          const props = { title: item.title, "aria-current": item.current ? ("page" as const) : undefined };
+          return item.plain
+            ? <Link key={item.key} to={item.to} {...props}><span>{item.title}</span></Link>
+            : <a key={item.key} href={item.to} {...props}><span>{item.title}</span></a>; // report pages are served whole, outside the app
+        })}
+      </nav>
+    </section>
+  );
+}
 
 function Rail() {
   const { pathname } = useLocation();
-  const match = /^\/p\/([^/]+)/.exec(pathname);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { setOpen(false); }, [pathname]);
+  const match = /^\/p\/([^/]+)(?:\/a\/(.+?))?\/?$/.exec(pathname);
   const project = match ? decodeURIComponent(match[1]) : null;
+  const here = match?.[2] ? decodeURIComponent(match[2]).split("@")[0] : null;
   const projects = useApi<Project[]>(pathname === "/login" ? null : paths.projects);
   const detail = useApi<{ project: Project; artifacts: Summary[] }>(project ? paths.project(project) : null);
   const me = useApi<Me>(pathname === "/login" ? null : "me");
   const artifacts = (detail.data?.artifacts ?? []).slice().sort((a, b) => b.updated.localeCompare(a.updated));
-  const reports = artifacts.filter(a => isReport(a.name));
+  const title = (a: Summary) => a.metadata.title || a.name.split("/")[1];
+  const reports = artifacts.filter(a => isReport(a.name) && a.latest).sort((a, b) => title(a).toLowerCase().localeCompare(title(b).toLowerCase()));
   const others = artifacts.filter(a => !isReport(a.name) && !isRunName(a.name));
   const runs = artifacts.filter(a => isRunName(a.name));
+  const projectItems: RailItem[] = (projects.data ?? []).map(p => ({ key: p.name, title: p.title || p.name, to: `/p/${encodeURIComponent(p.name)}/`, plain: true, current: p.name === project }));
   return (
-    <aside className="rail">
-      <Link className="brand" to="/"><span>C</span> Cairn</Link>
-      <div className="rail-scroll">
-        {projects.data && (
-          <section className="report-list" aria-label="Projects">
-            <p className="rail-label">Projects</p>
-            <nav>
-              {projects.data.map(p => (
-                <NavLink key={p.name} to={`/p/${encodeURIComponent(p.name)}/`} end={false} className={p.name === project ? "active-project" : ""} aria-current={p.name === project ? "page" : undefined}>
-                  {p.title || p.name}
-                </NavLink>
-              ))}
-            </nav>
-          </section>
-        )}
-        {project && reports.length > 0 && (
-          <section className="report-list rail-project" aria-label="Reports">
-            <p className="rail-label">Reports</p>
-            <nav>
-              {reports.slice(0, 30).map(a => (
-                <a key={a.name} href={`/p/${encodeURIComponent(project)}/r/${enc(a.name.split("/")[1])}/`}>{a.metadata.title || a.name.split("/")[1]}</a>
-              ))}
-            </nav>
-          </section>
-        )}
-        {project && others.length > 0 && (
-          <section className="report-list rail-project" aria-label="Artifacts">
-            <p className="rail-label">Artifacts</p>
-            <nav>
-              {others.slice(0, 60).map(a => <Link key={a.name} to={artifactHref(project, a.name)}>{a.name}</Link>)}
-            </nav>
-          </section>
-        )}
-        {project && runs.length > 0 && (
-          <section className="report-list rail-project" aria-label="Runs">
-            <p className="rail-label">Runs</p>
-            <nav>
-              {runs.slice(0, 30).map(a => <Link key={a.name} to={artifactHref(project, a.name, a.versions ? `v${a.versions}` : null)}>{a.name.slice("runs/".length)}</Link>)}
-            </nav>
-          </section>
-        )}
-      </div>
+    <aside className={open ? "rail open" : "rail"}>
+      <Link className="brand" to="/"><span>C</span> <span className="site-title">Cairn</span></Link>
+      <button type="button" className="rail-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>Browse</button>
+      <RailSection label="Projects" items={projectItems} />
+      {project && <RailSection label="Reports" items={reports.map(a => ({ key: a.name, title: title(a), to: reportHref(project, a.name), current: false }))} />}
+      {project && <RailSection label="Artifacts" items={others.map(a => ({ key: a.name, title: a.name, to: artifactHref(project, a.name), plain: true, current: a.name === here }))} />}
+      {project && <RailSection label="Runs" items={runs.map(a => ({ key: a.name, title: a.name.slice("runs/".length), to: artifactHref(project, a.name, a.versions ? `v${a.versions}` : null), plain: true, current: a.name === here }))} />}
       <div className="rail-note">
         {me.data?.scope === "project" && <>Token for project <b>{me.data.project}</b><br /></>}
         {me.data?.auth && <a href="/logout">Log out</a>}
