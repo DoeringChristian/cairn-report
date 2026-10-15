@@ -115,7 +115,7 @@ def use(ref: str, *, store: "Repo | LocalRepo | Path | str | None" = None, offli
         raise StoreError(f"{version.ref} is {version.status}: only a completed version can be used")
     from .store import record_input
 
-    record_input(version.ref)
+    record_input(version.ref, version.uid)
     return version
 
 

@@ -272,5 +272,5 @@ def pull(store, ref: str, record: bool = True) -> Path:
     folder = materialize_version(store, project, name, version, store.root)
     path = inside(folder, parsed, refs.exact(project, name, version["version"]))
     if record:
-        record_input(refs.exact(project, name, version["version"]))
+        record_input(refs.exact(project, name, version["version"]), version["uid"])
     return path

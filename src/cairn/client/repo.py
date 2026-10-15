@@ -688,7 +688,7 @@ class SyncedRepo(ProjectRepo):
         exact = exact_ref(project, name, version)
         path = inside(folder, parsed, exact)
         if record:
-            record_input(exact)
+            record_input(exact, version["uid"])
         return path
 
     # ------------------------------------------------------------------ changes to the source of truth
@@ -755,13 +755,15 @@ class SyncedRepo(ProjectRepo):
                 ref = refs.parse(text)
             except ValueError:
                 ref = None
-            if ref is not None and ref.version is not None and ref.project:
+            if ref is not None and ref.exact and ref.project:
                 try:
-                    state = self.copies.get_version(ref.project, ref.name, ref.version)
+                    state = self.copies.get_version(ref.project, ref.name, ref.version if ref.version is not None else ref.uid)
                 except (StoreError, ValueError):
                     state = None
                 if state is not None and not state.get("origin"):
                     text = str(Ref(ref.project, ref.name, state["uid"]))
+                elif state is not None and ref.uid and isinstance(state.get("version"), int):  # a copy: the remote's number
+                    text = refs.exact(ref.project, ref.name, state["version"])
             if text not in found:
                 found.append(text)
         return found

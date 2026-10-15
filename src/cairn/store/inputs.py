@@ -14,7 +14,9 @@ import os
 from pathlib import Path
 
 from ..formats import read_jsonl
+from . import refs
 from .blobs import now
+from .uids import UID
 
 INPUTS_FILE = ".cairn-inputs.jsonl"
 INPUTS_ENV = "CAIRN_INPUTS"
@@ -22,21 +24,35 @@ INPUTS_ENV = "CAIRN_INPUTS"
 _SINKS: list[Path] = []  # further inputs files every pull of this process is recorded in
 
 
-def _append(target: Path, exact: str) -> None:
+def _append(target: Path, exact: str, uid: str | None) -> None:
+    row = {"ref": exact, **({"uid": uid} if uid else {}), "time": now()}
     with Path(target).open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"ref": exact, "time": now()}) + "\n")
+        handle.write(json.dumps(row) + "\n")
 
 
-def record_input(exact: str) -> None:
-    """Append one exact reference to the inputs file the environment names (else the working directory's), and to
-    every sink (each file once)."""
+def record_input(exact: str, uid: str | None = None) -> None:
+    """Append one exact reference (and the version's uid) to the inputs file the environment names (else the working
+    directory's), and to every sink (each file once)."""
     target = Path(os.environ.get(INPUTS_ENV) or INPUTS_FILE)
     done = {os.path.abspath(target)}
-    _append(target, exact)
+    _append(target, exact, uid)
     for sink in list(_SINKS):
         if os.path.abspath(sink) not in done:
             done.add(os.path.abspath(sink))
-            _append(sink, exact)
+            _append(sink, exact, uid)
+
+
+def _reference(row: dict) -> str | None:
+    """What a recorded row names: the version by its uid when the row has one. A number this repo gave its own version
+    changes when a remote added later numbers it (client/sync.py adopts it); its uid never does."""
+    ref, uid = row.get("ref"), row.get("uid")
+    if not ref or not isinstance(uid, str) or not UID.fullmatch(uid):
+        return ref or None
+    try:
+        parsed = refs.parse(ref)
+    except ValueError:
+        return ref
+    return str(refs.Ref(parsed.project, parsed.name, uid, parsed.path)) if parsed.project else ref
 
 
 def open_sink(path: Path) -> None:
@@ -56,8 +72,9 @@ def recorded(path: Path) -> list[str]:
     """The distinct references one inputs file holds, in order."""
     found: list[str] = []
     for row in read_jsonl(path):
-        if row.get("ref") and row["ref"] not in found:
-            found.append(row["ref"])
+        ref = _reference(row)
+        if ref and ref not in found:
+            found.append(ref)
     return found
 
 
@@ -69,8 +86,9 @@ def read_inputs(folder: Path) -> list[str]:
         folders.sort()
         if INPUTS_FILE in files:
             for row in read_jsonl(Path(directory) / INPUTS_FILE):
-                if row.get("ref") and row["ref"] not in found:
-                    found.append(row["ref"])
+                ref = _reference(row)
+                if ref and ref not in found:
+                    found.append(ref)
     return found
 
 

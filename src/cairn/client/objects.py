@@ -504,7 +504,7 @@ class Version:
 
     def _record(self, record: bool) -> None:
         if record and (self.number is not None or self.pending):
-            record_input(self.ref)
+            record_input(self.ref, self.uid)
 
     def pull(self, *, record: bool = True) -> Path:
         """The whole version, read-only (`<repo>/versions/<uid>/files/`); recorded as an input."""
