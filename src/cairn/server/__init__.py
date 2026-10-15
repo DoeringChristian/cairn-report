@@ -34,7 +34,7 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
 
 References in the API are `project:name[@selector]` (the project is required: the server has no default).
 A client may supply a version's `uid` (UUIDv7) when it creates it: sending the same version again is
-answered with the version it made (an outbox can retry safely), and a known uid with different content
+answered with the version it made (a client's local replica can retry safely), and a known uid with different content
 is refused with 409.
 
 Tokens are bearer tokens only: there are no cookies and no pages. Everything stored is append-only and the

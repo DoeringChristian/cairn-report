@@ -13,7 +13,7 @@ files, completion, `latest`, aliases, consumers) commits whole or not at all, an
 handed out inside the transaction, so they are unique however many threads and processes publish.
 
 Every version has a `uid` (a UUIDv7, see uids.py), made when it starts or supplied by the client
-that created it (an outbox); a uid names one version for good, in the whole store. A root written
+that created it (a client's local replica); a uid names one version for good, in the whole store. A root written
 before the database existed (JSON Lines files) is imported when it is first opened (db.import_legacy);
 versions stored without a uid get their deterministic one (`uids.legacy`), and the root gets its
 store.json.

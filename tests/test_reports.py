@@ -270,10 +270,10 @@ def test_inputs_exposes_paths_by_attribute_and_item(project):
     alpha.write_text(alpha.read_text() + (
         "\n```python exec hide\nsteps = read_json(inputs.descent / 'data' / 'summary.json')['steps']\n"
         "assert inputs['descent'] == inputs.descent and 'descent' in inputs\n"
-        "metric('Steps', steps)\nmetric('Folder', inputs.descent.name)\n```\n"))
+        "metric('Steps', steps)\nmetric('Folder', inputs.descent.parent.name)\n```\n"))
     build_all(load_config(project))
     narrative = (built(project) / "alpha" / "narrative.html").read_text()
-    uid = store.versions("descent")[0]["uid"]  # the cache keys a version's folder by its uid
+    uid = store.versions("descent")[0]["uid"]  # the cache keys a version's folder by its uid (files are in files/)
     assert "<strong>3</strong>" in narrative and f"<strong>{uid}</strong>" in narrative
 
 

@@ -22,6 +22,7 @@ something, add a `cairn.toml` at the project root:
     allow_http = false                 # send the token over plain HTTP to a non-local server (default: refuse)
     exclude = ["*.pkl"]                # files never published: gitignore-style globs on project paths
     interval = 30                      # seconds between syncs of `cairn publish --watch`
+    heartbeat_timeout = 600            # seconds without a heartbeat before a running version counts as dead
     publish = [{ folder = "runs/descent/latest", name = "descent" }]  # folders `cairn publish` syncs
 
 The project root is the nearest folder, starting at the working directory, that
@@ -105,7 +106,8 @@ def load_config(project: Path | str | None = None) -> Config:
     store = data.get("store", {})
     if "token" in store:
         raise ValueError(f"{source}: never put the store token in the config; use token_file or CAIRN_STORE_TOKEN")
-    unknown_store = set(store) - {"path", "url", "project", "token_file", "exclude", "publish", "interval", "allow_http"}
+    unknown_store = set(store) - {"path", "url", "project", "token_file", "exclude", "publish", "interval", "allow_http",
+                                     "heartbeat_timeout"}
     if unknown_store:
         raise ValueError(f"{source}: unknown [store] keys {sorted(unknown_store)}")
     for key in ("path", "url", "project", "token_file"):
@@ -117,6 +119,9 @@ def load_config(project: Path | str | None = None) -> Config:
         raise ValueError(f"{source}: [store] exclude must be a list of glob patterns")
     if isinstance(store.get("interval", 30), bool) or not isinstance(store.get("interval", 30), (int, float)):
         raise ValueError(f"{source}: [store] interval must be a number of seconds")
+    timeout = store.get("heartbeat_timeout", 600)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise ValueError(f"{source}: [store] heartbeat_timeout must be a positive number of seconds")
     mappings = store.get("publish", [])
     if not isinstance(mappings, list) or not all(isinstance(item, dict) and set(item) == {"folder", "name"}
                                                  and all(isinstance(value, str) for value in item.values()) for item in mappings):

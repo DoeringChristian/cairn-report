@@ -4,9 +4,9 @@ It offers what `cairn` and `Publication` use: projects, blob upload, versions, a
 `resolve`, `lineage`, and `blob_file` for the pull cache. HTTP, the token, and the HTTPS rule are
 `http.Client`'s. Artifact names travel percent-encoded in API paths (`datasets%2Fcrops`).
 
-A server that does not answer raises `Unreachable` (a StoreError), which the outbox and offline pulls
-catch. `uid` is the server's store uid (`GET /api/v2/store`), remembered in the cache so it is known
-offline too.
+A server that does not answer raises `Unreachable` (a StoreError), which publishing (the replica's
+pending versions) and offline pulls catch. `uid` is the server's store uid (`GET /api/v2/store`),
+remembered in the replica's data root so it is known offline too.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from ..store.errors import BadRange, Conflict, Forbidden, NotFound, StoreError, 
 from ..store.local import FileRead
 from ..store.refs import Ref
 from ..store.uids import UID
-from . import state
+from . import replica
 from .http import BATCH, Client, ClientError, upload_missing
 
 
@@ -43,15 +43,15 @@ class RemoteStore:
         if self._uid is None:
             try:
                 self._uid = self._call("GET", "/api/v2/store")["uid"]
-                state.remember_uid(self.url, self._uid)
+                replica.remember_uid(self.url, self._uid)
             except Unreachable:
-                return state.known_uid(self.url)
+                return replica.known_uid(self.url)
         return self._uid
 
     @property
     def key(self) -> str:
-        """The folder name for this server's outbox and hints: its uid if ever learned, else one made from its URL."""
-        return self._uid or state.known_uid(self.url) or state.store_key(self.url)
+        """The name of this server's store file in the replica: its uid if ever learned, else one made from its URL."""
+        return self._uid or replica.known_uid(self.url) or replica.store_key(self.url)
 
     def _call(self, method: str, path: str, value=None, expect=(200,)):
         try:

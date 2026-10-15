@@ -37,10 +37,11 @@ src/cairn/
 ├── formats.py    readers for the logger's JSON Lines files (leaf)
 ├── _version.py   __version__ (leaf)
 ├── migrate.py    the one-off conversion of an old hub (knows the old report layout)
-├── store/        core, no HTTP: refs, uids (UUIDv7), local (LocalStore), blobs, tokens, cache (pull, uid-keyed, NFS-safe), errors, inputs
+├── store/        core, no HTTP: refs, uids (UUIDv7), local (LocalStore), blobs, tokens, cache (the two roots, pull, uid-keyed, NFS-safe), errors, inputs
 ├── client/       http (Client, scan/hash/upload), remote (RemoteStore), objects (connect, Store, Project, Artifact, Version),
-│                 publishing (publish, Publication, --watch), outbox (offline publishing), offline (offline resolution),
-│                 state (cached store uids and resolutions), open (open_store)
+│                 publishing (publish, Publication, --watch), replica (the local replica: data and cache roots,
+│                 records, claims, heartbeats, store files, migration), sync (sending pending versions), prune,
+│                 offline (resolution through the replica), open (open_store)
 ├── server/       app (handler + routes), auth, files (/files, Range, ETag), spawn (UI child); exports make_server, serve_store
 ├── ui/           server (UI HTTP server + /ui-api), sessions, backends (Local/RemoteBackend), static/ (built app)
 ├── reports/      build, serve, share, publishing (report -> artifact), template/
@@ -107,11 +108,11 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
      `cairn versions <name>`, `cairn show <ref>` (metadata, files, lineage). They work the same way
      against local and remote stores.
    - **Offline publishing:**
-     - every publish commits first to a local outbox (`~/.cache/cairn/outbox/`): manifest, blob
-       references, inputs;
+     - every publish commits first to the local replica (pending, in the data root
+       `~/.local/share/cairn/`, or `$CAIRN_DATA_DIR`): manifest, blob references, inputs;
      - a background uploader sends it when the server answers; the server assigns the version
        number at upload, and until then the version is pending;
-     - `cairn sync` flushes the outbox by hand, and `cairn status` shows what is pending;
+     - `cairn sync` sends the pending versions by hand, and `cairn status` shows what is pending;
      - `--watch` jobs start and finish even while the server is down: the running version is
        created on the server when it can be reached, and completion or failure is queued;
      - a file that changes before upload is re-hashed, so a version is uploaded exactly as
@@ -119,7 +120,7 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
    - *Done (on `artifact-store`):* the ref syntax for uids is a format check, not a prefix: a selector in
      the canonical lowercase UUIDv7 form is a uid, and aliases and labels may not take that form.
    - **Version identity:**
-     - every version gets a UID (ULID/UUIDv7) where it is created, on the client or in the outbox,
+     - every version gets a UID (ULID/UUIDv7) where it is created, on the client or in the store,
        and the server keeps it; every store gets a store UID;
      - `v<n>` stays the readable name; references also accept the UID (`name@01JA…`);
      - the pull cache is keyed by version UID (`cache/versions/<uid>/`), never by name and
@@ -134,6 +135,22 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
      - an alias falls back to its last known resolution, with a warning naming the version, and
        records that version as the input;
      - `--offline` forces the fallback.
+   - **The local replica** (owner-approved, replaces the outbox; on branch `replica`):
+     - two roots: `CAIRN_DATA_DIR` (durable, default `~/.local/share/cairn`; on a cluster point it at a
+       persistent project filesystem, since home quotas are small) holds pending and running versions and
+       their blobs, like W&B's offline runs; `CAIRN_STATE_DIR` is read for one release with a warning and
+       old `~/.local/state/cairn` records are moved over on first use; `cairn sync --data-dir PATH` flushes
+       a given data root from a login node; `CAIRN_CACHE_DIR` (throwaway, may be node-local scratch) holds synced
+       versions and downloads; pending data never lives only in the cache;
+     - one record per version, `versions/<uid>/manifest.json` (sync `synced | pending | rejected |
+       running`), files under `versions/<uid>/files/` (what `pull` returns); `stores/<store-uid>.json`
+       keeps each server's URL, last contact, and last known aliases; the old outbox layout is migrated;
+     - pending versions are usable at once (`pull`, `open`, report inputs; by uid, alias, label,
+       latest), lineage records `project:name@<uid>` until the server numbers it;
+     - running versions write a heartbeat; any flusher fails one whose heartbeat is older than
+       `[store] heartbeat_timeout` (600 s); flushers claim with `.flushing-<host>-<pid>`, no locks;
+     - `cairn sync` (also refreshes aliases), `cairn status [--all]`, `cairn prune`; a README section
+       on clusters (Slurm).
 5. **Performance.**
    - Measure first: a benchmark script for concurrent small publishes, large-file pull throughput,
      Range requests, and the UI's metadata queries.
