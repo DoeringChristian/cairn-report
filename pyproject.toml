@@ -20,7 +20,7 @@ dependencies = [
 cairn = "cairn.cli:main"
 
 [project.urls]
-Repository = "https://github.com/DoeringChristian/cairn-report"
+Repository = "https://github.com/DoeringChristian/cairn"
 
 [project.optional-dependencies]
 # Placeholders for the parts that need nothing extra yet: the server and the UI use only the standard

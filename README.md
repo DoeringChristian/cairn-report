@@ -22,7 +22,7 @@ counts as evidence is up to the project.
 ## Quick start
 
 ```bash
-pip install git+https://github.com/DoeringChristian/cairn-report.git   # see Install for extras
+pip install git+https://github.com/DoeringChristian/cairn.git   # see Install for extras
 cd my-project                       # any folder with a pixi.toml, pyproject.toml or cairn.toml
 cairn publish runs/fit/latest fit   # a folder becomes version v1 of the artifact "fit" in .cairn/store
 cairn pull fit@latest               # prints the path of a read-only local copy
@@ -94,14 +94,14 @@ In a pixi project:
 graphviz = "*"   # only needed for Graphviz diagram fences
 
 [pypi-dependencies]
-cairn = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.13.0" }
+cairn = { git = "https://github.com/DoeringChristian/cairn.git", tag = "v0.13.0" }
 
 [tasks]
 report-build = "cairn build"
 report-serve = "cairn serve --host 127.0.0.1 --port 8000"
 ```
 
-With uv or pip: `uv add git+https://github.com/DoeringChristian/cairn-report.git`.
+With uv or pip: `uv add git+https://github.com/DoeringChristian/cairn.git`.
 The base install is light (`import cairn` loads neither the server, the UI, matplotlib, plotly, nor
 hydra). Extras: `cairn[server]` (`cairn server`: Starlette and uvicorn with uvloop and httptools),
 `cairn[video]` (`log.video` from frames), `cairn[hydra]` (run bookkeeping for Hydra projects), and
@@ -109,8 +109,8 @@ hydra). Extras: `cairn[server]` (`cairn server`: Starlette and uvicorn with uvlo
 the package). On the machine that serves a store:
 
 ```bash
-pip install "cairn[server] @ git+https://github.com/DoeringChristian/cairn-report.git"
-# or: uv add "cairn[server] @ git+https://github.com/DoeringChristian/cairn-report.git"
+pip install "cairn[server] @ git+https://github.com/DoeringChristian/cairn.git"
+# or: uv add "cairn[server] @ git+https://github.com/DoeringChristian/cairn.git"
 ```
 
 Without the extra, `cairn server` stops with a message saying to install it.

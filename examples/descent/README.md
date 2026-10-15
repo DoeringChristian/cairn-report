@@ -13,7 +13,7 @@ descent/
 └── run_example.py                 every step below, in Python
 ```
 
-Run it with Cairn installed (`pip install "cairn[ui] @ git+https://github.com/DoeringChristian/cairn-report.git"`
+Run it with Cairn installed (`pip install "cairn[ui] @ git+https://github.com/DoeringChristian/cairn.git"`
 plus matplotlib):
 
 ```bash
