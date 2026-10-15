@@ -1,6 +1,6 @@
 [project]
 name = "cairn-report"
-version = "0.11.0"
+version = "0.13.0"
 description = "Static reports from Markdown and run outputs, a run logger, and an artifact store (with a server) for reports and run outputs."
 readme = "README.md"
 authors = [

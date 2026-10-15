@@ -56,6 +56,10 @@ def e(text) -> str:
     return html.escape(str(text))
 
 
+def count(number: int, noun: str) -> str:
+    return f"{number} {noun}" + ("" if number == 1 else "s")
+
+
 def project_href(project: str) -> str:
     return f"/p/{quote(project)}/"
 
@@ -187,7 +191,7 @@ def artifact_page(store: LocalStore, principal: Principal, project: str, name: s
         f'<tr><td><a href="{file_href(project, name, number, entry["path"])}">{e(entry["path"])}</a></td>'
         f'<td>{size_text(entry["size"]) if "sha256" in entry else "&rarr; " + e(entry["link"])}</td></tr>'
         for entry in files[:MAX_FILES_SHOWN])
-    more = f'<p class="muted">{len(files) - MAX_FILES_SHOWN} more files not shown.</p>' if len(files) > MAX_FILES_SHOWN else ""
+    more = f'<p class="muted">{len(files) - MAX_FILES_SHOWN} more not shown.</p>' if len(files) > MAX_FILES_SHOWN else ""
     total = size_text(sum(entry.get("size", 0) for entry in files))
     inputs = "".join(f"<li>{ref_link(principal, item)}</li>" for item in chosen["inputs"]) or '<li class="muted">none</li>'
     consumers: list[str] = []
@@ -199,10 +203,10 @@ def artifact_page(store: LocalStore, principal: Principal, project: str, name: s
     report = (f' · <a href="{report_href(project, name, number)}">open report</a>'
               if is_report(name) and chosen["status"] == "completed" else "")
     body = (f'{crumbs(("Store", "/"), (project, project_href(project)), (name, None))}<h1>{e(name)}</h1>'
-            f'<p class="muted">{len(versions)} versions{report}</p>'
+            f'<p class="muted">{count(len(versions), "version")}{report}</p>'
             '<div class="wrap"><table><thead><tr><th>Version</th><th>Label</th><th>Status</th><th>Created</th><th>Aliases</th>'
             f'<th>Source host</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
-            f'<h2>v{number}: files</h2><p class="muted">{len(files)} files, {total}</p>'
+            f'<h2>v{number}: files</h2><p class="muted">{count(len(files), "file")}, {total}</p>'
             f'<div class="wrap"><table><thead><tr><th>File</th><th>Size</th></tr></thead><tbody>{file_rows}</tbody></table></div>{more}'
             f'<h2>Metadata</h2><pre>{e(metadata)}</pre>'
             f'<h2>Inputs</h2><ul>{inputs}</ul><h2>Consumers</h2><ul>{used_by}</ul>')

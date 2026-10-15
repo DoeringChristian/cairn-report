@@ -21,7 +21,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/3e/38/7859ff46355f76f8d
 
 [[package]]
 name = "cairn-report"
-version = "0.11.0"
+version = "0.13.0"
 source = { editable = "." }
 dependencies = [
     { name = "latex2mathml" },

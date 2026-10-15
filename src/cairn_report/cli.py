@@ -83,6 +83,13 @@ def cmd_store_serve(args) -> None:
                 secure_cookie=not args.insecure_cookies)
 
 
+def cmd_store_migrate(args) -> None:
+    from .store.migrate import migrate
+
+    for line in migrate(args.old_root, args.new_root):
+        print(line)
+
+
 def cmd_token_create(args) -> None:
     from .store.tokens import create_token
 
@@ -168,6 +175,10 @@ def main(argv: list[str] | None = None) -> None:
     store_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
     store_serve.add_argument("--insecure-cookies", action="store_true", help="browser login over plain HTTP (SSH tunnel)")
     store_serve.set_defaults(run=cmd_store_serve)
+    migrate = store_commands.add_parser("migrate", help="copy an old hub root into a store (the old root is not modified)")
+    migrate.add_argument("old_root", type=Path)
+    migrate.add_argument("new_root", type=Path, help="a new folder or an existing store")
+    migrate.set_defaults(run=cmd_store_migrate)
     token = store_commands.add_parser("token", help="project-scoped tokens").add_subparsers(dest="token_command", required=True)
     token_create = token.add_parser("create", help="print a new token for one project (shown once, stored hashed)")
     token_create.add_argument("root", type=Path)

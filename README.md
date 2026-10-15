@@ -5,8 +5,8 @@ folders:
 
 - a **builder** that turns single-page Markdown reports into a static site, reading
   numbers and figures from the artifacts each report declares as inputs;
-- a **run logger** that writes evidence to fixed places in a run folder (and,
-  files only; `cairn-report publish --watch` syncs a running job's folder to the store);
+- a **run logger** that writes evidence to fixed places in a run folder (files only;
+  `cairn-report publish --watch` syncs a running job's folder to the store);
 - an **artifact store**: named, versioned folders (datasets, run outputs, reports) in a local
   folder or on a token-protected server, with `publish`, `pull`, and lineage;
 - **run bookkeeping** for Hydra projects: each run's `run.json`, the `latest`
@@ -25,7 +25,7 @@ In a pixi project:
 graphviz = "*"   # only needed for Graphviz diagram fences
 
 [pypi-dependencies]
-cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.11.0" }
+cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.13.0" }
 
 [tasks]
 report-build = "cairn-report build"
@@ -240,6 +240,10 @@ from another machine, sync its folder: `cairn-report publish runs/x/latest x --w
 adds new and changed files to one running version of the artifact `x` every
 `[store] interval` seconds, then completes it (or marks it failed when the command fails).
 
+**Watching a job.** `--watch` follows the folder as it exists when it starts. A Hydra run
+creates a new timestamped folder (`outputs/<name>/<timestamp>`), so either publish it after it
+finishes (`cairn-report publish outputs/x/latest x`) or have the job write to a fixed folder.
+
 ## Hydra runs
 
 `cairn_report.runs` and `cairn_report.snapshot` keep the record of each Hydra
@@ -353,6 +357,22 @@ HttpOnly, SameSite=Strict cookie; `--insecure-cookies` for plain-HTTP tunnels):
 The API lives under `/api/v2/` and files under `/files/<project>/<name>@vN//<path>` (ETag, Range);
 the routes are listed in `cairn_report/store/server.py`. The server never runs pushed code, but it
 serves pushed HTML: give write tokens to people whose reports you trust.
+
+### Migrating from the hub
+
+Before 0.13 the store was the "hub" (`[hub]`, `hub init`, `push`, MLflow, `run:` references),
+which is gone without aliases. Convert an old hub folder once:
+
+```bash
+cairn-report store migrate /srv/hub /srv/store      # the old folder is only read; blobs are hard-linked
+```
+
+Each old project becomes a project. Each `<run>/<timestamp>` becomes a version of the artifact
+`<run>` (label: the timestamp; `failed` unless its `run.json` says `completed`). Only the latest
+old report version is migrated, split into one `reports/<slug>` artifact per report folder
+(`a/b` becomes `a-b`, the root report `overview`), stored as it was and not rebuilt. Reports that
+read runs with `run:` must be rewritten by hand to declare `inputs:`. Running it again adds
+nothing. `store serve /srv/store` then gives the new folder an owner token if it has none.
 
 ## Configuration
 
