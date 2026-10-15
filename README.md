@@ -56,9 +56,17 @@ report-serve = "cairn serve --host 127.0.0.1 --port 8000"
 
 With uv or pip: `uv add git+https://github.com/DoeringChristian/cairn-report.git`.
 The base install is light (`import cairn` loads neither the server, the UI, matplotlib, plotly, nor
-hydra). Extras: `cairn[video]` (`log.video` from frames), `cairn[hydra]` (run bookkeeping for Hydra
-projects), and `cairn[server]` and `cairn[ui]`, which add nothing yet (the server and the UI use the
-standard library, and the UI's built files ship with the package).
+hydra). Extras: `cairn[server]` (`cairn server`: Starlette and uvicorn with uvloop and httptools),
+`cairn[video]` (`log.video` from frames), `cairn[hydra]` (run bookkeeping for Hydra projects), and
+`cairn[ui]`, which adds nothing yet (the UI uses the standard library, and its built files ship with
+the package). On the machine that serves a store:
+
+```bash
+pip install "cairn[server] @ git+https://github.com/DoeringChristian/cairn-report.git"
+# or: uv add "cairn[server] @ git+https://github.com/DoeringChristian/cairn-report.git"
+```
+
+Without the extra, `cairn server` stops with a message saying to install it.
 
 ## Reports
 
@@ -326,6 +334,14 @@ its root). A store made before uids existed is upgraded as it is read: each vers
 derived from the store and the version (the same in every process), and the root gets its
 `store.json`.
 
+A store folder holds a SQLite database with the metadata (`metadata.sqlite3`: projects, versions,
+aliases and every alias move, who consumed which version) and the file contents, named by their
+SHA-256 (`blobs/`). Every change is one transaction, so a publish is stored whole or not at all,
+even if the process is killed halfway. A folder written by an earlier cairn (JSON Lines files) is
+imported the first time it is opened; the old files stay beside it as `*.migrated`.
+`cairn export-metadata <folder> <dir>` writes the metadata as readable JSON Lines, for backups and
+inspection.
+
 A project works offline against a store folder (`.store` by default, `[store] path`). To share
 it, serve a folder over HTTP and point projects at the server. The two halves are separate:
 
@@ -350,6 +366,28 @@ keeps running and prints a warning. `--no-ui` starts the store alone.
 For local testing, `cairn server <folder> --no-auth` needs no token: every request acts as the owner,
 clients connect without `CAIRN_STORE_TOKEN`, and the UI child runs `--no-auth` too. It is refused on
 any `--host` but loopback.
+
+One server per store folder, and it is the folder's only writer: while it runs, other processes may
+read the folder but publish through the server's URL (`cairn token` commands on the same machine
+still work). Keep the folder on a local disk of the server's machine. `cairn server` refuses a folder
+on NFS, Lustre, GPFS, SMB, BeeGFS, Ceph and other network filesystems, where SQLite's and the
+server's locks are not reliable; `--allow-network-fs` overrides that when nothing else ever touches
+the folder. A local store folder (a project's `.store`) on a network filesystem warns once when it
+is written. Cluster jobs talk to a store server over HTTP; their pull cache may live on NFS.
+
+The server is built for many clients at once: it is asynchronous (uvicorn's event loop, with disk
+work in worker threads), uploads are hashed and written while they arrive, downloads stream from the
+blob files (with `sendfile` on Linux), the project and artifact listings come from summary rows kept
+current in the database (and are cached until the project changes), completed versions' files and
+manifests are sent as `immutable`, and JSON answers carry an ETag (`If-None-Match` gets 304). A
+local publish clones files into the store where the filesystem can (APFS `clonefile`, Btrfs/XFS
+`FICLONE`), so the store's copy takes no extra space until either side changes.
+`bench/bench_store.py` measures it (results in `bench/RESULTS.md`):
+
+```bash
+taskpolicy -b python bench/bench_store.py --json out.json     # macOS: background priority
+nice python bench/bench_store.py --size-mb 1024 --clients 32   # elsewhere; see --help
+```
 
 ```bash
 cairn token create /srv/store --project my-study --write --name cluster   # printed once

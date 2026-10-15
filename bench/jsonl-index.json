@@ -1,0 +1,165 @@
+{
+ "header": "cairn bench: commit 097df21, macOS-26.6.2-arm64-arm-64bit, arm64, 18 cores, Python 3.12.14, 32 publish clients / 4 procs",
+ "rows": [
+  {
+   "name": "meta/artifacts-cold",
+   "count": 1,
+   "seconds": 0.7447210419923067,
+   "rate": 1.3427846718615082,
+   "unit": "req/s",
+   "p50_ms": 744.7210419923067,
+   "p95_ms": 744.7210419923067,
+   "extra": "first request after start"
+  },
+  {
+   "name": "publish/distinct",
+   "count": 200,
+   "seconds": 0.6783668994903564,
+   "rate": 294.8257058978792,
+   "unit": "pub/s",
+   "p50_ms": 94.97800003737211,
+   "p95_ms": 121.06466596014798,
+   "extra": "32 clients, 4 procs, 3 files x 1 KB, 5 requests each"
+  },
+  {
+   "name": "publish/same",
+   "count": 200,
+   "seconds": 0.7292351722717285,
+   "rate": 274.259947414434,
+   "unit": "pub/s",
+   "p50_ms": 103.41120907105505,
+   "p95_ms": 130.23329200223088,
+   "extra": "32 clients, 4 procs, 3 files x 1 KB, 5 requests each"
+  },
+  {
+   "name": "upload",
+   "count": 1,
+   "seconds": 0.2894029589369893,
+   "rate": 927.5491065675161,
+   "unit": "MB/s",
+   "p50_ms": 289.4029589369893,
+   "p95_ms": 289.4029589369893,
+   "extra": "268 MB"
+  },
+  {
+   "name": "pull/cold",
+   "count": 1,
+   "seconds": 0.32056987495161593,
+   "rate": 837.3695626905533,
+   "unit": "MB/s",
+   "p50_ms": 320.56987495161593,
+   "p95_ms": 320.56987495161593,
+   "extra": "268 MB, median of 1"
+  },
+  {
+   "name": "pull/warm",
+   "count": 3,
+   "seconds": 0.7580000017769635,
+   "rate": 1067.5321645699619,
+   "unit": "MB/s",
+   "p50_ms": 251.45420897752047,
+   "p95_ms": 257.8717088326812,
+   "extra": "268 MB, median of 3"
+  },
+  {
+   "name": "pull/curl x1",
+   "count": 3,
+   "seconds": 0.7535843329969794,
+   "rate": 1052.8272338523418,
+   "unit": "MB/s",
+   "p50_ms": 254.96629206463695,
+   "p95_ms": 257.7206250280142,
+   "extra": "1 curl to /dev/null at once, median of 3, server CPU 0.87 s/GB"
+  },
+  {
+   "name": "pull/curl x4",
+   "count": 3,
+   "seconds": 2.3137336240615696,
+   "rate": 1396.0914236815424,
+   "unit": "MB/s",
+   "p50_ms": 769.1056658513844,
+   "p95_ms": 781.6182500682771,
+   "extra": "4 curl to /dev/null at once, median of 3, server CPU 0.80 s/GB"
+  },
+  {
+   "name": "pull/client",
+   "count": 1,
+   "seconds": 0.4509417088702321,
+   "rate": 595.2775064265521,
+   "unit": "MB/s",
+   "p50_ms": 450.9417088702321,
+   "p95_ms": 450.9417088702321,
+   "extra": "RemoteStore.blob_file: download + verify + place"
+  },
+  {
+   "name": "range",
+   "count": 1000,
+   "seconds": 0.3626853749155998,
+   "rate": 2757.210709785883,
+   "unit": "req/s",
+   "p50_ms": 1.2565830256789923,
+   "p95_ms": 2.078375080600381,
+   "extra": "64 KB, 4 clients"
+  },
+  {
+   "name": "meta/projects",
+   "count": 500,
+   "seconds": 0.7497076250147074,
+   "rate": 666.9266568953346,
+   "unit": "req/s",
+   "p50_ms": 6.08645798638463,
+   "p95_ms": 8.642458822578192,
+   "extra": "4 clients, 0 KB answer"
+  },
+  {
+   "name": "meta/artifacts",
+   "count": 40,
+   "seconds": 0.07218524999916553,
+   "rate": 554.1298256979425,
+   "unit": "req/s",
+   "p50_ms": 6.877582985907793,
+   "p95_ms": 8.956457953900099,
+   "extra": "4 clients, 383 KB answer"
+  },
+  {
+   "name": "meta/summary",
+   "count": 500,
+   "seconds": 0.15552416699938476,
+   "rate": 3214.9344352506832,
+   "unit": "req/s",
+   "p50_ms": 1.0993748437613249,
+   "p95_ms": 2.0377091132104397,
+   "extra": "4 clients, 1 KB answer"
+  },
+  {
+   "name": "meta/versions",
+   "count": 500,
+   "seconds": 0.1368551249615848,
+   "rate": 3653.498545563053,
+   "unit": "req/s",
+   "p50_ms": 0.9518328588455915,
+   "p95_ms": 1.6765419859439135,
+   "extra": "4 clients, 1 KB answer"
+  },
+  {
+   "name": "meta/lineage",
+   "count": 500,
+   "seconds": 0.18902274989522994,
+   "rate": 2645.1842451616862,
+   "unit": "req/s",
+   "p50_ms": 1.4385830145329237,
+   "p95_ms": 2.236083149909973,
+   "extra": "4 clients, 0 KB answer"
+  },
+  {
+   "name": "meta/resolve",
+   "count": 500,
+   "seconds": 0.14174300013110042,
+   "rate": 3527.5110554845164,
+   "unit": "req/s",
+   "p50_ms": 1.0312919039279222,
+   "p95_ms": 1.6233748756349087,
+   "extra": "4 clients, 0 KB answer"
+  }
+ ]
+}

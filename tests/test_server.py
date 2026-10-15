@@ -555,3 +555,14 @@ def test_the_spawned_ui_exits_when_the_server_is_killed(tmp_path):
             raise AssertionError("the UI kept running after its server was killed")
     finally:
         server.kill()
+
+
+def test_the_server_extra_is_required(tmp_path, monkeypatch):
+    import cairn.server.app as module
+
+    monkeypatch.setattr(module, "MISSING", ImportError("No module named 'uvicorn'"))
+    with pytest.raises(SystemExit, match=r'pip install "cairn\[server\]"'):
+        make_server(tmp_path, port=0)
+    with pytest.raises(SystemExit, match=r'pip install "cairn\[server\]"'):
+        serve_store(tmp_path / "new", port=0)
+    assert not (tmp_path / "new").exists()

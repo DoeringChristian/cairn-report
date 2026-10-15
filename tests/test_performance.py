@@ -237,3 +237,31 @@ def test_caching_headers(server):
     publish_small(server.port, server.token, connection, "c", 1)
     assert request(server.port, server.token, "GET", "/api/v2/projects/perf/artifacts/c",
                    headers={"If-None-Match": headers["ETag"]})[0] == 200  # changed: a new ETag
+
+
+@pytest.mark.skipif(not hasattr(os, "sendfile"), reason="no os.sendfile here")
+def test_downloads_use_sendfile_when_enabled(tmp_path, monkeypatch):
+    from cairn.server import make_server
+
+    root = tmp_path / "root"
+    token = init_root(root).read_text().strip()
+    httpd = make_server(root, port=0)
+    httpd.log = None
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    try:
+        data = os.urandom(3 << 20)
+        sha = hashlib.sha256(data).hexdigest()
+        request(port, token, "POST", "/api/v2/projects", {"name": "p"})
+        assert request(port, token, "PUT", f"/api/v2/blobs/{sha}", data, {"Content-Length": str(len(data))})[0] == 201
+        request(port, token, "POST", "/api/v2/projects/p/artifacts/f/publish", {"entries": [{"path": "d.bin", "sha256": sha, "size": len(data)}]})
+        for setting, zero_copy in (("1", 1), ("0", 0)):
+            monkeypatch.setenv("CAIRN_SENDFILE", setting)
+            before = httpd.app.zero_copy_sends
+            status, headers, body = request(port, token, "GET", "/files/p/f@v1//d.bin")
+            assert status == 200 and body == data and httpd.app.zero_copy_sends - before == zero_copy
+            status, _, body = request(port, token, "GET", "/files/p/f@v1//d.bin", headers={"Range": "bytes=1000000-2999999"})
+            assert status == 206 and body == data[1000000:3000000]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
