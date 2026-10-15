@@ -7,6 +7,10 @@ way `push --watch` follows a project: every `interval` seconds, and shortly afte
 changing (a burst of writes goes out as one sync). A store that errors only warns and backs off;
 the final sync must succeed. The version completes when the command exits 0, or when watching is
 stopped without a command, and fails otherwise, so `latest` never moves to a broken run.
+
+On a store server both go through the outbox (outbox.py): a running version lives in the outbox
+first and is created on the server (under its uid) as soon as the server answers, so a job starts
+and finishes while the server is down; its completion or failure is queued like any publish.
 """
 
 from __future__ import annotations
@@ -22,7 +26,9 @@ from pathlib import Path
 
 from ..config import Config, load_config
 from ..store import INPUTS_ENV, INPUTS_FILE, LocalStore, StoreError, read_inputs, refs
-from .http import HashCache, Limited, entries_for, scan
+from .http import Limited
+from ..store.errors import Unreachable
+from .http import HashCache, entries_for, scan  # noqa: F401
 from .open import as_store, open_store, versions_of
 from .remote import RemoteStore
 
@@ -30,51 +36,44 @@ SETTLE = 2.0  # seconds without new changes before a changed folder is synced
 
 
 def _target(name: str, store: LocalStore | RemoteStore) -> tuple[str, str]:
-    """(project, artifact name) for a publish target, creating the project."""
+    """(project, artifact name) for a publish target."""
     target = refs.parse(name)
     if target.selector or target.path:
         raise ValueError(f"publish takes an artifact name, not {name!r}")
     project = target.project or store.project
     if project is None:
         raise StoreError(f"{name!r} has no project and the store has no default")
-    store.create_project(project)
     return project, target.name
 
 
-def _stage(store: LocalStore | RemoteStore, local: Path, config: Config, cache: HashCache) -> list[dict]:
-    """Entries for a folder's files (its inputs record excluded) with their blobs put in the store."""
+def stage_local(store: LocalStore, local: Path, config: Config, cache: HashCache) -> list[dict]:
+    """Entries for a folder's files (its inputs record excluded) with their blobs put in a local store."""
     files = scan(local, "", config, exclude=config.store.get("exclude", []))
     files.pop(INPUTS_FILE, None)
     entries, sources = entries_for(files, cache)
     cache.save()
-    if isinstance(store, RemoteStore):  # asks the server what it lacks, then uploads in parallel
-        store.upload(sources, cache)
-        cache.save()
-    else:
-        for sha in store.missing(entries):
-            file, size = sources[sha]
-            with file.open("rb") as handle:
-                store.put_blob(sha, Limited(handle, size), size)
+    for sha in store.missing(entries):
+        file, size = sources[sha]
+        with file.open("rb") as handle:
+            store.put_blob(sha, Limited(handle, size), size)
     return entries
 
 
 def publish(name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-            inputs=None, store: LocalStore | RemoteStore | Path | str | None = None, config: Config | None = None) -> int:
-    """Store a folder as the next version of artifact `name`; returns the version number.
+            inputs=None, store: LocalStore | RemoteStore | Path | str | None = None, config: Config | None = None) -> int | None:
+    """Store a folder as the next version of artifact `name`; returns the version number (`Artifact.publish`).
 
     A symlinked folder is followed (the label defaults to the resolved folder's name). When nothing
-    changed since the latest version, no version is created and its number is returned.
+    changed since the latest version, no version is created and its number is returned. None means the
+    store server did not answer: the version waits in the outbox (`cairn status`) and is uploaded later.
     """
-    local = Path(folder).resolve()
-    if not local.is_dir():
-        raise ValueError(f"{folder} is not a folder")
-    store = as_store(store)
-    project, artifact = _target(name, store)
-    config = config or load_config()
-    entries = _stage(store, local, config, HashCache(config.project))
-    merged = [*read_inputs(local), *(str(item) for item in inputs or [])]
-    return store.publish(project, artifact, entries, label=label or local.name, metadata=metadata, inputs=merged,
-                         aliases=aliases, source={"host": socket.gethostname(), "folder": str(local)})
+    from .objects import Store
+
+    backend = as_store(store)
+    project, artifact = _target(name, backend)
+    version = Store(backend).project(project).artifact(artifact).publish(folder, metadata=metadata, aliases=aliases,
+                                                                          label=label, inputs=inputs, config=config)
+    return version.number
 
 
 class Publication:
@@ -98,35 +97,102 @@ class Publication:
         self.config = load_config()
         self.cache = HashCache(self.config.project)
         self.label, self.metadata, self.aliases, self.inputs = label or self.local.name, metadata, tuple(aliases), inputs
-        self.version: int | None = None
+        self.version: int | None = None  # the number; None until the server has the version
+        self.uid: str | None = None
+        self.queued = False  # the server did not answer at the last attempt
         self._sent: dict[str, tuple] = {}
+        self._entry: dict | None = None
+        self._outbox = None
+        if isinstance(self.store, RemoteStore):
+            from .outbox import Outbox
 
-    def start(self) -> int:
+            self._outbox = Outbox(self.store)
+
+    @property
+    def source(self) -> dict:
+        return {"host": socket.gethostname(), "folder": str(self.local)}
+
+    @property
+    def ref(self) -> str:
+        """`project:name@v<n>`, or `project:name@<uid>` while the server has not answered."""
+        return refs.exact(self.project, self.name, self.version) if self.version is not None else f"{self.project}:{self.name}@{self.uid}"
+
+    def _push(self) -> bool:
+        """Send the outbox entry; False (and queued) when the server does not answer."""
+        try:
+            done = self._outbox.send(self._entry)
+        except Unreachable:
+            self.queued = True
+            return False
+        finally:
+            self.version = self._entry["number"]
+        self.queued = False
+        return done
+
+    def start(self) -> int | None:
+        if self._outbox is not None:
+            if self._entry is None:
+                self._entry = self._outbox.add("running", self.project, self.name, label=self.label, metadata=self.metadata,
+                                               source=self.source)
+                self.uid = self._entry["uid"]
+                self._push()
+            return self.version
         if self.version is None:
-            self.version = self.store.start_version(self.project, self.name, self.label, self.metadata,
-                                                    {"host": socket.gethostname(), "folder": str(self.local)})
+            self.store.create_project(self.project)
+            self.version = self.store.start_version(self.project, self.name, self.label, self.metadata, self.source)
+            self.uid = self.store.get_version(self.project, self.name, self.version)["uid"]
         return self.version
 
     def sync(self) -> int:
         """Add the files that are new or changed since the last sync; returns how many."""
         self.start()
-        entries = _stage(self.store, self.local, self.config, self.cache)
+        if self._outbox is not None:
+            from .outbox import stage
+
+            entries, staged = stage(self.local, self.config, self.cache)
+        else:
+            entries = stage_local(self.store, self.local, self.config, self.cache)
         fresh = [entry for entry in entries if self._sent.get(entry["path"]) != (entry.get("sha256"), entry.get("link"))]
-        if fresh:
+        self._sent.update({entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in fresh})
+        if self._outbox is not None:
+            files = {item["path"]: item for item in self._entry["files"]}
+            files.update({entry["path"]: entry for entry in fresh})
+            self._entry["files"] = sorted(files.values(), key=lambda item: item["path"])
+            self._entry["staged"] = sorted({*self._entry["staged"], *staged})
+            self._outbox.save(self._entry)
+            self._push()
+        elif fresh:
             self.store.add_files(self.project, self.name, self.version, fresh)
-            self._sent.update({entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in fresh})
         return len(fresh)
 
-    def complete(self) -> int:
-        """Sync a last time, freeze the version, move `latest`, and apply the aliases."""
+    def complete(self) -> int | None:
+        """Sync a last time, freeze the version, move `latest`, and apply the aliases. On a store server that does
+        not answer, the completion is queued (`queued` is True) and the number is None until it is sent."""
         self.sync()
         merged = [*read_inputs(self.local), *(str(item) for item in self.inputs or [])]
+        if self._outbox is not None:
+            self._entry.update(state="completed", inputs=merged, aliases=list(self.aliases))
+            self._outbox.save(self._entry)
+            if not self._push():
+                from .outbox import start_uploader
+
+                start_uploader(self.store)
+            return self.version
         self.store.complete_version(self.project, self.name, self.version, merged)
         for alias in self.aliases:
             self.store.set_alias(self.project, self.name, alias, self.version)
         return self.version
 
     def fail(self) -> None:
+        if self._outbox is not None:
+            if self._entry is not None:
+                self._entry["state"] = "failed"
+                self._outbox.save(self._entry)
+                if not self._push():
+                    from .outbox import start_uploader
+
+                    start_uploader(self.store)
+            return
         if self.version is not None:
             self.store.fail_version(self.project, self.name, self.version)
 
@@ -165,10 +231,12 @@ def publish_folder(config: Config, folder: Path, name: str, label: str | None, a
     store = open_store(config)
     try:
         before = max((v["version"] for v in versions_of(store, name)), default=0)
-    except StoreError:
+    except StoreError:  # also a server that does not answer: the version is queued below
         before = 0
-    number = publish(name, folder, metadata=meta, aliases=aliases, label=label, store=store)
+    number = publish(name, folder, metadata=meta, aliases=aliases, label=label, store=store, config=config)
     target = refs.parse(name)
+    if number is None:
+        return print(f"queued {target.name} in the outbox; `cairn status` lists it, `cairn sync` sends it", flush=True)
     if number <= before:
         print(f"{target.name}@v{number} unchanged", flush=True)
     else:
@@ -211,8 +279,20 @@ def watch_folder(config: Config, folder: Path, name: str, label: str | None, ali
 
 def _follow(config, folder, name, label, aliases, meta, command, interval, settle, tick, stopped) -> int:
     pub = Publication(name, folder, metadata=meta, aliases=aliases, label=label, store=open_store(config))
-    pub.start()
-    print(f"publishing {folder} as {pub.name}@v{pub.version} (running) every {interval:g} s", flush=True)
+    for attempt in range(5):  # a local store that errors; a store server that does not answer is no reason to wait
+        try:
+            pub.start()
+            break
+        except (StoreError, OSError) as error:
+            if attempt == 4:
+                raise
+            print(f"warning: could not start the version ({error}); retrying", file=sys.stderr, flush=True)
+            time.sleep(1)
+    if pub.version is None:
+        print(f"publishing {folder} as {pub.name}@{pub.uid} (running, in the outbox: the store does not answer yet) every {interval:g} s",
+              flush=True)
+    else:
+        print(f"publishing {folder} as {pub.name}@v{pub.version} (running) every {interval:g} s", flush=True)
     # what the command pulls is recorded in the folder it writes, unless the caller chose a file
     env = os.environ | {INPUTS_ENV: os.environ.get(INPUTS_ENV) or str(Path(folder).resolve() / INPUTS_FILE)}
     process = subprocess.Popen(command, env=env) if command else None
@@ -227,7 +307,8 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             added = pub.sync()
             synced, last, failures = current, time.monotonic(), 0
             if added:
-                print(f"synced {added} files to {pub.name}@v{pub.version}", flush=True)
+                where = f"{pub.name}@v{pub.version}" if pub.version is not None else f"{pub.name}@{pub.uid} (outbox)"
+                print(f"synced {added} files to {where}", flush=True)
             return True
         except (StoreError, OSError) as error:
             failures += 1
@@ -262,11 +343,15 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             if code:
                 pub.sync()  # keep what the failed run wrote for inspection
                 pub.fail()
-                print(f"{pub.name}@v{pub.version} failed (command exited {code}); latest did not move", file=sys.stderr, flush=True)
+                print(f"{pub.ref} failed (command exited {code}); latest did not move", file=sys.stderr, flush=True)
             else:
                 number = pub.complete()
-                state = pub.store.resolve(refs.exact(pub.project, pub.name, number))[2]
-                print(f"published {pub.name}@v{number} ({describe(state)})", flush=True)
+                if number is None or pub.queued:
+                    print(f"queued {pub.name}@{pub.uid} as completed: the store does not answer; it is uploaded when it does"
+                          " (`cairn status` lists it, `cairn sync` sends it)", flush=True)
+                else:
+                    state = pub.store.resolve(refs.exact(pub.project, pub.name, number))[2]
+                    print(f"published {pub.name}@v{number} ({describe(state)})", flush=True)
             return code
         except (StoreError, OSError) as error:
             if "can no longer change" in str(error):

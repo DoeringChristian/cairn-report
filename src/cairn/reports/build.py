@@ -50,7 +50,9 @@ from .._version import __version__
 from ..client.open import open_store
 from ..config import Config, load_config
 from ..formats import METRICS, fold_scalars, read_jsonl
-from ..store import StoreError, default_root, pull, refs
+from ..client.offline import resolve_version
+from ..store import StoreError, default_root, refs
+from ..store.cache import materialize_version
 
 PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
@@ -503,10 +505,10 @@ class Build:
                 raise BuildError(f"{where}: {error}") from error
             if ref.path:
                 raise BuildError(f"{where}: {text!r} names a file; an input is a whole artifact version (use {name}/<file> in the report)")
-            try:
-                project, artifact, version = store.resolve(ref)
+            try:  # a store server that does not answer: exact versions from the cache, aliases by their last resolution
+                project, artifact, version = resolve_version(store, ref)
                 exact = refs.exact(project, artifact, version["version"])
-                folder = pull(store, exact, record=False)
+                folder = materialize_version(store, project, artifact, version, default_root())
             except StoreError as error:
                 raise BuildError(f"{where}: {error}") from error
             self.inputs[name] = {"requested": str(text), "resolved": exact, "files": len(version["files"]), "path": folder}

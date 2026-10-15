@@ -1,4 +1,8 @@
-"""Command line: `cairn build | serve | share | publish | pull | server | ui | token | migrate | finalize-study`."""
+"""Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | sync | status |
+server | ui | token | migrate | finalize-study`.
+
+Every command that talks to the store first tries to send what the outbox holds for it (quietly, and only
+when something is queued); `sync` does that by hand and says what happened."""
 
 from __future__ import annotations
 
@@ -59,11 +63,12 @@ def with_options(config, args):
 def cmd_pull(args) -> None:
     import shutil
 
+    from .client.offline import pull
     from .client.open import open_store
-    from .store import MARKER, pull
+    from .store import MARKER
 
     config = with_options(load_config(args.project), args)
-    path = pull(open_store(config), args.ref, record=not args.no_record)
+    path = pull(open_store(config), args.ref, record=not args.no_record, offline=args.offline)
     if args.into is None:
         return print(path)
     target = args.into
@@ -75,6 +80,155 @@ def cmd_pull(args) -> None:
         raise SystemExit(f"{target} is not empty")
     shutil.copytree(path, target, symlinks=True, copy_function=shutil.copyfile, ignore=shutil.ignore_patterns(MARKER), dirs_exist_ok=True)
     print(target)
+
+
+def open_objects(args):
+    """The object API's Store for the configured store (no background uploader: commands flush synchronously)."""
+    from .client.objects import Store
+    from .client.open import open_store
+
+    return Store(open_store(with_options(load_config(args.project), args)))
+
+
+def report(line: str) -> None:
+    print(f"cairn: {line}", file=sys.stderr, flush=True)
+
+
+def flush_first(args) -> None:
+    """Try to send the outbox of the configured store server before a command (see the module doc)."""
+    from .client.outbox import flush_configured
+
+    try:
+        config = with_options(load_config(args.project), args)
+    except (SystemExit, ValueError):
+        return
+    flush_configured(config, report)
+
+
+def cmd_project(args) -> None:
+    store = open_objects(args)
+    if args.project_command == "list":
+        rows = store.backend.overviews()
+        for row in rows:
+            print(f"{row['name']}\t{row.get('title') or row['name']}\t{row.get('artifacts', 0)} artifacts\t{(row.get('updated') or '')[:19]}")
+        if not rows:
+            print("no projects")
+        return
+    if args.project_command == "create":
+        project = store.create_project(args.name, args.title, args.description or "")
+        return print(f"project {project.name}: {project.title}")
+    project = store.project(args.name)
+    if args.project_command == "edit":
+        if args.title is None and args.description is None:
+            raise SystemExit("edit takes --title and/or --description")
+        project.update(title=args.title, description=args.description)
+    print(f"project      {project.name}")
+    print(f"title        {project.title}")
+    print(f"description  {project.description}")
+    if args.project_command == "show":
+        artifacts = project.artifacts()
+        print(f"artifacts    {len(artifacts)}")
+        for artifact in artifacts:
+            latest = artifact.summary.get("latest")
+            print(f"  {artifact.name}\t{f'v{latest}' if latest else '-'}\t{artifact.summary.get('versions', 0)} versions")
+
+
+def cmd_artifacts(args) -> None:
+    store = open_objects(args)
+    artifacts = store.project(args.store_project).artifacts(prefix=args.prefix)
+    for artifact in artifacts:
+        summary = artifact.summary
+        latest = summary.get("latest")
+        aliases = ", ".join(f"{name}->v{number}" for name, number in sorted(summary.get("aliases", {}).items()) if name != "latest")
+        print(f"{artifact.name}\t{f'v{latest}' if latest else '-'}\t{summary.get('versions', 0)} versions\t"
+              f"{(summary.get('updated') or '')[:19]}" + (f"\t{aliases}" if aliases else ""))
+    if not artifacts:
+        print("no artifacts" + (f" starting with {args.prefix!r}" if args.prefix else ""))
+
+
+def _size(files) -> str:
+    return f"{len(files)} files, {sum(item.size for item in files) / 1e6:.1f} MB"
+
+
+def cmd_versions(args) -> None:
+    store = open_objects(args)
+    versions = store.artifact(args.name).versions()
+    for version in versions:
+        number = f"v{version.number}" if version.number is not None else "-"
+        print(f"{number}\t{version.status}\t{version.label or ''}\t{(version.created or '')[:19]}\t{version.uid}\t{_size(version.files)}")
+    if not versions:
+        print(f"no versions of {args.name}")
+
+
+def cmd_show(args) -> None:
+    import json
+
+    from .store import StoreError
+
+    store = open_objects(args)
+    version = store.version(args.ref, offline=args.offline)
+    aliases = [] if version.number is None else sorted(name for name, number in version.artifact.aliases.items() if number == version.number)
+    print(f"ref          {version.ref}")
+    print(f"uid          {version.uid}")
+    print(f"status       {version.status}")
+    print(f"label        {version.label or ''}")
+    print(f"created      {version.created or ''}")
+    if aliases:
+        print(f"aliases      {', '.join(aliases)}")
+    if version.source:
+        print(f"source       {version.source.get('host', '')}:{version.source.get('folder', '')}")
+    print(f"metadata     {json.dumps(version.metadata, sort_keys=True)}")
+    print(f"inputs       {', '.join(version.inputs) or '-'}")
+    try:
+        consumers = version.consumers
+    except StoreError as error:
+        consumers = [f"(unknown: {error})"]
+    print(f"consumers    {', '.join(consumers) or '-'}")
+    print(f"files        {_size(version.files)}")
+    for item in version.files:
+        print(f"  {item.path}\t{'-> ' + item.link if item.link else item.size}")
+
+
+def cmd_sync(args) -> None:
+    from .client.outbox import Outbox
+
+    store = open_objects(args)
+    if not store.remote:
+        return print("a local store has no outbox: publishing writes it directly")
+    result = Outbox(store.backend).flush(report=lambda line: print(line, flush=True))
+    waiting = [entry for entry in result["waiting"] if entry["state"] != "running"]
+    running = [entry for entry in result["waiting"] if entry["state"] == "running"]
+    if not (result["sent"] or result["rejected"] or result["waiting"]):
+        return print("nothing to sync")
+    if waiting:
+        print(f"{len(waiting)} versions still queued: the store at {store.backend.url} does not answer", file=sys.stderr)
+    if running:
+        print(f"{len(running)} running versions are sent by the jobs that run them", flush=True)
+    if waiting or result["rejected"]:
+        raise SystemExit(1)
+
+
+def cmd_status(args) -> None:
+    from .client.outbox import all_entries
+
+    config = load_config(args.project)
+    url = (config.store.get("url") or "").rstrip("/")
+    entries = [entry for entry in all_entries() if args.all or not url or entry.get("url") == url]
+    if not url and not args.all:
+        print("the configured store is a local folder: nothing is ever queued (--all shows every server's outbox)")
+        return
+    for entry in entries:
+        number = f"v{entry['number']}" if entry.get("number") else "-"
+        size = sum(item.get("size", 0) for item in entry.get("files", []))
+        line = (f"{entry['state']}\t{entry['project']}:{entry['name']}\t{number}\t{entry['uid']}\t{entry['created'][:19]}\t"
+                f"{len(entry.get('files', []))} files, {size / 1e6:.1f} MB")
+        if args.all:
+            line += f"\t{entry['url']}"
+        if entry.get("error"):
+            line += f"\t{entry['error']}"
+        print(line)
+    if not entries:
+        print("nothing queued: every version is on the server")
 
 
 def cmd_server(args) -> None:
@@ -177,8 +331,41 @@ def main(argv: list[str] | None = None) -> None:
     pull.add_argument("ref", help="[project:]name[@vN|@alias|@label][//file], e.g. datasets/crops@v3")
     pull.add_argument("--into", type=Path, help="copy it into this folder instead of printing the cache path")
     pull.add_argument("--no-record", action="store_true", help="do not append the version to the inputs file ($CAIRN_INPUTS or .cairn-inputs.jsonl)")
+    pull.add_argument("--offline", action="store_true", help="do not ask the store server: exact versions from the cache, aliases by their last known resolution")
     pull.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
     pull.set_defaults(run=cmd_pull)
+
+    project = commands.add_parser("project", help="list, create, show, or edit the store's projects")
+    project_commands = project.add_subparsers(dest="project_command", required=True)
+    project_commands.add_parser("list", help="every project with its artifact count").set_defaults(run=cmd_project)
+    for verb, text in (("create", "create a project (an existing one is left as is)"), ("show", "a project and its artifacts"),
+                       ("edit", "change a project's title or description")):
+        command = project_commands.add_parser(verb, help=text)
+        command.add_argument("name")
+        if verb != "show":
+            command.add_argument("--title")
+            command.add_argument("--description")
+        command.add_argument("--allow-http", action="store_true", help=argparse.SUPPRESS)
+        command.set_defaults(run=cmd_project)
+
+    artifacts = commands.add_parser("artifacts", help="the artifacts of a project (latest version, versions, aliases)")
+    artifacts.add_argument("--prefix", help="only names starting with this, e.g. reports/")
+    artifacts.add_argument("--project", dest="store_project", help="the store project (default: [store] project)")
+    artifacts.set_defaults(run=cmd_artifacts)
+    versions = commands.add_parser("versions", help="every version of an artifact: number, status, label, created, uid, size")
+    versions.add_argument("name", help="[project:]name")
+    versions.set_defaults(run=cmd_versions)
+    show = commands.add_parser("show", help="one version: metadata, files, inputs, consumers")
+    show.add_argument("ref", help="[project:]name[@vN|@uid|@alias|@label]")
+    show.add_argument("--offline", action="store_true", help="answer from the cache only")
+    show.set_defaults(run=cmd_show)
+    sync = commands.add_parser("sync", help="send the versions queued in the outbox to the store server now")
+    sync.set_defaults(run=cmd_sync)
+    status = commands.add_parser("status", help="the versions waiting in the outbox for the store server")
+    status.add_argument("--all", action="store_true", help="every server's outbox, not only the configured one")
+    status.set_defaults(run=cmd_status)
+    for command in (artifacts, versions, show, sync, status):
+        command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
 
     store_serve = commands.add_parser("server", help="serve a store folder (a new one gets an owner token); put an HTTPS reverse proxy in front")
     store_serve.add_argument("root", type=Path)
@@ -226,6 +413,8 @@ def main(argv: list[str] | None = None) -> None:
     args.command = command
     if command and args.run is not cmd_publish:
         parser.error("only `publish` takes a command after --")
+    if args.run in (cmd_publish, cmd_pull, cmd_project, cmd_artifacts, cmd_versions, cmd_show, cmd_status, cmd_build):
+        flush_first(args)
     args.run(args)
 
 

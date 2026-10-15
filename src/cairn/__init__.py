@@ -4,6 +4,14 @@ This is the light API (no server, UI, reports, matplotlib, plotly, or hydra is i
 
     import cairn
 
+    store = cairn.connect()                        # the store [store] in cairn.toml names (or a URL, or a folder)
+    crops = store.project().artifact("datasets/crops")
+    v3 = crops.version(3)                          # or "v3", an alias, a label, a uid; crops.latest
+    v3.files, v3.metadata, v3.inputs, v3.consumers, v3.open("a.txt"), v3.pull()
+    crops.publish("data/crops", metadata={"n": 3}, aliases=["paper"])   # -> Version
+
+and the shortcuts, on top of it:
+
     crops = cairn.pull("datasets/crops@v3")        # read-only local copy; the exact version is recorded as an input
     cairn.publish("models/denoiser", "checkpoints/best", metadata={"psnr": 31.2}, aliases=["best"])
     cairn.alias("models/denoiser@v4", "paper")
@@ -17,8 +25,14 @@ project folder's slug). Every `pull` appends the exact version to `$CAIRN_INPUTS
 `.cairn-inputs.jsonl` in the working directory; `publish` carries a folder's `.cairn-inputs.jsonl`
 along as the version's `inputs`, which is how lineage is recorded without any framework hook.
 
-The parts are packages: `cairn.store` (the core), `cairn.client` (HTTP client, publishing, `RemoteStore`),
-`cairn.server`, `cairn.ui`, `cairn.reports`, and `cairn.runs`; each is imported only when used.
+Every version has a uid (UUIDv7), and `name@<uid>` names it as exactly as `name@v<n>`. Publishing to a
+store server goes through a local outbox, so it works while the server is down (`cairn status`,
+`cairn sync`), and pulls of exact versions, or of aliases by their last known resolution, work from
+the cache (`<cache>` is `$CAIRN_CACHE_DIR`, else `~/.cache/cairn`).
+
+The parts are packages: `cairn.store` (the core), `cairn.client` (HTTP client, the object API, publishing,
+the outbox, `RemoteStore`), `cairn.server`, `cairn.ui`, `cairn.reports`, and `cairn.runs`; each is
+imported only when used.
 """
 
 from __future__ import annotations
@@ -27,15 +41,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._version import __version__
-from .store import (BadRange, FileRead, Forbidden, LocalStore, NotFound, Ref, StoreError, Unauthorized, pull as _pull)
+from .store import BadRange, Conflict, FileRead, Forbidden, LocalStore, NotFound, Ref, StoreError, Unauthorized, Unreachable
 
 if TYPE_CHECKING:
+    from .client.objects import Artifact, File, Project, Store, Version
     from .client.remote import RemoteStore
 
-__all__ = ["__version__", "BadRange", "FileRead", "Forbidden", "LocalStore", "NotFound", "Ref", "RemoteStore", "StoreError",
-           "Unauthorized", "alias", "lineage", "Publication", "open_store", "publish", "pull", "versions"]
+__all__ = ["__version__", "Artifact", "BadRange", "Conflict", "File", "FileRead", "Forbidden", "LocalStore", "NotFound", "Project",
+           "Ref", "RemoteStore", "Store", "StoreError", "Unauthorized", "Unreachable", "Version", "alias", "connect", "lineage",
+           "Publication", "open_store", "publish", "pull", "versions"]
 
-_CLIENT = {"RemoteStore": "remote", "open_store": "open", "Publication": "publishing", "publish": "publishing"}
+_CLIENT = {"RemoteStore": "remote", "open_store": "open", "Publication": "publishing", "publish": "publishing",
+           "connect": "objects", "Store": "objects", "Project": "objects", "Artifact": "objects", "Version": "objects",
+           "File": "objects"}
 
 
 def __getattr__(name: str):
@@ -47,35 +65,37 @@ def __getattr__(name: str):
     raise AttributeError(f"module 'cairn' has no attribute {name!r}")
 
 
-def _store(store):
+def _store(store) -> "Store":
+    """The object API's Store for `store=` (None: the configured store; a store; a folder)."""
+    from .client.objects import Store
     from .client.open import as_store
 
-    return as_store(store)
+    return store if isinstance(store, Store) else Store(as_store(store))
 
 
-def pull(ref: str, *, store: "LocalStore | RemoteStore | Path | str | None" = None, record: bool = True) -> Path:
+def pull(ref: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None, record: bool = True,
+         offline: bool = False) -> Path:
     """A read-only local copy of an artifact version (or of the file after `//`), recorded as an input.
 
     `record=False` leaves the inputs file alone: the report builder records a report's inputs in the
-    report's own manifest instead.
+    report's own manifest instead. An exact version in the cache needs no server; when the server does
+    not answer (or `offline=True`), an alias falls back to its last known resolution, with a warning.
     """
-    return _pull(_store(store), ref, record)
+    return _store(store).pull(ref, record=record, offline=offline)
 
 
-def alias(ref: str, alias: str, *, store: "LocalStore | RemoteStore | Path | str | None" = None) -> None:
+def alias(ref: str, alias: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None) -> None:
     """Point `alias` at the version `ref` names (which must be completed)."""
-    store = _store(store)
-    project, name, version = store.resolve(ref)
-    store.set_alias(project, name, alias, version["version"])
+    version = _store(store).version(ref)
+    version.artifact.alias(alias, version)
 
 
-def versions(name: str, *, store: "LocalStore | RemoteStore | Path | str | None" = None) -> list[dict]:
-    """Every version of an artifact, oldest first, whatever its status."""
-    from .client.open import versions_of
-
-    return versions_of(_store(store), name)
+def versions(name: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None) -> list[dict]:
+    """Every version of an artifact (its manifest), oldest first, whatever its status; queued ones last (`pending`)."""
+    return [version.manifest for version in _store(store).artifact(name).versions()]
 
 
-def lineage(ref: str, *, store: "LocalStore | RemoteStore | Path | str | None" = None) -> dict[str, list[str]]:
+def lineage(ref: str, *, store: "Store | LocalStore | RemoteStore | Path | str | None" = None) -> dict[str, list[str]]:
     """One level up (`inputs`) and down (`consumers`) from a version, as exact references."""
-    return _store(store).lineage(ref)
+    version = _store(store).version(ref)
+    return {"inputs": version.inputs, "consumers": version.consumers}

@@ -54,6 +54,8 @@ def publish_report(config: Config, folder: Path) -> None:
             return
         number = publish(name, stage, metadata=metadata, inputs=inputs, label=time.strftime("%Y-%m-%d_%H-%M-%S"),
                                    store=store, config=config)
+    if number is None:
+        return print(f"queued {name} in the outbox (the store does not answer); `cairn status` lists it, `cairn sync` sends it", flush=True)
     state = store.resolve(refs.exact(store.project, name, number))[2]
     print(f"published {name}@v{number} ({describe(state)}; inputs: {', '.join(inputs) or 'none'})", flush=True)
 
