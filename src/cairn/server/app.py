@@ -718,6 +718,32 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     return server
 
 
+SERVED = "server.json"
+
+
+def local_address(host: str) -> str:
+    """The address a client on this machine reaches a server bound to `host` at."""
+    where = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
+    return f"[{where}]" if ":" in where else where
+
+
+def announce(root: Path, url: str, ui: str | None) -> None:
+    """`<root>/server.json`: where this server listens, so a project whose local store it serves sends its writes
+    here (client/open.py) instead of being refused. Valid only while the server holds `server.lock`."""
+    path = root / SERVED
+    temporary = path.with_name(f".{SERVED}.{os.getpid()}")
+    temporary.write_text(json.dumps({"pid": os.getpid(), "url": url, "ui": ui}) + "\n")
+    os.replace(temporary, path)
+
+
+def withdraw(root: Path) -> None:
+    try:
+        if json.loads((root / SERVED).read_text()).get("pid") == os.getpid():
+            (root / SERVED).unlink()
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
                 no_auth: bool = False, ui_port: int | None = None, allow_network_fs: bool = False, gc_interval: float | None = None,
                 gc_grace: float = GRACE) -> None:
@@ -735,9 +761,12 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         print(f"Created store {root.resolve()} with a new owner token ({created}, owner-only)", flush=True)
     actual = server.server_address[1]
     print(f"Store: http://{host}:{actual}/ (data in {root.resolve()})", flush=True)
-    child = None
+    announce(root, f"http://{local_address(host)}:{actual}", None)  # before any client can see the login link
+    child, ui_url = None, None
     if ui_port is not None:
         child, line = start_ui(host, actual, ui_port, server.owner_token, no_auth)
+        found = re.search(r"https?://\S+", line or "")
+        ui_url = found.group(0) if found else None
         if child is None:
             print("warning: the UI did not start (see above); the store keeps running", file=sys.stderr, flush=True)
         else:
@@ -752,6 +781,8 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     if gc_interval:
         gc_schedule(server.app, gc_interval, gc_grace)
         print(f"Garbage collection every {gc_interval / 3600:g} h (grace {gc_grace / 3600:g} h)", flush=True)
+    if ui_url:
+        announce(root, f"http://{local_address(host)}:{actual}", ui_url)
     previous = None
     if threading.current_thread() is threading.main_thread():  # SIGTERM stops the UI child too
         previous = signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
@@ -763,5 +794,6 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         if previous is not None:
             signal.signal(signal.SIGTERM, previous)
         server.server_close()
+        withdraw(root)
         if child is not None:
             stop(child)

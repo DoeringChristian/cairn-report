@@ -24,12 +24,16 @@ counts as evidence is up to the project.
 ```bash
 pip install git+https://github.com/DoeringChristian/cairn.git   # see Install for extras
 cd my-project                       # any folder with a pixi.toml, pyproject.toml or cairn.toml
-cairn publish runs/fit/latest fit   # a folder becomes version v1 of the artifact "fit" in .cairn/store
-cairn pull fit@latest               # prints the path of a read-only local copy
+cairn publish data/crops datasets/crops   # a folder becomes version v1 of "datasets/crops" in .cairn/store
+cairn pull datasets/crops@latest    # prints the path of a read-only local copy
 cairn ui                            # explore projects, versions, files and lineage in the browser
+cairn server                        # or: serve .cairn/store to other machines (the UI starts beside it)
 ```
 
-With no `[store] url` the store is a local folder, `.cairn/store`; nothing needs to run. In Python a
+With no `[store] url` the store is a local folder, `.cairn/store`; nothing needs to run. `cairn ui`
+creates it if needed, prints a one-time login link and opens it in the browser. `cairn server` serves
+the same folder; while it runs, the project's own scripts write through it, and other machines point
+`[store] url` at it. In Python a
 job is a run that uses some versions and publishes others (see "Runs: the Python API"):
 
 ```python
@@ -503,13 +507,20 @@ it, serve a folder over HTTP and point projects at the server. The two halves ar
   folder or a store server, so it can run on a laptop against a store on a cluster.
 
 ```bash
-cairn server /srv/store      # store on 127.0.0.1:8800, UI on 127.0.0.1:8801; HTTPS reverse proxy in front
+cairn server                 # the project's .cairn/store: store on 127.0.0.1:8800, UI on 127.0.0.1:8801
+cairn server /srv/store      # any folder; put an HTTPS reverse proxy in front for other machines
 cairn server /srv/store --no-ui [--port 8800] [--max-blob-gb 50]     # the store alone
 ```
 
+Without a folder, `cairn server` serves the project's store folder (`.cairn/store`, or `[store] path`),
+creating it if needed; a project with `[store] url` is refused (it already has a server). While the
+server runs it writes `<folder>/server.json` (its address), and the project's scripts and commands,
+which would otherwise write the folder themselves, send their versions through the server instead,
+with the folder's owner token. When the server stops, they write the folder directly again.
+
 The first `cairn server` run on a new folder creates it with a random owner token (owner-only, in
-`<folder>/token`); every launch prints `Store: <url>`, `UI: <url>` and `Token: <owner token>` to
-the terminal (never into a URL). Binding to a non-local `--host` warns: the server speaks plain
+`<folder>/token`); every launch prints `Store: <url>`, `UI: <url>`, a one-time `Log in:` link (a random
+code that works once within 10 minutes, never the token) and `Token: <owner token>` to the terminal. Binding to a non-local `--host` warns: the server speaks plain
 HTTP. By default `cairn server` also starts `cairn ui` as a child process (own port: `--ui-port`,
 default `--port` + 1; same `--host`) pointed at this store. The child gets the owner token only in
 its environment, never on its command line, and stops with the server; if the UI dies, the store
@@ -885,13 +896,19 @@ cookies, no login page and no HTML. It never runs pushed code.
 cairn ui                                   # the store in cairn.toml ([store] url or path), on 127.0.0.1:8801
 cairn ui --store https://store.example.org # a remote store, e.g. from a laptop against a cluster-side store
 cairn ui --store /srv/store                # a store folder
+cairn ui --no-browser                      # print the login link without opening it
 ```
+
+For the project's own store folder, `cairn ui` creates it (with an owner token) if it is new, and
+browses it through the `cairn server` serving it if one runs. It prints a one-time `Log in:` link and
+opens it in the browser, so there is no token to paste; for a store server the link logs in with
+`CAIRN_STORE_TOKEN` or `[store] token_file`, if set. A taken port (a server's own UI on 8801) moves
+it to a free one.
 
 The UI opens the store only through its interface (a store server's API, or a folder's store
 code), so it needs no access to the store's files and does no work in the store server. It prints
 `UI: <url> (store: <url or folder>)` and serves a React app (built files in the package, no Node
-needed) in the look of the reports (their stylesheet, tokens and class names; dark mode follows the
-system):
+needed) in the look of the reports (their stylesheet, tokens and class names):
 
 - `/` projects (title, description, artifacts, last update);
 - `/p/<project>/` the project: a search box (names, titles, status, aliases), then the tabs
@@ -932,8 +949,9 @@ header `X-Cairn: 1` (a cross-site request cannot send it); a name may be one URL
 **Login.** By default the UI asks for a store token on `/login` (the owner token or a scoped one) and
 checks it against the store: a store server is asked with it, a store folder's owner token file and
 `tokens.jsonl` are checked. The app's login page posts the token to `/ui-api/login`; it stays in the UI process, in an in-memory session table; the
-browser gets only a random session id (HttpOnly, SameSite=Strict cookie, `Secure` unless
-`--insecure-cookies`, for plain-HTTP tunnels), and the token is never in a URL or a page. Each
+browser gets only a random session id (HttpOnly, SameSite=Strict cookie; `Secure` when a reverse
+proxy says `X-Forwarded-Proto: https` or the UI listens on a public address, not for plain HTTP to
+this machine such as an SSH tunnel; `--insecure-cookies` drops it everywhere), and the token is never in a URL or a page. Each
 session acts with its own token, so a scoped token sees only its project, and a revoked token ends
 its session. Sessions last 30 days and are forgotten when the UI restarts.
 

@@ -378,7 +378,7 @@ class Artifact:
 
     def draft(self, *, label: str | None = None, metadata: dict | None = None, aliases=(), watch: bool = False):
         """A fresh, empty folder managed by Cairn that becomes this artifact's next version when it closes (a `Draft`,
-        a context manager and a run logger; see `cairn.draft`)."""
+        a context manager with the `add`/`add_*` writer; see `cairn.draft`)."""
         from .drafts import Draft
 
         return Draft(f"{self.project.name}:{self.name}", label=label, metadata=metadata, aliases=aliases, watch=watch,

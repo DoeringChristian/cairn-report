@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.1
+
+- `cairn server` with no folder serves the project's store folder (`.cairn/store`), creating it if
+  needed. While it runs (it writes `<folder>/server.json`), the project's scripts and commands send
+  their versions through it instead of being refused as a second writer.
+- `cairn ui` with the project's store folder creates it if it is new and browses it through a running
+  `cairn server` if there is one. It prints a one-time login link (a random code, valid once for 10
+  minutes; never the token) and opens it in the browser (`--no-browser` to skip); `cairn server`
+  prints one too. A taken port moves the UI to a free one.
+- The UI's session cookie is `Secure` behind an HTTPS reverse proxy (`X-Forwarded-Proto: https`) and on
+  public addresses, and plain for HTTP to this machine, where browsers refuse a `Secure` cookie.
+- The repository is github.com/DoeringChristian/cairn (formerly cairn-report).
+
 ## 0.13.0: the first Cairn release
 
 cairn-report becomes **Cairn**: an artifact store with a server and a UI, single-page reports built

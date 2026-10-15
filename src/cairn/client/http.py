@@ -190,12 +190,43 @@ class Client:
 # ----------------------------------------------------------------- settings
 
 
+def served(config: Config | None) -> dict | None:
+    """The `cairn server` serving this project's local store folder right now ({url, ui, pid}, from the
+    server's `server.json`), else None. A project without `[store] url` then works through that server."""
+    if config is None or config.store.get("url") or config.store_path is None:
+        return None
+    from ..store.db import ServerLock
+
+    root = Path(config.store_path)
+    if not ServerLock.held(root):
+        return None
+    try:
+        info = json.loads((root / "server.json").read_text())
+    except (OSError, ValueError):
+        raise SystemExit(f"{root} is served by `cairn server`, but not where (no server.json): restart that server")
+    return info if isinstance(info, dict) and info.get("url") else None
+
+
+def store_url(config: Config | None) -> str:
+    """The store server this project talks to: `[store] url`, else the server serving its local store folder, else ""."""
+    if config is not None and config.store.get("url"):
+        return config.store["url"].rstrip("/")
+    info = served(config)
+    return info["url"].rstrip("/") if info else ""
+
+
 def connect(config: Config | None, url: str | None = None, allow_http: bool = False) -> Client:
-    """A client for the store `[store] url` names; the token comes from CAIRN_STORE_TOKEN or `[store] token_file`."""
+    """A client for the store `[store] url` names (or the `cairn server` serving the project's local store folder,
+    with that folder's owner token); the token comes from CAIRN_STORE_TOKEN or `[store] token_file`."""
     settings = config.store if config else {}
     url = url or settings.get("url")
     if not url:
-        raise SystemExit("no store URL: set [store] url in cairn.toml")
+        info = served(config)
+        if info is None:
+            raise SystemExit("no store URL: set [store] url in cairn.toml")
+        from ..store.tokens import read_token
+
+        return Client(info["url"], read_token(Path(config.store_path) / "token"))
     token = os.environ.get(TOKEN_ENV, "").strip()
     if not token and settings.get("token_file"):
         token_file = Path(settings["token_file"]).expanduser()

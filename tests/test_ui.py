@@ -124,11 +124,14 @@ def test_the_api_needs_the_x_cairn_header(ui):
     assert data(ui, "me", cookie) == {"scope": "owner" if ui.kind == "folder" else "store", "project": None, "auth": True}
 
 
-def test_the_cookie_is_secure_by_default(server):
+def test_the_cookie_is_secure_behind_https_and_plain_on_this_machine(server):
     httpd, ui = start(RemoteBackend(server.url, allow_http=False))
     try:
-        status, headers, _ = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": server.token}), token=None, headers=JSON)
+        body = json.dumps({"token": server.token})
+        status, headers, _ = call(ui, "POST", "/ui-api/login", body=body, token=None, headers={**JSON, "X-Forwarded-Proto": "https"})
         assert status == 200 and "Secure" in headers["Set-Cookie"] and "HttpOnly" in headers["Set-Cookie"]
+        status, headers, _ = call(ui, "POST", "/ui-api/login", body=body, token=None, headers=JSON)  # http://127.0.0.1
+        assert status == 200 and "Secure" not in headers["Set-Cookie"] and "HttpOnly" in headers["Set-Cookie"]
     finally:
         httpd.shutdown()
         httpd.server_close()

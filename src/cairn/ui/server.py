@@ -28,6 +28,7 @@ the owner's full access to a folder.
 
 from __future__ import annotations
 
+import errno
 import html
 import io
 import json
@@ -126,7 +127,10 @@ class UIHandler(BaseHTTPRequestHandler):
     # --------------------------------------------------------------- sessions
 
     def _cookie_header(self, value: str, max_age: int) -> str:
-        secure = "; Secure" if self.secure_cookie else ""
+        # Secure unless the browser talks plain HTTP to this machine (`cairn ui`, an SSH tunnel): a reverse proxy
+        # in front says https in X-Forwarded-Proto, and a UI on a public address is meant to sit behind one.
+        https = self.headers.get("X-Forwarded-Proto", "").lower() == "https"
+        secure = "; Secure" if self.secure_cookie and (https or not self.local) else ""
         return f"{COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}"
 
     def _cookie_value(self) -> str | None:
@@ -206,6 +210,13 @@ class UIHandler(BaseHTTPRequestHandler):
         if path == "/login":
             if self.no_auth:
                 raise HttpError(404, "no such page")
+            if "code" in query:  # the one-time link `cairn ui` prints and opens: a login without typing the token
+                with self.lock:
+                    entry = self.login_codes.pop(query["code"][0], None)
+                session = self.backend.login(entry[1]) if entry and entry[0] > time.time() else None
+                if session is not None:
+                    return self._send(303, b"", headers={"Location": "/", "Set-Cookie": self._start(session), "Cache-Control": "no-store"})
+                return self._send(303, b"", headers={"Location": "/login"})  # used or expired: the token form
             if self._session() is not None:
                 return self._send(303, b"", headers={"Location": safe_target(query.get("next", ["/"])[0])})
             return self._app()
@@ -637,6 +648,10 @@ class UIHandler(BaseHTTPRequestHandler):
         if session is None:
             time.sleep(LOGIN_DELAY)
             return self._json(401, {"error": "That token is not valid."})
+        self._send(200, b'{"ok":true}', "application/json", {"Set-Cookie": self._start(session), "Cache-Control": "no-store"})
+
+    def _start(self, session) -> str:
+        """Keep a new session; returns the Set-Cookie header that hands its random id to the browser."""
         session.expires = time.time() + SESSION_SECONDS
         identifier = secrets.token_urlsafe(32)
         with self.lock:
@@ -646,7 +661,7 @@ class UIHandler(BaseHTTPRequestHandler):
             if len(self.sessions) >= MAX_SESSIONS:
                 del self.sessions[min(self.sessions, key=lambda key: self.sessions[key].expires)]
             self.sessions[identifier] = session
-        self._send(200, b'{"ok":true}', "application/json", {"Set-Cookie": self._cookie_header(identifier, SESSION_SECONDS), "Cache-Control": "no-store"})
+        return self._cookie_header(identifier, SESSION_SECONDS)
 
     # ------------------------------------------------------------------- I/O
 
@@ -736,7 +751,7 @@ def make_ui_server(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1
     if no_auth and host not in LOCAL_HOSTS:
         raise SystemExit("--no-auth shows the store to anyone who can connect: only with a loopback --host")
     handler = type("Handler", (UIHandler,), {
-        "backend": backend, "sessions": {}, "lock": threading.Lock(), "no_auth": no_auth,
+        "backend": backend, "sessions": {}, "login_codes": {}, "lock": threading.Lock(), "no_auth": no_auth, "local": host in LOCAL_HOSTS,
         "secure_cookie": secure_cookie, "static_cache": {}, "fixed": backend.anonymous() if no_auth else None,
     })
     server = ThreadingHTTPServer((host, port), handler)
@@ -759,15 +774,44 @@ def follow_parent() -> None:
     threading.Thread(target=watch, daemon=True).start()
 
 
+LOGIN_LINK_SECONDS = 600
+
+
+def login_link(server: ThreadingHTTPServer, base: str, token: str) -> str:
+    """A one-time login link: a random code (never the token) that logs in once, within LOGIN_LINK_SECONDS."""
+    code = secrets.token_urlsafe(24)
+    handler = server.RequestHandlerClass
+    with handler.lock:
+        handler.login_codes[code] = (time.time() + LOGIN_LINK_SECONDS, token)
+    return f"{base}login?code={code}"
+
+
 def serve_ui(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", port: int = 8801, no_auth: bool = False,
-             secure_cookie: bool = True) -> None:
-    server = make_ui_server(backend, host, port, no_auth=no_auth, secure_cookie=secure_cookie)
+             secure_cookie: bool = True, login_token: str = "", open_browser: bool = False) -> None:
+    """Serve the UI. With `login_token`, print a one-time login link for it (and open it with `open_browser`)."""
+    try:
+        server = make_ui_server(backend, host, port, no_auth=no_auth, secure_cookie=secure_cookie)
+    except OSError as error:
+        if not port or error.errno != errno.EADDRINUSE:
+            raise
+        print(f"port {port} is in use; taking a free one", flush=True)
+        server = make_ui_server(backend, host, 0, no_auth=no_auth, secure_cookie=secure_cookie)
     shown = host if ":" not in host else f"[{host}]"
-    print(f"UI: http://{shown}:{server.server_address[1]}/ (store: {backend.describe})", flush=True)
+    base = f"http://{shown}:{server.server_address[1]}/"
+    print(f"UI: {base} (store: {backend.describe})", flush=True)
     if host not in LOCAL_HOSTS:
         print("warning: the UI speaks plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
     if no_auth:
         print("Authentication is off (--no-auth): everyone who can connect sees the store; for local use only", flush=True)
+    opening = base
+    if login_token and not no_auth:
+        here = {"0.0.0.0": "127.0.0.1", "::": "[::1]"}.get(host, shown)  # the link works from this machine
+        opening = login_link(server, f"http://{here}:{server.server_address[1]}/", login_token)
+        print(f"Log in: {opening}  (one-time link, valid {LOGIN_LINK_SECONDS // 60} minutes)", flush=True)
+    if open_browser:
+        import webbrowser
+
+        threading.Timer(0.3, webbrowser.open, (opening,)).start()
     follow_parent()
     try:
         server.serve_forever()

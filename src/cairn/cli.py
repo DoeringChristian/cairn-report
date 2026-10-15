@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from ._version import __version__
-from .config import load_config
+from .config import load_config, protect
 
 def cmd_build(args) -> None:
     from .reports.build import build_all
@@ -373,8 +373,10 @@ def cmd_status(args) -> None:
 
     from .client import replica
 
+    from .client.http import store_url
+
     config = load_config(args.project)
-    url = (config.store.get("url") or "").rstrip("/")
+    url = store_url(config)
     if not url:
         from .client.open import open_store
 
@@ -459,7 +461,14 @@ def cmd_server(args) -> None:
         raise SystemExit(str(error)) from None
     if interval is not None and interval <= 0:
         raise SystemExit("--gc-interval must be longer than 0")
-    serve_store(args.root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3), no_auth=args.no_auth,
+    root = args.root
+    if root is None:  # the project's own store folder (.cairn/store by default)
+        config = load_config(args.project)
+        if config.store.get("url"):
+            raise SystemExit(f"this project's store is the server {config.store['url']}; to serve a folder: cairn server <folder>")
+        protect(config.cairn_dir, config.store_path)
+        root = config.store_path
+    serve_store(root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3), no_auth=args.no_auth,
                 ui_port=None if args.no_ui else args.ui_port if args.ui_port is not None else args.port + 1 if args.port else 0,
                 allow_network_fs=args.allow_network_fs, gc_interval=interval, gc_grace=grace)
 
@@ -473,8 +482,34 @@ def cmd_ui(args) -> None:
     except (SystemExit, ValueError):
         if args.store is None:
             raise
-    backend = open_backend(args.store, config, no_auth=args.no_auth, allow_http=args.allow_http)
-    serve_ui(backend, host=args.host, port=args.port, no_auth=args.no_auth, secure_cookie=not args.insecure_cookies)
+    from .client.http import connect, served
+    from .store.tokens import init_root, read_token
+    from .ui.backends import RemoteBackend
+
+    login = ""  # the token the one-time login link logs in with
+    if args.store is None and not config.store.get("url"):  # the project's own store folder (.cairn/store)
+        root = config.store_path
+        info = served(config)
+        if info:  # a `cairn server` serves it: browse through that server
+            print(f"{root} is served by `cairn server` (pid {info['pid']})", flush=True)
+            backend = RemoteBackend(info["url"], allow_http=True, token=read_token(root / "token") if args.no_auth else "")
+            login = read_token(root / "token")
+        else:
+            protect(config.cairn_dir, root)
+            if not args.no_auth and not (root / "token").is_file():
+                print(f"Created store {root} with a new owner token ({init_root(root)}, owner-only)", flush=True)
+            backend = open_backend(None, config, no_auth=args.no_auth, allow_http=args.allow_http)
+            login = getattr(backend, "owner", "")
+    else:
+        backend = open_backend(args.store, config, no_auth=args.no_auth, allow_http=args.allow_http)
+        login = getattr(backend, "owner", "")
+        if not login and not args.no_auth:
+            try:
+                login = connect(config, args.store, args.allow_http).token  # CAIRN_STORE_TOKEN or [store] token_file
+            except SystemExit:
+                login = ""
+    serve_ui(backend, host=args.host, port=args.port, no_auth=args.no_auth, secure_cookie=not args.insecure_cookies,
+             login_token=login, open_browser=not args.no_browser)
 
 
 def cmd_migrate(args) -> None:
@@ -530,7 +565,7 @@ def cmd_finalize_study(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="cairn", description="Cairn: an artifact store with a server and a UI, static reports from Markdown and run outputs, and a run logger.")
+    parser = argparse.ArgumentParser(prog="cairn", description="Cairn: an artifact store for research, with a server and a UI: runs and their results as versioned artifacts, and reports built from pinned artifacts.")
     parser.add_argument("--version", action="version", version=f"cairn {__version__}")
     parser.add_argument("--project", type=Path, help="project root (default: nearest folder with cairn.toml, pixi.toml, or pyproject.toml)")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -676,7 +711,7 @@ def main(argv: list[str] | None = None) -> None:
     verify.set_defaults(run=cmd_verify)
 
     store_serve = commands.add_parser("server", help="serve a store folder (a new one gets an owner token); put an HTTPS reverse proxy in front")
-    store_serve.add_argument("root", type=Path)
+    store_serve.add_argument("root", type=Path, nargs="?", help="the store folder (default: the project's, .cairn/store; created if new)")
     store_serve.add_argument("--host", default="127.0.0.1")
     store_serve.add_argument("--port", type=int, default=8800)
     store_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
@@ -719,6 +754,7 @@ def main(argv: list[str] | None = None) -> None:
     ui.add_argument("--no-auth", action="store_true", help="no login: use CAIRN_STORE_TOKEN / [store] token_file (loopback hosts only)")
     ui.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
     ui.add_argument("--insecure-cookies", action="store_true", help="login over plain HTTP (SSH tunnel): the session cookie loses its Secure flag")
+    ui.add_argument("--no-browser", action="store_true", help="do not open the one-time login link in a browser")
     ui.set_defaults(run=cmd_ui)
 
     argv = list(sys.argv[1:] if argv is None else argv)
