@@ -1,4 +1,4 @@
-"""Command line: `cairn-report build | serve | share | mlflow | push | pull | hub`."""
+"""Command line: `cairn-report build | serve | share | publish | push | pull | hub`."""
 
 from __future__ import annotations
 
@@ -34,6 +34,23 @@ def cmd_push(args) -> None:
                           command=args.command or None, url=args.url, allow_http=args.allow_http))
 
 
+def cmd_publish(args) -> None:
+    from .publish import parse_meta, publish_folder, publish_mappings, watch_folder
+
+    config = load_config(args.project)
+    meta, command = parse_meta(args.meta), args.command or None
+    if (args.folder is None) != (args.name is None):
+        raise SystemExit("publish takes FOLDER NAME together, or neither to use [store] publish")
+    if args.folder is None:
+        if args.watch or command:
+            raise SystemExit("--watch and -- command need FOLDER NAME")
+        return publish_mappings(config, args.label, args.alias, meta)
+    folder = Path(args.folder)
+    if args.watch or command:
+        raise SystemExit(watch_folder(config, folder, args.name, args.label, args.alias, meta, command, args.interval))
+    publish_folder(config, folder, args.name, args.label, args.alias, meta)
+
+
 def cmd_pull(args) -> None:
     from dataclasses import replace
 
@@ -49,26 +66,6 @@ def cmd_pull(args) -> None:
                                              if config.outputs_dir.is_relative_to(config.project) else "outputs"))
     runs = None if args.runs is None else [run for run in args.runs if run]
     pull(hub, name, config, version=args.version, runs=runs, with_report=not args.runs_only, force=args.force)
-
-
-def cmd_mlflow(args) -> None:
-    from .mlflow_backend import start_server, stop_on_sigterm, stop_server, tracking_uri
-
-    stop_on_sigterm()
-    config = load_config(args.project)
-    settings = config.logger["mlflow"]
-    if not settings.get("serve"):
-        raise SystemExit("set [logger.mlflow] serve = true in cairn-report.toml to run the project's own MLflow server")
-    process = start_server(settings, config.project, host=args.host)
-    if process is None:
-        raise SystemExit(f"an MLflow server already answers on {tracking_uri(settings)}")
-    print(f"MLflow: {tracking_uri(settings)} (data in {config.project / settings.get('store', 'mlflow')}); Ctrl-C stops it", flush=True)
-    try:
-        process.wait()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stop_server(process)
 
 
 def cmd_hub_init(args) -> None:
@@ -120,9 +117,15 @@ def main(argv: list[str] | None = None) -> None:
     finalize.add_argument("study", type=Path, help="the study folder, outputs/<run-name>/<timestamp>")
     finalize.set_defaults(run=cmd_finalize_study)
 
-    tracker = commands.add_parser("mlflow", help="run the project's own MLflow tracking server ([logger.mlflow] serve = true)")
-    tracker.add_argument("--host", default="127.0.0.1")
-    tracker.set_defaults(run=cmd_mlflow)
+    publish = commands.add_parser("publish", help="store a folder as a new artifact version (or follow a running job's folder)")
+    publish.add_argument("folder", nargs="?", help="the folder to publish (a symlink such as runs/x/latest is followed)")
+    publish.add_argument("name", nargs="?", help="artifact name, e.g. descent or datasets/crops")
+    publish.add_argument("--label", help="version label (default: the resolved folder's name)")
+    publish.add_argument("--alias", action="append", default=[], help="alias to point at the version (repeatable)")
+    publish.add_argument("--meta", action="append", default=[], metavar="KEY=VALUE", help="metadata (repeatable)")
+    publish.add_argument("--watch", action="store_true", help="sync the folder into one running version until stopped, then complete it")
+    publish.add_argument("--interval", type=float, help=argparse.SUPPRESS)
+    publish.set_defaults(run=cmd_publish)
 
     def hub_client(command):
         command.add_argument("--url", help="hub URL (default: [hub] url or CAIRN_HUB_URL)")
@@ -160,13 +163,13 @@ def main(argv: list[str] | None = None) -> None:
 
     argv = list(sys.argv[1:] if argv is None else argv)
     command = []
-    if "--" in argv:  # `push ... -- <command...>`: everything after -- is the command to run
+    if "--" in argv:  # `push|publish ... -- <command...>`: everything after -- is the command to run
         cut = argv.index("--")
         argv, command = argv[:cut], argv[cut + 1:]
     args = parser.parse_args(argv)
     args.command = command
-    if command and args.run is not cmd_push:
-        parser.error("only `push` takes a command after --")
+    if command and args.run not in (cmd_push, cmd_publish):
+        parser.error("only `push` and `publish` take a command after --")
     args.run(args)
 
 

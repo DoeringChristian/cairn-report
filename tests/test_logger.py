@@ -66,7 +66,7 @@ def test_report_reads_logged_run(tmp_path):
 def test_origin_capture_is_cheap(tmp_path):
     import time
 
-    log = RunLogger(tmp_path / "run", backends=["local"])
+    log = RunLogger(tmp_path / "run")
     start = time.perf_counter()
     for step in range(2000):
         log.scalar("loss", 1.0 / (step + 1), step=step)

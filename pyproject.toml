@@ -23,12 +23,6 @@ cairn-report = "cairn_report.cli:main"
 Repository = "https://github.com/DoeringChristian/cairn-report"
 
 [project.optional-dependencies]
-mlflow = [
-    "mlflow-skinny>=2.12",
-]
-mlflow-server = [
-    "mlflow>=3",
-]
 hydra = [
     "hydra-core>=1.3",
 ]

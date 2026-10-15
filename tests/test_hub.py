@@ -103,7 +103,7 @@ def test_runs_are_incremental_with_history(hub, client):
     assert f"{RUN}/.hydra/config.yaml" in files and f"{RUN}/figures/hist.png" in files
     pusher = RunPusher(Hub(hub["url"], TOKEN), config, "study")
     assert pusher.once() == (0, 0)
-    RunLogger(client / "outputs" / RUN, backends=["local"]).scalar("rmse", 0.25)
+    RunLogger(client / "outputs" / RUN).scalar("rmse", 0.25)
     assert pusher.once()[0] == 1
     lines = (hub["root"] / "projects" / "study" / "runs.jsonl").read_text().splitlines()
     assert sum(f'"{RUN}/metrics.jsonl"' in line for line in lines) == 2  # the old version is still recorded
@@ -174,35 +174,6 @@ def test_push_wraps_a_command(hub, client):
     finally:
         os.chdir(previous)
     assert code == 3 and "late.txt" in runs(hub)
-
-
-def test_logger_hub_backend_sends_runs_live(hub, client):
-    run = client / "outputs" / "live" / "2026-02-02_00-00-00"
-    log = RunLogger(run, backends=["hub"])
-    log.scalar("loss", 1.0, step=0)
-    log.table("cases", [{"case": "a", "error": 1}])
-    deadline = time.time() + 15
-    while time.time() < deadline and "live/2026-02-02_00-00-00/tables/cases.csv" not in runs(hub, allow_missing=True):
-        time.sleep(0.3)
-    assert "live/2026-02-02_00-00-00/tables/cases.csv" in runs(hub)  # arrived while the run is still open
-    (run / "run.json").write_text('{"status": "completed"}')
-    log.close()
-    assert "live/2026-02-02_00-00-00/run.json" in runs(hub)  # the final sync includes run.json
-    assert (run / "metrics.jsonl").is_file()  # the run directory stays the first copy
-
-
-def test_report_reads_runs_from_the_hub(hub, client):
-    config_file = client / "cairn-report.toml"
-    config_file.write_text(config_file.read_text() + '[logger]\nbackends = ["hub"]\n')
-    push(load_config(client), what="runs")
-    shutil.rmtree(client / "outputs")  # the runs now exist only on the hub
-    build_all(load_config(client))
-    narrative = (client / "generated" / "reports" / "alpha" / "narrative.html").read_text()
-    assert ">0.5</span>" in narrative
-    trace = next(json.loads(t.replace("&quot;", '"')) for t in re.findall(r'data-trace="([^"]*)"', narrative) if "hub" in t)
-    assert trace["hub"]["run"] == RUN and trace["hub"]["url"].endswith(f"/runs/study/{RUN}/")
-    manifest = json.loads((client / "generated" / "reports" / "alpha" / "manifest.json").read_text())
-    assert manifest["hub_runs"][0]["run"] == RUN
 
 
 def test_push_arguments_parse_in_any_order(monkeypatch):

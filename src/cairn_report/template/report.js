@@ -298,14 +298,6 @@ function applyTraceState() {
 }
 function toggleTrace() { traceOpen = !traceOpen; try { localStorage.setItem("report-trace-open", traceOpen ? "1" : "0"); } catch (_) {} applyTraceState(); }
 $("#lightbox-info").onclick = toggleTrace;
-/* A tracking server started next to the reports is recorded as 127.0.0.1; from another machine
-   (report-host), point the link at the host this page was loaded from. */
-function reachable(url) {
-  if (!url) return url;
-  try { const target = new URL(url); const loopback = ["127.0.0.1", "localhost", "[::1]"];
-    if (loopback.includes(target.hostname) && !loopback.includes(location.hostname)) target.hostname = location.hostname;
-    return target.href; } catch (_) { return url; }
-}
 function renderTrace(trace) {
   const rows = [
     ["File", trace.path],
@@ -315,8 +307,6 @@ function renderTrace(trace) {
     ["Generated", trace.generated],
     ["Read in block", (trace.inputs || []).join(", ")],
     ["Commit", trace.revision ? trace.revision.slice(0, 12) + (trace.uncommitted ? ` + ${trace.uncommitted}` : "") : ""],
-    ["MLflow", trace.mlflow ? {text: `run ${trace.mlflow.run_id}`, href: reachable(trace.mlflow.url)} : ""],
-    ["Hub", trace.hub ? {text: trace.hub.run, href: trace.hub.url} : ""],
     ["Report", trace.report],
   ].filter(([, value]) => value);
   const list = $("#lightbox-trace"); list.replaceChildren();

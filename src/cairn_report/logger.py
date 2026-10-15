@@ -16,14 +16,8 @@ append-only JSON Lines, so nothing already written is ever rewritten:
       artifacts/<name>.*   any other evidence: models, animations, archives
       logs/<name>.txt      human-readable logs
 
-Where the evidence goes is set by `[logger] backends` in cairn-report.toml:
-"local" (the default) writes the files above into the run directory, "mlflow"
-sends the same scalars and files to an MLflow tracking server (see
-`cairn_report.mlflow_backend`), "hub" sends the run directory to a cairn-report
-hub while the run executes (see `cairn_report.hub_backend`; it implies "local"),
-and they may be combined. With "local" among
-them, the run directory stays the record and an MLflow error only warns; with
-"mlflow" alone, an MLflow error fails the call, so no evidence is lost silently.
+The logger only writes these files. To follow a running job from elsewhere, sync its run folder with
+`cairn-report publish <folder> <name> --watch`.
 
 Read them back with `read_scalars(run_dir)` (latest value per name) and
 `read_artifacts(run_dir)` (latest entry per path); a truncated last line from a
@@ -134,85 +128,15 @@ def _plain(value: Any) -> Any:
     return value
 
 
-class LocalBackend:
-    """Evidence files and both indexes in the run directory."""
-
-    name = "local"
-
-    def __init__(self, root: Path):
-        self.root = root
-
-    def scalar(self, event: dict) -> None:
-        _append(self.root / METRICS, event)
-
-    def file(self, relative: str, data: bytes, entry: dict) -> None:
-        _atomic_write(self.root / relative, data)
-        _append(self.root / ARTIFACTS, entry)
-
-    def finish(self) -> None:
-        pass
-
-
-def _backends(root: Path, project: Path, names: list[str] | None) -> list:
-    from .config import load_config
-
-    settings = load_config(project).logger
-    names = names if names is not None else settings["backends"]
-    unknown = set(names) - {"local", "mlflow", "hub"}
-    if unknown or not names:
-        raise ValueError(f"logger backends must be a non-empty subset of ['local', 'mlflow', 'hub'], got {names}")
-    backends = []
-    if "local" in names or "hub" in names:  # the hub backend sends what the run directory holds
-        backends.append(LocalBackend(root))
-    if "hub" in names:
-        from .hub_backend import HubBackend
-
-        try:
-            backends.append(HubBackend.attach(root, project))
-        except (Exception, SystemExit) as error:  # the run directory is the record; the hub is a copy
-            import warnings
-
-            warnings.warn(f"hub logging disabled for this run ({error}); the run directory has the evidence")
-    if "mlflow" in names:
-        from .mlflow_backend import MLflowBackend
-
-        try:
-            backends.append(MLflowBackend.attach(root, project, settings["mlflow"]))
-        except (Exception, SystemExit) as error:
-            if "local" not in names and "hub" not in names:
-                raise  # MLflow is the only record: the run must not start without it
-            import warnings  # mirroring: the run directory has the evidence, so the run goes on
-
-            warnings.warn(f"mlflow logging disabled for this run ({error}); the run directory has the evidence")
-    return backends
-
-
 class RunLogger:
-    def __init__(self, output_dir: Path | str, backends: list[str] | None = None):
-        """One logger per run directory; `backends` overrides `[logger] backends` from the config."""
+    def __init__(self, output_dir: Path | str):
+        """One logger per run directory."""
         self.root = Path(output_dir).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.project = _project_root(self.root)
-        self.backends = _backends(self.root, self.project, backends)
-        self._warned: set[str] = set()
-
-    def _emit(self, method: str, *args) -> None:
-        local = any(backend.name == "local" for backend in self.backends)
-        for backend in self.backends:
-            try:
-                getattr(backend, method)(*args)
-            except Exception as error:
-                if not local or backend.name == "local":
-                    raise  # no complete local record: the error must surface
-                if backend.name not in self._warned:  # the run directory has everything; keep the run going
-                    self._warned.add(backend.name)
-                    import warnings
-
-                    warnings.warn(f"{backend.name} logging failed ({error}); the run directory still has the evidence")
 
     def close(self) -> None:
-        """Flush and finish every backend (also done automatically at exit)."""
-        self._emit("finish")
+        """Nothing is buffered; kept so existing `with`-less callers keep working."""
 
     # ---------------------------------------------------------------- scalars
 
@@ -234,7 +158,7 @@ class RunLogger:
         }
         if not finite:
             event["nonfinite"] = repr(float(number))
-        self._emit("scalar", event)
+        _append(self.root / METRICS, event)
 
     def scalars(self, values: Mapping[str, Number], step: int | None = None) -> None:
         for name, value in values.items():
@@ -395,7 +319,8 @@ class RunLogger:
         entry = {"name": name, "kind": kind, "path": relative, "time": _now(), "origin": self._origin()}
         if producer:
             entry["producer"] = producer
-        self._emit("file", relative, data, entry)
+        _atomic_write(self.root / relative, data)
+        _append(self.root / ARTIFACTS, entry)
         return self.root / relative
 
     def _relative(self, file: str) -> str:

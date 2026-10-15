@@ -17,7 +17,7 @@ pytest.importorskip("imageio_ffmpeg")
 
 def write_video(run_dir, name="rollout", size=(48, 63)):
     frames = np.linspace(0, 1, 12)[:, None, None] * np.ones((12, *size))
-    log = RunLogger(run_dir, backends=["local"])
+    log = RunLogger(run_dir)
     path = log.video(name, frames, fps=12)
     log.close()
     return path

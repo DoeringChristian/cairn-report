@@ -27,17 +27,8 @@ something, add a `cairn-report.toml` at the project root:
     project = "my-study"               # default: the project folder name
     token_file = "~/.config/cairn-report/store-token"  # or CAIRN_STORE_TOKEN; never the token itself
     exclude = ["*.pkl"]                # files never published: gitignore-style globs on project paths
+    interval = 30                      # seconds between syncs of `cairn-report publish --watch`
     publish = [{ folder = "runs/descent/latest", name = "descent" }]  # folders `cairn-report publish` syncs
-
-    [logger]
-    backends = ["local"]               # "local", "mlflow", "hub" (sends runs live; implies local)
-    [logger.mlflow]
-    tracking_uri = "https://mlflow.example.org"  # default: MLFLOW_TRACKING_URI; credentials via MLflow's env vars
-    experiment = "my-study"            # default: the project folder name
-    cache_dir = "generated/mlflow"     # where reports keep downloaded MLflow runs
-    serve = true                       # run the project's own tracking server (instead of tracking_uri)
-    port = 5000                        # its port; `cairn-report serve` starts it next to the reports
-    store = "mlflow"                   # its data folder in the project
 
 The project root is the nearest folder, starting at the working directory, that
 contains `cairn-report.toml`, `pixi.toml`, or `pyproject.toml`.
@@ -63,7 +54,6 @@ class Config:
     template_dir: Path | None = None
     hub: dict = field(default_factory=dict)
     store: dict = field(default_factory=dict)
-    logger: dict = field(default_factory=lambda: {"backends": ["local"], "mlflow": {}})
     page: dict = field(default_factory=dict)
 
     @property
@@ -86,7 +76,10 @@ def load_config(project: Path | str | None = None) -> Config:
     data: dict = {}
     if (root / CONFIG_FILE).is_file():
         data = tomllib.loads((root / CONFIG_FILE).read_text())
-    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub", "store", "logger", "page"}
+    if "logger" in data:
+        raise ValueError(f"{root / CONFIG_FILE}: [logger] was removed: the logger only writes files into the run folder "
+                         "(sync a running job with `cairn-report publish <folder> <name> --watch`)")
+    unknown = set(data) - {"reports_dir", "output_dir", "outputs_dir", "style", "hub", "store", "page"}
     if unknown:
         raise ValueError(f"{root / CONFIG_FILE}: unknown keys {sorted(unknown)}")
     style = data.get("style", {})
@@ -106,7 +99,7 @@ def load_config(project: Path | str | None = None) -> Config:
     store = data.get("store", {})
     if "token" in store:
         raise ValueError(f"{root / CONFIG_FILE}: never put the store token in the config; use token_file or CAIRN_STORE_TOKEN")
-    unknown_store = set(store) - {"path", "url", "project", "token_file", "exclude", "publish"}
+    unknown_store = set(store) - {"path", "url", "project", "token_file", "exclude", "publish", "interval"}
     if unknown_store:
         raise ValueError(f"{root / CONFIG_FILE}: unknown [store] keys {sorted(unknown_store)}")
     for key in ("path", "url", "project", "token_file"):
@@ -114,23 +107,16 @@ def load_config(project: Path | str | None = None) -> Config:
             raise ValueError(f"{root / CONFIG_FILE}: [store] {key} must be text")
     if not isinstance(store.get("exclude", []), list) or not all(isinstance(item, str) for item in store.get("exclude", [])):
         raise ValueError(f"{root / CONFIG_FILE}: [store] exclude must be a list of glob patterns")
+    if isinstance(store.get("interval", 30), bool) or not isinstance(store.get("interval", 30), (int, float)):
+        raise ValueError(f"{root / CONFIG_FILE}: [store] interval must be a number of seconds")
     mappings = store.get("publish", [])
     if not isinstance(mappings, list) or not all(isinstance(item, dict) and set(item) == {"folder", "name"}
                                                  and all(isinstance(value, str) for value in item.values()) for item in mappings):
         raise ValueError(f"{root / CONFIG_FILE}: [store] publish must be a list of {{ folder = ..., name = ... }} tables")
 
-    logger = data.get("logger", {})
-    mlflow = logger.get("mlflow", {})
-    unknown_logger = (set(logger) - {"backends", "mlflow"}) | (set(mlflow) - {"tracking_uri", "experiment", "cache_dir", "serve", "port", "store"})
-    if unknown_logger:
-        raise ValueError(f"{root / CONFIG_FILE}: unknown [logger] keys {sorted(unknown_logger)} "
-                         "(MLflow credentials belong in MLFLOW_TRACKING_TOKEN or MLFLOW_TRACKING_USERNAME/PASSWORD)")
     page = data.get("page", {})
     if set(page) - {"copy_preamble"} or not isinstance(page.get("copy_preamble", ""), str):
         raise ValueError(f"{root / CONFIG_FILE}: [page] takes copy_preamble (text)")
-    backends = logger.get("backends", ["local"])
-    if not isinstance(backends, list) or not backends or set(backends) - {"local", "mlflow", "hub"}:
-        raise ValueError(f"{root / CONFIG_FILE}: [logger] backends must list 'local', 'mlflow', and/or 'hub'")
 
     def path(value: str | None, default: str | None) -> Path | None:
         if value is None and default is None:
@@ -156,6 +142,5 @@ def load_config(project: Path | str | None = None) -> Config:
         template_dir=template_dir,
         hub=dict(hub),
         store=dict(store),
-        logger={"backends": backends, "mlflow": dict(mlflow)},
         page=dict(page),
     )

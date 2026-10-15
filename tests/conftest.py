@@ -42,10 +42,10 @@ def make_tree(project: Path) -> Path:
     return reports
 
 
-def make_run(project: Path, status: str = "completed", backends=("local",)) -> Path:
+def make_run(project: Path, status: str = "completed") -> Path:
     run = project / "outputs" / RUN
     write(run / ".hydra" / "config.yaml", "seed: 0\n")
-    log = RunLogger(run, backends=list(backends))
+    log = RunLogger(run)
     log.scalar("rmse", 0.5)
     log.figure("hist", histogram, [1, 2, 2, 3])
     (run / "run.json").write_text(json.dumps({"status": status}))

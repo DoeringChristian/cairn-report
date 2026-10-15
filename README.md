@@ -6,7 +6,7 @@ folders:
 - a **builder** that turns a tree of Markdown reports into a static site, reading
   numbers and figures straight from run outputs;
 - a **run logger** that writes evidence to fixed places in a run folder (and,
-  optionally, to MLflow or a hub while the run executes);
+  files only; `cairn-report publish --watch` syncs a running job's folder to the store);
 - a **hub**: a token-protected artifact store for reports and runs, with push
   and pull;
 - **run bookkeeping** for Hydra projects: each run's `run.json`, the `latest`
@@ -33,8 +33,7 @@ report-serve = "cairn-report serve --host 127.0.0.1 --port 8000"
 ```
 
 With uv or pip: `uv add git+https://github.com/DoeringChristian/cairn-report.git`.
-Optional extras: `cairn-report[mlflow]` (MLflow backend), `cairn-report[mlflow-server]`
-(a project-managed MLflow server), `cairn-report[video]` (`log.video` from frames),
+Optional extras: `cairn-report[video]` (`log.video` from frames),
 `cairn-report[hydra]` (run bookkeeping for Hydra projects).
 
 ## Reports
@@ -71,15 +70,14 @@ Front matter is optional: `title` (default: the folder name), `subtitle`,
 
 - `python exec` fences (`hide` to run without showing the code) that read runs:
   `run_dir(name)`, `run_trials(study)`, `read_scalars`, `read_json`, `read_csv`,
-  `read_jsonl`, `mlflow_run(...)`, `track(path)`, plus `metric(...)` cards.
+  `read_jsonl`, `track(path)`, plus `metric(...)` cards.
   Matplotlib figures a block creates become figure cards (`caption(text)` sets
   the current figure's caption), and `graph(source, id=..., title=...,
   caption=...)` turns generated Graphviz source into one, for example a model
   architecture drawn from code;
 - `{{ expression }}` values in prose and in the `summary`;
 - figures as Markdown images: a path in the report folder, `run:<name>/<file>`
-  (the run's latest folder, `run:<name>@<timestamp>/<file>` for a fixed one), or
-  `mlflow:<run-id>/<file>`; Plotly JSON files become interactive figures,
+  (the run's latest folder, `run:<name>@<timestamp>/<file>` for a fixed one); Plotly JSON files become interactive figures,
   videos (`.mp4`, `.m4v`, `.mov`, `.webm`) become video cards, Matplotlib
   figures drawn in `python exec` blocks are embedded, and Graphviz fences
   (`dot`, `neato`, ...) are laid out at build time;
@@ -98,7 +96,7 @@ open, and a folder without a `report.md` shows as a label. A folder whose name
 is not lower-case letters, digits, `-` and `_` is skipped with a warning. Pages
 open
 figures in a lightbox that shows where they came from (run, the code that drew
-and logged them, the commit, the MLflow or hub run). A video card loads near the viewport and plays muted and looped while it is on
+and logged them, the commit). A video card loads near the viewport and plays muted and looped while it is on
 screen (not with reduced motion). In the lightbox it has a player: play/pause
 (click, Space, `k`), a scrub bar, frame steps (`,` `.`, or a sideways or Shift
 mouse wheel), ±1 s (Shift+←/→), speed from 0.1× to 2×, and the same zoom and
@@ -169,34 +167,10 @@ log.text("solver", solver_log)               # logs/solver.txt
 code location that logged it. `read_scalars(run)` and `read_artifacts(run)` fold
 them to the latest value per name and the latest entry per file.
 
-Where evidence goes is set in `cairn-report.toml`:
-
-```toml
-[logger]
-backends = ["local"]   # "local" (default), "mlflow", "hub" (implies local); combine freely
-```
-
-### MLflow
-
-```toml
-[logger]
-backends = ["local", "mlflow"]   # or ["mlflow"] alone
-
-[logger.mlflow]
-tracking_uri = "https://mlflow.example.org"  # or MLFLOW_TRACKING_URI; credentials via MLflow's env vars
-experiment = "my-study"                      # default: the project folder name
-```
-
-One MLflow run per run folder: scalars become metrics, files become artifacts at
-the same paths, the Hydra config becomes parameters, and the run's indexes,
-`.hydra/`, `provenance/`, and `run.json` are uploaded at the end, so an MLflow run
-has the layout of a run folder; its status follows `run.json`. With MLflow
-alone, an MLflow error fails the logging call. Reports resolve `run:` references
-and `run_dir()` through MLflow when the evidence is not local.
-
-With `serve = true` (plus `port`, `store`), the project runs its own MLflow
-server: `cairn-report serve` starts or reuses it next to the reports, and
-`cairn-report mlflow` runs it alone.
+The logger only writes these files into the run folder. To follow a running job
+from another machine, sync its folder: `cairn-report publish runs/x/latest x --watch -- python run.py`
+adds new and changed files to one running version of the artifact `x` every
+`[store] interval` seconds, then completes it (or marks it failed when the command fails).
 
 ## Hydra runs
 
@@ -273,11 +247,6 @@ cairn-report pull --runs [NAME]    # also runs; --version N for an older report
 cairn-report pull --name P --into DIR   # restore another project into a folder
 ```
 
-With `[logger] backends = ["hub"]`, the logger itself sends a run's files while
-the run executes (every `interval` seconds, shortly after each logged file, and
-once more at exit); a hub that cannot be reached only produces warnings. Reports
-resolve `run:` references from the hub when the runs are not local.
-
 The hub serves `/` (every project), `/p/<project>/` (the latest report),
 `/p/<project>@<n>/` (version n), and `/runs/<project>/` (runs and their files).
 Clients authenticate with the token as a bearer header; browsers log in once and
@@ -306,6 +275,6 @@ copy_preamble = "..."              # text put before copied comments
 ## Development
 
 ```bash
-uv sync --extra mlflow
+uv sync
 uv run pytest
 ```
