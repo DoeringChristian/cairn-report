@@ -114,6 +114,17 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
        created on the server when it can be reached, and completion or failure is queued;
      - a file that changes before upload is re-hashed, so a version is uploaded exactly as
        published or not at all.
+   - **Version identity:**
+     - every version gets a UID (ULID/UUIDv7) where it is created, on the client or in the outbox,
+       and the server keeps it; every store gets a store UID;
+     - `v<n>` stays the readable name; references also accept the UID (`name@01JA…`);
+     - the pull cache is keyed by version UID (`cache/versions/<uid>/`), never by name and
+       number, so two stores never collide;
+     - materializing and blob downloads are safe on NFS (many Slurm jobs pulling at once): write
+       into a temporary folder named by host, pid, and a random suffix, then rename into place;
+       the loser of a race discards its copy; no file locks;
+     - `CAIRN_CACHE_DIR` points cluster jobs at node-local scratch;
+     - tests cover concurrent pulls from several processes into one cache.
    - **Offline pulls:**
      - an exact `name@vN` comes from the cache without asking the server;
      - an alias falls back to its last known resolution, with a warning naming the version, and
