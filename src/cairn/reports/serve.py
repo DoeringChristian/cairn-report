@@ -19,8 +19,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from . import build as builder
-from .config import Config, load_config
-from .ranges import byte_range
+from ..config import Config, load_config
+from ..ranges import byte_range
 
 OUTPUT_ROOT = Path()  # set by serve()
 

@@ -27,7 +27,6 @@ the owner's full access to a folder.
 
 from __future__ import annotations
 
-import hmac
 import html
 import json
 import mimetypes
@@ -37,24 +36,18 @@ import secrets
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from .. import __version__
-from ..push import Client
-from .. import BadRange, LocalStore, NotFound, RemoteStore, StoreError, refs
-from ..blobs import resolve_entry, valid_path
-from ..local import FileRead, Forbidden, Unauthorized
-from ..refs import Ref
-from ..tokens import OWNER, Principal, Tokens, read_token
+from .._version import __version__
+from ..store import BadRange, FileRead, Forbidden, NotFound, Ref, StoreError, Unauthorized, refs
+from ..store.blobs import resolve_entry, valid_path
+from ..store.tokens import Principal
+from .backends import LocalBackend, RemoteBackend
+from .sessions import COOKIE, LOGIN_DELAY, MAX_SESSIONS, SESSION_SECONDS, Session
 
-COOKIE = "cairn_ui"
-SESSION_SECONDS = 30 * 86400
-MAX_SESSIONS = 1000
-LOGIN_DELAY = 1.0  # seconds a wrong token waits, which slows down guessing
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 STATIC = Path(__file__).parent / "static"  # the built app (web/ -> npm run build)
 MAX_LINEAGE_DEPTH = 3
@@ -66,67 +59,6 @@ class HttpError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status, self.message = status, message
-
-
-@dataclass
-class Session:
-    """What a browser session acts as: a store handle (carrying the user's token) and, for a folder, its principal."""
-    store: LocalStore | RemoteStore
-    principal: Principal | None  # None: no restriction here (a remote store enforces its own)
-    expires: float = 0.0
-    cache: dict = field(default_factory=dict)
-
-
-class LocalBackend:
-    """A store folder. Login tokens are the folder's owner token and its scoped tokens."""
-
-    def __init__(self, root: Path, no_auth: bool):
-        root = Path(root).expanduser().resolve()
-        if not root.is_dir():
-            raise SystemExit(f"no store folder {root}")
-        self.root, self.describe = root, str(root)
-        self.store = LocalStore(root)
-        if not no_auth:
-            if not (root / "token").is_file():
-                raise SystemExit(f"{root} has no owner token (not a store root?); use --no-auth to browse it without a login")
-            self.owner, self.tokens = read_token(root / "token"), Tokens(root)
-
-    def anonymous(self) -> Session:
-        return Session(self.store, None)
-
-    def login(self, token: str) -> Session | None:
-        if hmac.compare_digest(token.encode(), self.owner.encode()):
-            return Session(self.store, OWNER)
-        principal = self.tokens.find(token)
-        return Session(self.store, principal) if principal else None
-
-    def valid(self, session: Session) -> bool:
-        return session.principal is OWNER or self.tokens.by_id(session.principal.id) is not None
-
-
-class RemoteBackend:
-    """A store server. Login tokens are checked by the server itself."""
-
-    def __init__(self, url: str, allow_http: bool, token: str = ""):
-        self.client = Client(url, token, allow_http=allow_http)  # refuses plain HTTP to a non-local host
-        self.url, self.describe, self.allow_http, self.token = self.client.url, self.client.url, allow_http, token
-
-    def _store(self, token: str) -> RemoteStore:
-        return RemoteStore(Client(self.url, token, allow_http=self.allow_http))
-
-    def anonymous(self) -> Session:
-        return Session(self._store(self.token), None)
-
-    def login(self, token: str) -> Session | None:
-        store = self._store(token)
-        try:
-            store.projects()
-        except Unauthorized:
-            return None
-        return Session(store, None)
-
-    def valid(self, session: Session) -> bool:
-        return True  # a revoked token fails on its next request (401)
 
 
 def safe_target(target: str) -> str:

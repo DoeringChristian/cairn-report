@@ -5,11 +5,11 @@ Register it in a project's configs/config.yaml (needs the `hydra` extra):
     hydra:
       callbacks:
         source_snapshot:
-          _target_: cairn.snapshot.SourceSnapshotCallback
+          _target_: cairn.runs.snapshot.SourceSnapshotCallback
 
 Hydra reports exceptions raised in callbacks as warnings and keeps running the
 job, so the entry point must call `require_snapshot(output_dir)` before any
-experiment code (`cairn.runs.run_experiment` does): a run without a
+experiment code (`cairn.runs.hydra.run_experiment` does): a run without a
 complete snapshot is a failed run.
 """
 

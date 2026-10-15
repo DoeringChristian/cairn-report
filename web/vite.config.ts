@@ -10,7 +10,7 @@ export default defineConfig({
   plugins: [react()],
   build: { outDir: out, emptyOutDir: true, sourcemap: false },
   server: {
-    fs: { allow: [".."] }, // report.css and report-extra.css live in src/cairn/template/
+    fs: { allow: [".."] }, // report.css and report-extra.css live in src/cairn/reports/template/
     proxy: {
       "/ui-api": target,
       "/files": target,

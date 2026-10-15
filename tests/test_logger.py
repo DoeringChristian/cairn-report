@@ -8,9 +8,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pytest
 
-from cairn.build import build_all
+from cairn.reports.build import build_all
 from cairn.config import load_config
-from cairn.logger import RunLogger, read_artifacts, read_jsonl, read_scalars
+from cairn.runs.logger import RunLogger, read_artifacts, read_jsonl, read_scalars
 
 
 def histogram(values):

@@ -2,7 +2,7 @@
 
 It offers what `cairn` and `Publication` use: projects, blob upload, versions, aliases,
 `resolve`, `lineage`, and `blob_file` for the pull cache. HTTP, the token, and the HTTPS rule are
-`push.Client`'s. Artifact names travel percent-encoded in API paths (`datasets%2Fcrops`).
+`http.Client`'s. Artifact names travel percent-encoded in API paths (`datasets%2Fcrops`).
 """
 
 from __future__ import annotations
@@ -14,10 +14,11 @@ import secrets
 from pathlib import Path
 from urllib.parse import quote
 
-from .push import BATCH, Client, ClientError, upload_missing
-from . import refs
-from .local import BadRange, FileRead, Forbidden, NotFound, StoreError, Unauthorized
-from .refs import Ref
+from ..store import refs
+from ..store.errors import BadRange, Forbidden, NotFound, StoreError, Unauthorized
+from ..store.local import FileRead
+from ..store.refs import Ref
+from .http import BATCH, Client, ClientError, upload_missing
 
 
 def q(text: str) -> str:

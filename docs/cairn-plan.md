@@ -22,19 +22,40 @@ most likely replace the earlier Cairn tracker (cairn-track). Decided with the ow
 - **Repo:** the work continues here. Later this repo is renamed to `cairn` on GitHub, after
   cairn-track is renamed and every pin is updated. The owner confirms each rename.
 
-## Layout after the rename
+## Layout
+
+The parts are separate packages; an `ast` test (`tests/test_boundaries.py`) fails on any import that
+crosses the arrows below.
 
 ```text
 src/cairn/
-├── __init__.py        the light API: pull, publish, alias, versions, lineage, Publication
-├── cli.py             `cairn ...`
-├── refs.py, local.py, remote.py, cache.py, blobs.py, tokens.py, migrate.py   (from store/)
-├── build.py, share.py, serve.py, template/                                   (reports)
-├── logger.py, runs.py, snapshot.py, ranges.py, push.py (client)
-├── server/            the artifact store server (from store/server.py)
-└── ui/                the UI server (from ui/) + static/ (the built web app)
-web/                   React + TS + Vite source of the UI (builds into src/cairn/ui/static/)
+├── __init__.py   the light API: pull, publish, alias, versions, lineage, Publication, open_store (client names load lazily)
+├── cli.py        argument parsing only; every command imports its part lazily
+├── __main__.py
+├── config.py     cairn.toml (leaf: imports nothing from cairn)
+├── ranges.py     HTTP byte ranges (leaf)
+├── formats.py    readers for the logger's JSON Lines files (leaf)
+├── _version.py   __version__ (leaf)
+├── store/        core, no HTTP: refs, local (LocalStore), blobs, tokens, cache (pull), migrate, errors, inputs
+├── client/       http (Client, scan/hash/upload), remote (RemoteStore), publishing (publish, Publication, --watch), open (open_store)
+├── server/       app (handler + routes), auth, files (/files, Range, ETag), spawn (UI child); exports make_server, serve_store
+├── ui/           server (UI HTTP server + /ui-api), sessions, backends (Local/RemoteBackend), static/ (built app)
+├── reports/      build, serve, share, publishing (report -> artifact), template/
+└── runs/         logger (RunLogger), hydra (run_experiment, StudyCompletion, finalize_study), snapshot
+web/              React + TS + Vite source of the UI (builds into src/cairn/ui/static/)
 ```
+
+Allowed imports (besides the leaves `config`, `ranges`, `formats`, `_version`, which import nothing from cairn):
+
+| part | may import |
+|---|---|
+| `store` | leaves only |
+| `client` | `store`, `config`, `ranges` |
+| `server` | `store`, `config`, `ranges` (it starts the UI as `python -m cairn ui`, never by import) |
+| `ui` | `store`, `client`, `config`, `ranges` |
+| `reports` | `store`, `client`, `config`, `ranges`, `formats` |
+| `runs` | `store`, `client`, `config`, `formats` |
+| `cairn/__init__` | `store`, `client` (lazily); `import cairn` loads no server, UI, reports, matplotlib, plotly, or hydra |
 
 ## Commands
 

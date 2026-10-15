@@ -12,10 +12,10 @@ import pytest
 
 import cairn as store
 from cairn.cli import main
-from cairn.push import Client
+from cairn.client.http import Client
 from cairn import BadRange, LocalStore, RemoteStore, StoreError
 from cairn.server import make_server, serve_store
-from cairn.tokens import create_token, init_root, list_tokens, revoke_token
+from cairn.store.tokens import create_token, init_root, list_tokens, revoke_token
 
 from test_store import env, folder  # noqa: F401  (the project fixture and folder helper)
 
@@ -100,7 +100,7 @@ def test_the_server_has_no_pages_and_no_cookies(server, project):
 
 
 def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
-    import cairn.server as module
+    import cairn.server.app as module
 
     original = module.ThreadingHTTPServer.serve_forever
     module.ThreadingHTTPServer.serve_forever = lambda self: self.server_close()

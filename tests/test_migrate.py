@@ -6,7 +6,7 @@ import pytest
 from cairn.cli import main
 from cairn import LocalStore
 from cairn.server import make_server
-from cairn.tokens import init_root
+from cairn.store.tokens import init_root
 
 from test_server import call
 

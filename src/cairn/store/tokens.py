@@ -18,7 +18,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from .logger import read_jsonl
+from ..formats import read_jsonl
 from . import refs
 from .blobs import append_lines, now
 

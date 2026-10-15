@@ -1,6 +1,5 @@
-"""`cairn publish`: store folders as artifact versions, or follow a running job's folder.
-
-A report folder (`reports/<slug>`) is built and published as the artifact `reports/<slug>`.
+"""Publishing: store a folder as an artifact version (`publish`), follow a running job's folder (`Publication`,
+`cairn publish --watch`).
 
 Without `--watch` or a command a folder becomes one version (and none when nothing changed). With
 either, one running version is started and the folder is synced into it while the job runs, the
@@ -14,20 +13,132 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import signal
+import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
-import cairn as artifacts
-from .config import Config
-from .push import HashCache, entries_for, scan
-from . import Publication, StoreError
+from ..config import Config, load_config
+from ..store import INPUTS_ENV, INPUTS_FILE, LocalStore, StoreError, read_inputs, refs
+from .http import HashCache, Limited, entries_for, scan
+from .open import as_store, open_store, versions_of
+from .remote import RemoteStore
 
 SETTLE = 2.0  # seconds without new changes before a changed folder is synced
+
+
+def _target(name: str, store: LocalStore | RemoteStore) -> tuple[str, str]:
+    """(project, artifact name) for a publish target, creating the project."""
+    target = refs.parse(name)
+    if target.selector or target.path:
+        raise ValueError(f"publish takes an artifact name, not {name!r}")
+    project = target.project or store.project
+    if project is None:
+        raise StoreError(f"{name!r} has no project and the store has no default")
+    store.create_project(project)
+    return project, target.name
+
+
+def _stage(store: LocalStore | RemoteStore, local: Path, config: Config, cache: HashCache) -> list[dict]:
+    """Entries for a folder's files (its inputs record excluded) with their blobs put in the store."""
+    files = scan(local, "", config, exclude=config.store.get("exclude", []))
+    files.pop(INPUTS_FILE, None)
+    entries, sources = entries_for(files, cache)
+    cache.save()
+    if isinstance(store, RemoteStore):  # asks the server what it lacks, then uploads in parallel
+        store.upload(sources, cache)
+        cache.save()
+    else:
+        for sha in store.missing(entries):
+            file, size = sources[sha]
+            with file.open("rb") as handle:
+                store.put_blob(sha, Limited(handle, size), size)
+    return entries
+
+
+def publish(name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
+            inputs=None, store: LocalStore | RemoteStore | Path | str | None = None, config: Config | None = None) -> int:
+    """Store a folder as the next version of artifact `name`; returns the version number.
+
+    A symlinked folder is followed (the label defaults to the resolved folder's name). When nothing
+    changed since the latest version, no version is created and its number is returned.
+    """
+    local = Path(folder).resolve()
+    if not local.is_dir():
+        raise ValueError(f"{folder} is not a folder")
+    store = as_store(store)
+    project, artifact = _target(name, store)
+    config = config or load_config()
+    entries = _stage(store, local, config, HashCache(config.project))
+    merged = [*read_inputs(local), *(str(item) for item in inputs or [])]
+    return store.publish(project, artifact, entries, label=label or local.name, metadata=metadata, inputs=merged,
+                         aliases=aliases, source={"host": socket.gethostname(), "folder": str(local)})
+
+
+class Publication:
+    """One running version that follows a folder while a job writes it.
+
+        with cairn.Publication("sweep", "runs/sweep/latest") as pub:
+            ...                    # the job runs and writes into the folder
+            pub.sync()             # add new and changed files now (call it as often as you like)
+
+    Leaving the block syncs once more and completes the version (inputs come from the folder's
+    `.cairn-inputs.jsonl` plus `inputs`); an exception marks it failed instead. The version is
+    invisible to `latest` and aliases until it completes, and a file that is written again replaces
+    its earlier entry. Files deleted from the folder stay in the running version.
+    """
+
+    def __init__(self, name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
+                 inputs=None, store: LocalStore | RemoteStore | Path | str | None = None):
+        self.local = Path(folder).resolve()
+        self.store = as_store(store)
+        self.project, self.name = _target(name, self.store)
+        self.config = load_config()
+        self.cache = HashCache(self.config.project)
+        self.label, self.metadata, self.aliases, self.inputs = label or self.local.name, metadata, tuple(aliases), inputs
+        self.version: int | None = None
+        self._sent: dict[str, tuple] = {}
+
+    def start(self) -> int:
+        if self.version is None:
+            self.version = self.store.start_version(self.project, self.name, self.label, self.metadata,
+                                                    {"host": socket.gethostname(), "folder": str(self.local)})
+        return self.version
+
+    def sync(self) -> int:
+        """Add the files that are new or changed since the last sync; returns how many."""
+        self.start()
+        entries = _stage(self.store, self.local, self.config, self.cache)
+        fresh = [entry for entry in entries if self._sent.get(entry["path"]) != (entry.get("sha256"), entry.get("link"))]
+        if fresh:
+            self.store.add_files(self.project, self.name, self.version, fresh)
+            self._sent.update({entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in fresh})
+        return len(fresh)
+
+    def complete(self) -> int:
+        """Sync a last time, freeze the version, move `latest`, and apply the aliases."""
+        self.sync()
+        merged = [*read_inputs(self.local), *(str(item) for item in self.inputs or [])]
+        self.store.complete_version(self.project, self.name, self.version, merged)
+        for alias in self.aliases:
+            self.store.set_alias(self.project, self.name, alias, self.version)
+        return self.version
+
+    def fail(self) -> None:
+        if self.version is not None:
+            self.store.fail_version(self.project, self.name, self.version)
+
+    def __enter__(self) -> "Publication":
+        self.start()
+        return self
+
+    def __exit__(self, kind, error, trace) -> None:
+        if kind is None:
+            self.complete()
+        else:
+            self.fail()
 
 
 def parse_meta(items: list[str]) -> dict:
@@ -51,85 +162,18 @@ def describe(version: dict) -> str:
 
 def publish_folder(config: Config, folder: Path, name: str, label: str | None, aliases: list[str], meta: dict) -> None:
     """Publish one folder and print what happened."""
-    store = artifacts.open_store(config)
+    store = open_store(config)
     try:
-        before = max((v["version"] for v in artifacts.versions(name, store=store)), default=0)
+        before = max((v["version"] for v in versions_of(store, name)), default=0)
     except StoreError:
         before = 0
-    number = artifacts.publish(name, folder, metadata=meta, aliases=aliases, label=label, store=store)
-    target = artifacts.refs.parse(name)
+    number = publish(name, folder, metadata=meta, aliases=aliases, label=label, store=store)
+    target = refs.parse(name)
     if number <= before:
         print(f"{target.name}@v{number} unchanged", flush=True)
     else:
-        state = store.resolve(artifacts.refs.exact(target.project or store.project, target.name, number))[2]
+        state = store.resolve(refs.exact(target.project or store.project, target.name, number))[2]
         print(f"published {target.name}@v{number} ({describe(state)})", flush=True)
-
-
-def is_report_folder(config: Config, folder: Path) -> bool:
-    """`reports/<slug>` with a report.md: a folder that publishes as a report."""
-    folder = folder.resolve()
-    return (folder / "report.md").is_file() and folder.parent == config.reports_dir.resolve()
-
-
-def publish_report(config: Config, folder: Path) -> None:
-    """Build a report and store it as the next version of `reports/<slug>`.
-
-    The version holds `source/` (the report folder), `site/<slug>/` (its built page) and `site/_static/`
-    (the shared page files it needs), so it can be viewed on its own. Its inputs are the exact versions
-    the report read. A report whose source, inputs, and metadata match the latest version creates none
-    (the built pages carry build times, so the source is what is compared).
-    """
-    from . import build as builder
-
-    folder = folder.resolve()
-    slug = folder.name
-    build = next(item for item in builder.build_all(config) if item.key == slug)  # all: links are checked against the other pages
-    data = json.loads((build.generated / "report-data.json").read_text())
-    metadata = {field: data[field] for field in ("title", "status", "summary")}
-    inputs = list(dict.fromkeys(item["resolved"] for item in build.inputs.values()))
-    name = f"reports/{slug}"
-    store = artifacts.open_store(config)
-    with tempfile.TemporaryDirectory(prefix="cairn-") as temporary:
-        stage = Path(temporary) / slug
-        shutil.copytree(folder, stage / "source", symlinks=True)
-        shutil.copytree(build.generated, stage / "site" / slug, symlinks=True)
-        static = stage / "site" / builder.STATIC
-        static.mkdir()
-        for hashed in builder.STATIC_NAMES.values():
-            for file in (hashed, f"{hashed}.gz"):
-                shutil.copy2(builder.OUTPUT_ROOT / builder.STATIC / file, static / file)
-        before = max((v["version"] for v in artifacts.versions(name, store=store)), default=0) if _exists(store, name) else 0
-        if before and _same_source(store, name, stage / "source", config, inputs, metadata):
-            print(f"{name}@v{before} unchanged", flush=True)
-            return
-        number = artifacts.publish(name, stage, metadata=metadata, inputs=inputs, label=time.strftime("%Y-%m-%d_%H-%M-%S"),
-                                   store=store, config=config)
-    state = store.resolve(artifacts.refs.exact(store.project, name, number))[2]
-    print(f"published {name}@v{number} ({describe(state)}; inputs: {', '.join(inputs) or 'none'})", flush=True)
-
-
-def _exists(store, name: str) -> bool:
-    try:
-        return bool(artifacts.versions(name, store=store))
-    except StoreError:
-        return False
-
-
-def _same_source(store, name: str, source: Path, config: Config, inputs: list[str], metadata: dict) -> bool:
-    """Whether the latest completed version has this source folder, these inputs, and this metadata."""
-    try:
-        _, _, latest = store.resolve(name)
-    except StoreError:
-        return False
-    files = scan(source, "", config, exclude=config.store.get("exclude", []))
-    entries, _ = entries_for(files, HashCache(config.project))
-
-    def key(entry: dict, prefix: str = ""):
-        return (prefix + entry["path"], entry.get("sha256"), entry.get("link"))
-
-    old = sorted(key(entry) for entry in latest["files"] if entry["path"].startswith("source/"))
-    return (old == sorted(key(entry, "source/") for entry in entries) and sorted(latest["inputs"]) == sorted(inputs)
-            and latest["metadata"] == metadata)
 
 
 def publish_mappings(config: Config, label: str | None, aliases: list[str], meta: dict) -> None:
@@ -166,11 +210,11 @@ def watch_folder(config: Config, folder: Path, name: str, label: str | None, ali
 
 
 def _follow(config, folder, name, label, aliases, meta, command, interval, settle, tick, stopped) -> int:
-    pub = Publication(name, folder, metadata=meta, aliases=aliases, label=label, store=artifacts.open_store(config))
+    pub = Publication(name, folder, metadata=meta, aliases=aliases, label=label, store=open_store(config))
     pub.start()
     print(f"publishing {folder} as {pub.name}@v{pub.version} (running) every {interval:g} s", flush=True)
     # what the command pulls is recorded in the folder it writes, unless the caller chose a file
-    env = os.environ | {artifacts.INPUTS_ENV: os.environ.get(artifacts.INPUTS_ENV) or str(Path(folder).resolve() / artifacts.INPUTS_FILE)}
+    env = os.environ | {INPUTS_ENV: os.environ.get(INPUTS_ENV) or str(Path(folder).resolve() / INPUTS_FILE)}
     process = subprocess.Popen(command, env=env) if command else None
     failures, seen, changed_at = 0, None, 0.0
     last = time.monotonic()
@@ -221,7 +265,7 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
                 print(f"{pub.name}@v{pub.version} failed (command exited {code}); latest did not move", file=sys.stderr, flush=True)
             else:
                 number = pub.complete()
-                state = pub.store.resolve(artifacts.refs.exact(pub.project, pub.name, number))[2]
+                state = pub.store.resolve(refs.exact(pub.project, pub.name, number))[2]
                 print(f"published {pub.name}@v{number} ({describe(state)})", flush=True)
             return code
         except (StoreError, OSError) as error:

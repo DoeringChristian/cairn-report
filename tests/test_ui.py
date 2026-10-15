@@ -13,7 +13,7 @@ import pytest
 import cairn as store
 from cairn.cli import main
 from cairn import LocalStore, RemoteStore
-from cairn.tokens import create_token, revoke_token
+from cairn.store.tokens import create_token, revoke_token
 from cairn.ui import server as ui_server
 from cairn.ui.server import LocalBackend, RemoteBackend, make_ui_server
 
@@ -191,7 +191,7 @@ def test_no_auth_ui_is_loopback_only_and_needs_no_login(server):
 
 def test_no_auth_ui_over_a_no_auth_store_uses_no_token(tmp_path, env, monkeypatch):
     from cairn.server import make_server
-    from cairn.tokens import init_root
+    from cairn.store.tokens import init_root
 
     root = tmp_path / "open-store"
     init_root(root)
@@ -360,7 +360,7 @@ def test_report_versions_stay_viewable(ui, project, capsys):
 def test_data_panel_links_point_at_the_artifact_pages(ui, project, capsys):
     publish_reports(project, ui.server)
     cookie = login(ui)
-    script = resources.files("cairn").joinpath("template", "report.js").read_text()
+    script = resources.files("cairn").joinpath("reports", "template", "report.js").read_text()
     assert "STORE_SERVED = !BUNDLE && /^\\/p\\/[^/]+\\/r\\//.test(location.pathname)" in script
     assert "STORE_SERVED && match ?" in script and "version.dataset.artifact = input.resolved" in script
     assert "/p/${encodeURIComponent(match[1])}/a/" in script  # /p/<project>/r/... -> /p/<project>/a/<name>@vN
@@ -421,12 +421,12 @@ def test_the_ui_uses_only_the_store_interface_and_the_server_has_no_ui_code():
         text = file.read_text()
         for forbidden in ("blob_path", "versions.jsonl", "aliases.jsonl", "consumers.jsonl", "project.json", "_blobs"):
             assert forbidden not in text, (file.name, forbidden)
-    store_files = [source / f"{name}.py" for name in ("refs", "local", "remote", "cache", "blobs", "tokens", "migrate")]
-    for file in [*store_files, source / "server" / "__init__.py"]:
+    store_files = [*(source / "store").glob("*.py"), *(source / "client").glob("*.py"), *(source / "server").glob("*.py")]
+    for file in store_files:
         text = file.read_text()
         assert "import ui" not in text and "from ..ui" not in text and "from .pages" not in text and "cairn.ui" not in text, file.name
     assert not (source / "server" / "pages.py").exists()
-    server_text = (source / "server" / "__init__.py").read_text()
+    server_text = "".join(file.read_text() for file in (source / "server").glob("*.py"))
     for gone in ("text/html", "cookie", "Cookie", "is_report", "site.json", "_static", "/login"):
         assert gone not in server_text.replace("there are no cookies", "").replace("--insecure-cookies", ""), gone
 

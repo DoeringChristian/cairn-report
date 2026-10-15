@@ -7,8 +7,9 @@ import sys
 import pytest
 
 import cairn as store
-from cairn import LocalStore, NotFound, StoreError, refs
-from cairn.cache import materialize
+from cairn import LocalStore, NotFound, StoreError
+from cairn.store import refs
+from cairn.store.cache import materialize
 
 
 @pytest.fixture
@@ -302,11 +303,11 @@ def test_store_config_validation(env):
 
 
 def test_import_cairn_stays_light():
-    script = ("import sys, cairn; heavy = ['cairn.server', 'cairn.ui', 'matplotlib', 'plotly', 'hydra']; "
+    script = ("import sys, cairn; heavy = ['cairn.server', 'cairn.ui', 'cairn.reports', 'cairn.runs', 'matplotlib', 'plotly', 'hydra', 'imageio', 'yaml']; "
               "print([name for name in heavy if name in sys.modules])")
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "[]"
-    assert subprocess.run([sys.executable, "-c", "import cairn; import cairn.publishing; assert callable(cairn.publish) and callable(cairn.pull) and cairn.Publication and cairn.__version__"]).returncode == 0
+    assert subprocess.run([sys.executable, "-c", "import cairn; import cairn.client.publishing; assert callable(cairn.publish) and callable(cairn.pull) and cairn.Publication and cairn.__version__"]).returncode == 0
 
 
 def test_config_file_cairn_toml_and_deprecated_name(tmp_path, capsys):

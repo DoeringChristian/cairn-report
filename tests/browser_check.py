@@ -24,7 +24,7 @@ sys.path.insert(0, str(HERE))
 import cairn as store  # noqa: E402
 from cairn.cli import main  # noqa: E402
 from cairn.server import make_server  # noqa: E402
-from cairn.tokens import init_root  # noqa: E402
+from cairn.store.tokens import init_root  # noqa: E402
 from cairn.ui import RemoteBackend, make_ui_server  # noqa: E402
 from conftest import make_data, write  # noqa: E402
 

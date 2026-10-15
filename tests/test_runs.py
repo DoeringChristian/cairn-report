@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("hydra")
 
-from cairn.runs import finalize_study
+from cairn.runs.hydra import finalize_study
 
 CONFIG = """\
 defaults:
@@ -26,9 +26,9 @@ hydra:
     subdir: ${hydra.job.num}
   callbacks:
     source_snapshot:
-      _target_: cairn.snapshot.SourceSnapshotCallback
+      _target_: cairn.runs.snapshot.SourceSnapshotCallback
     study_completion:
-      _target_: cairn.runs.StudyCompletion
+      _target_: cairn.runs.hydra.StudyCompletion
 """
 
 RUN = """\
@@ -40,7 +40,7 @@ from omegaconf import DictConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # flat imports from the project root
 
-from cairn.runs import run_experiment  # noqa: E402
+from cairn.runs.hydra import run_experiment  # noqa: E402
 from experiments.base import Experiment  # noqa: E402
 
 

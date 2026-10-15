@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .config import Config
+from ..config import Config
 
 TOKEN_ENV = "CAIRN_STORE_TOKEN"
 SKIP_NAMES = {"__pycache__", ".DS_Store"}

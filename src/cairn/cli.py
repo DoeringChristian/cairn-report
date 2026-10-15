@@ -6,29 +6,30 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__
+from ._version import __version__
 from .config import load_config
 
 def cmd_build(args) -> None:
-    from .build import build_all
+    from .reports.build import build_all
 
     build_all(load_config(args.project), report=args.report)
 
 
 def cmd_serve(args) -> None:
-    from .serve import serve
+    from .reports.serve import serve
 
     serve(load_config(args.project), host=args.host, port=args.port, strict_port=args.strict_port, build=not args.no_build)
 
 
 def cmd_share(args) -> None:
-    from .share import share
+    from .reports.share import share
 
     share(load_config(args.project), report=args.report, build=not args.no_build, out=args.out)
 
 
 def cmd_publish(args) -> None:
-    from .publishing import is_report_folder, parse_meta, publish_folder, publish_mappings, publish_report, watch_folder
+    from .client.publishing import parse_meta, publish_folder, publish_mappings, watch_folder
+    from .reports.publishing import is_report_folder, publish_report
 
     config = with_options(load_config(args.project), args)
     meta, command = parse_meta(args.meta), args.command or None
@@ -58,11 +59,11 @@ def with_options(config, args):
 def cmd_pull(args) -> None:
     import shutil
 
-    import cairn as store
-    from .cache import MARKER
+    from .client.open import open_store
+    from .store import MARKER, pull
 
     config = with_options(load_config(args.project), args)
-    path = store.pull(args.ref, store=store.open_store(config), record=not args.no_record)
+    path = pull(open_store(config), args.ref, record=not args.no_record)
     if args.into is None:
         return print(path)
     target = args.into
@@ -97,14 +98,14 @@ def cmd_ui(args) -> None:
 
 
 def cmd_migrate(args) -> None:
-    from .migrate import migrate
+    from .store.migrate import migrate
 
     for line in migrate(args.old_root, args.new_root):
         print(line)
 
 
 def cmd_token_create(args) -> None:
-    from .tokens import create_token
+    from .store.tokens import create_token
 
     token = create_token(args.root, args.project, write=args.write, name=args.name)
     print(f"Token: {token}")
@@ -112,7 +113,7 @@ def cmd_token_create(args) -> None:
 
 
 def cmd_token_list(args) -> None:
-    from .tokens import list_tokens
+    from .store.tokens import list_tokens
 
     rows = list_tokens(args.root)
     for row in rows:
@@ -122,14 +123,14 @@ def cmd_token_list(args) -> None:
 
 
 def cmd_token_revoke(args) -> None:
-    from .tokens import revoke_token
+    from .store.tokens import revoke_token
 
     revoke_token(args.root, args.name)
     print(f"revoked {args.name}")
 
 
 def cmd_finalize_study(args) -> None:
-    from .runs import finalize_study
+    from .runs.hydra import finalize_study
 
     completed = finalize_study(args.study)
     print(f"{args.study}: {'completed; latest moved' if completed else 'failed (not every trial completed)'}")

@@ -16,9 +16,9 @@ with the callbacks in configs/config.yaml:
     hydra:
       callbacks:
         source_snapshot:
-          _target_: cairn.snapshot.SourceSnapshotCallback
+          _target_: cairn.runs.snapshot.SourceSnapshotCallback
         study_completion:            # multirun only: completes the study, moves latest
-          _target_: cairn.runs.StudyCompletion
+          _target_: cairn.runs.hydra.StudyCompletion
 
 `cairn finalize-study outputs/<run-name>/<timestamp>` completes a study whose launcher
 died (for example a killed Slurm launcher) by the same rule, once every trial job has ended.
@@ -88,7 +88,7 @@ def run_experiment(cfg: Any, base: type | None = None, require_source_snapshot: 
     instantiate `cfg.experiment` (an instance of `base`, when given), call `run(output_dir)`, and
     record how it ended. A completed single run becomes `latest`.
 
-    Without a snapshot from `cairn.snapshot.SourceSnapshotCallback` the run fails, unless
+    Without a snapshot from `cairn.runs.snapshot.SourceSnapshotCallback` the run fails, unless
     `require_source_snapshot=False`."""
     from hydra.core.hydra_config import HydraConfig
     from hydra.types import RunMode

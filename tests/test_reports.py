@@ -9,7 +9,7 @@ import urllib.request
 import pytest
 
 import cairn as store
-from cairn.build import BuildError, build_all, image_size
+from cairn.reports.build import BuildError, build_all, image_size
 from cairn.cli import main
 from cairn.config import load_config
 
@@ -49,7 +49,7 @@ def test_project_index_lists_every_report(project):
 
 
 def test_serve_answers_the_index_at_root(project):
-    from cairn import serve as server
+    from cairn.reports import serve as server
 
     build_all(load_config(project))
     server.OUTPUT_ROOT = built(project)
@@ -142,7 +142,7 @@ def test_config_rejects_unknown_keys(tmp_path):
 
 
 def test_port_fallback(project, monkeypatch):
-    from cairn import serve as server
+    from cairn.reports import serve as server
 
     blocker = socket.socket()
     blocker.bind(("127.0.0.1", 0))
@@ -173,7 +173,7 @@ def bundle_of(page: str) -> dict:
 
 
 def test_share_writes_one_self_contained_page(project):
-    from cairn.share import share
+    from cairn.reports.share import share
 
     target = share(load_config(project))
     page = target.read_text()
@@ -191,7 +191,7 @@ def test_share_writes_one_self_contained_page(project):
 
 
 def test_share_one_report_and_size_limit(project, monkeypatch):
-    from cairn import share as sharing
+    from cairn.reports import share as sharing
 
     target = sharing.share(load_config(project), report="alpha", out=project / "alpha.html")
     bundle = bundle_of(target.read_text())

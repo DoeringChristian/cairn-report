@@ -8,7 +8,8 @@ import shutil
 from pathlib import Path
 
 from . import refs
-from .local import NotFound
+from .errors import NotFound
+from .inputs import record_input
 
 MARKER = ".cairn-complete"
 
@@ -59,3 +60,17 @@ def materialize(store, ref, cache_root: Path | str) -> Path:
             raise NotFound(f"{project}:{name}@v{version['version']} has no {ref.path}")
         return target
     return folder
+
+
+def pull(store, ref: str, record: bool = True) -> Path:
+    """A read-only local copy of an artifact version (or of the file after `//`) from an open store.
+
+    `record=False` leaves the inputs file alone: the report builder records a report's inputs in the
+    report's own manifest instead.
+    """
+    parsed = refs.parse(ref)
+    project, name, version = store.resolve(parsed)
+    path = materialize(store, parsed, default_root())
+    if record:
+        record_input(refs.exact(project, name, version["version"]))
+    return path

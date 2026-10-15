@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pytest
 
-from cairn.logger import RunLogger
+from cairn.runs.logger import RunLogger
 
 RUN = "demo/2026-01-01_00-00-00"
 

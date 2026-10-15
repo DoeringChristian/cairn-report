@@ -240,7 +240,7 @@ change the page, edit the report and run `share` again.
 ## Logging runs
 
 ```python
-from cairn.logger import RunLogger
+from cairn.runs.logger import RunLogger
 
 log = RunLogger(output_dir)                  # one logger per run folder
 log.scalar("rmse", rmse)                     # metrics.jsonl; step=... for a series
@@ -269,7 +269,7 @@ finishes (`cairn publish outputs/x/latest x`) or have the job write to a fixed f
 
 ## Hydra runs
 
-`cairn.runs` and `cairn.snapshot` keep the record of each Hydra
+`cairn.runs.hydra` and `cairn.runs.snapshot` keep the record of each Hydra
 run, so a project's entry point stays a few lines (needs the `hydra` extra):
 
 ```python
@@ -288,8 +288,8 @@ hydra:
   run: {dir: "outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}"}
   sweep: {dir: "outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}", subdir: "${hydra.job.num}"}
   callbacks:
-    source_snapshot: {_target_: cairn.snapshot.SourceSnapshotCallback}
-    study_completion: {_target_: cairn.runs.StudyCompletion}   # multiruns
+    source_snapshot: {_target_: cairn.runs.snapshot.SourceSnapshotCallback}
+    study_completion: {_target_: cairn.runs.hydra.StudyCompletion}   # multiruns
 ```
 
 - `run_experiment` writes `run.json` (`running`, then `completed` or `failed`
@@ -441,7 +441,7 @@ A report page runs in the UI's origin: give write tokens to people whose reports
 #### Developing the UI
 
 The app's source is `web/` (React 18, TypeScript, Vite; it imports
-`src/cairn/template/report.css` and `report-extra.css` so the look has one source, plus a small
+`src/cairn/reports/template/report.css` and `report-extra.css` so the look has one source, plus a small
 `web/src/app.css`). The built files in `src/cairn/ui/static/` are committed, so `pip install` needs
 no Node.
 

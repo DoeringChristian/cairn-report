@@ -46,12 +46,11 @@ from mdit_py_plugins.dollarmath import dollarmath_plugin
 from mdit_py_plugins.front_matter import front_matter_plugin
 from plotly.offline import get_plotlyjs, get_plotlyjs_version
 
-from . import __version__
-import cairn as artifacts
-from .config import Config, load_config
-from .logger import METRICS, fold_scalars, read_jsonl
-from . import refs
-from .cache import default_root
+from .._version import __version__
+from ..client.open import open_store
+from ..config import Config, load_config
+from ..formats import METRICS, fold_scalars, read_jsonl
+from ..store import StoreError, default_root, pull, refs
 
 PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
@@ -492,7 +491,7 @@ class Build:
             raise BuildError(f"{self.markdown}: inputs: must map local names to artifact references, e.g. descent: descent@latest")
         if not declared:
             return
-        store = artifacts.open_store(CONFIG)
+        store = open_store(CONFIG)
         self.store_root = getattr(store, "root", None)  # a remote store has no folder
         for name, text in declared.items():
             where = f"{self.markdown}: inputs.{name}"
@@ -507,8 +506,8 @@ class Build:
             try:
                 project, artifact, version = store.resolve(ref)
                 exact = refs.exact(project, artifact, version["version"])
-                folder = artifacts.pull(exact, store=store, record=False)
-            except artifacts.StoreError as error:
+                folder = pull(store, exact, record=False)
+            except StoreError as error:
                 raise BuildError(f"{where}: {error}") from error
             self.inputs[name] = {"requested": str(text), "resolved": exact, "files": len(version["files"]), "path": folder}
 

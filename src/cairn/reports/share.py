@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 from . import build as builder
-from .config import Config
+from ..config import Config
 
 MAX_BYTES = 16 * 1024 * 1024  # claude.ai artifacts take at most 16 MB per page
 PLOTLY_CDN = "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@{version}/plotly.min.js"
