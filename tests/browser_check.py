@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -59,7 +60,37 @@ def build_data(base: Path, url: str) -> None:
     report = project / "reports" / "summary" / "report.md"
     report.write_text(report.read_text() + "\nA later note.\n")
     main(["publish", "reports/summary"])
+    long = base / "long-set"  # many files: a page taller than the window, to check the rail while scrolling
+    shutil.copytree(toy, long)
+    for i in range(10):
+        (long / f"part-{i:02d}.txt").write_text(f"part {i}\n" * 5)
+    store.publish("datasets/long-set", long)
     store.publish("models/denoiser", toy, inputs=["study:toy-fit@v1"], aliases=["best"])
+
+
+def check_no_overflow(page, label: str) -> None:
+    """The files table must not be wider than its card (a long preview line once pushed the file names out of view)."""
+    m = page.evaluate("() => { const w = document.querySelector('.table-wrap'); return w ? [w.scrollWidth, w.clientWidth] : [0, 0]; }")
+    assert m[0] <= m[1] + 1, f"{label}: table scrolls sideways {m}"
+
+
+def check_preview(page) -> None:
+    """Open every preview of the page: images keep their aspect and fit their container."""
+    buttons = page.get_by_role("button", name="Preview", exact=True)
+    while buttons.count():  # each opened row turns its button into "Hide"
+        buttons.first.click()
+    page.wait_for_load_state("networkidle")
+    imgs = page.locator(".preview-row img")
+    assert imgs.count() >= 1, "an image preview is open"
+    for fig in page.locator(".app-figures img").all():
+        assert fig.evaluate("e => getComputedStyle(e).objectFit") == "contain", "figure thumbnails show the whole image"
+    for i in range(imgs.count()):
+        m = imgs.nth(i).evaluate("""e => { const c = e.closest('td').getBoundingClientRect(), r = e.getBoundingClientRect();
+            return {nw: e.naturalWidth, nh: e.naturalHeight, w: r.width, h: r.height, cw: c.width, fit: getComputedStyle(e).objectFit}; }""")
+        assert m["nw"] > 0, "the preview image loaded"
+        assert m["w"] <= m["cw"] + 0.5, f"preview wider than its cell: {m}"
+        assert abs(m["w"] / m["h"] - m["nw"] / m["nh"]) < 0.02 or m["fit"] == "contain", f"preview aspect distorted: {m}"
+        assert m["fit"] == "contain", f"preview must use object-fit contain: {m}"
 
 
 def run(keep: bool) -> int:
@@ -91,6 +122,26 @@ def run(keep: bool) -> int:
         page.on("requestfailed", lambda r: problems.append(f"request failed: {r.url}"))
         context.on("response", lambda r: r.status >= 400 and r.status != 401 and problems.append(f"HTTP {r.status}: {r.url}"))
 
+        def view(name: str) -> None:  # a viewport screenshot: what the window shows, so sticky elements are true
+            page.wait_for_load_state("networkidle")
+            page.screenshot(path=str(shots / f"{name}.png"))
+
+        def check_rail(label: str) -> None:
+            vh = page.evaluate("window.innerHeight")
+            box = page.locator(".rail").bounding_box()
+            assert box and abs(box["y"]) < 1 and abs(box["x"]) < 1 and abs(box["height"] - vh) < 1.5, f"{label}: rail at {box}, viewport height {vh}"
+
+        def scroll_check(label: str) -> None:
+            height = page.evaluate("document.documentElement.scrollHeight")
+            assert height > page.evaluate("window.innerHeight") * 1.5, f"{label}: page is not long ({height})"
+            for where, y in (("top", 0), ("middle", height // 2), ("bottom", height)):
+                page.evaluate(f"window.scrollTo({{top: {y}, behavior: 'instant'}})")
+                page.mouse.wheel(0, 1)  # a real scroll event, so the compositor repaints before the screenshot
+                page.wait_for_timeout(2500)
+                check_rail(f"{label} {where}")
+                view(f"{label}-{where}")
+            page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
+
         def shot(name: str) -> None:
             page.wait_for_load_state("networkidle")
             page.screenshot(path=str(shots / f"{name}.png"), full_page=True)
@@ -113,10 +164,12 @@ def run(keep: bool) -> int:
         page.get_by_role("link", name="Cairn").click()
         page.get_by_role("heading", name="Projects").wait_for()
         shot("02-projects")
+        check_rail("projects")
         page.get_by_role("link", name="study").first.click()
         page.get_by_role("tab", name="Reports").wait_for()
         page.locator("main").get_by_text("Toy fit summary").first.wait_for()
         shot("03-project-reports")
+        check_rail("project")
         page.get_by_role("tab", name="Artifacts").click()
         page.get_by_role("link", name="toy-fit").first.wait_for()
         shot("04-project-artifacts")
@@ -133,6 +186,18 @@ def run(keep: bool) -> int:
         page.get_by_role("button", name="Preview").first.click()
         page.locator(".preview-row").first.wait_for()
         shot("06-artifact")
+        page.goto(ui + "/p/study/a/datasets/long-set")
+        page.get_by_role("heading", name="datasets/long-set").wait_for()
+        page.get_by_role("button", name="Preview").first.wait_for()
+        check_preview(page)
+        check_no_overflow(page, "files table")
+        page.locator(".preview-row img").first.scroll_into_view_if_needed()
+        page.mouse.wheel(0, 1)
+        page.wait_for_timeout(1500)
+        view("21-image-preview")
+        scroll_check("20-long-artifact")
+        page.goto(ui + "/p/study/a/toy-fit")
+        page.locator(".graph-node").first.wait_for()
         page.locator(".image-copy").first.click()
         # a lineage node: the dataset on the left
         page.locator(".graph-node [role=link]", has_text="datasets/toy").first.click()
