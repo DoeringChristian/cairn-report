@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-import cairn.store.index as index_module
 from cairn import LocalStore
 from cairn.store.tokens import init_root
 
@@ -78,18 +77,16 @@ def test_concurrent_small_publishes(server, same):
 
 
 def seed_artifacts(root: Path, project: str, count: int) -> None:
-    """`count` artifacts with one completed version each, written straight into the files (fast)."""
-    store = LocalStore(root)
+    """`count` artifacts with one completed version each (as the server's owner: the server holds the root)."""
+    import io
+
+    store = LocalStore(root, served=True)
     store.create_project(project)
-    base = root / "projects" / project / "artifacts"
+    data = b"x"
+    sha = hashlib.sha256(data).hexdigest()
+    store.put_blob(sha, io.BytesIO(data), 1)
     for index in range(count):
-        folder = base / f"group{index % 10}" / f"item{index:04d}"
-        folder.mkdir(parents=True)
-        state = {"version": 1, "uid": f"0192f3a4-5b6c-7d8e-9f01-{index:012x}", "label": None, "status": "completed",
-                 "created": "2026-01-01T00:00:00+00:00", "completed": "2026-01-01T00:00:01+00:00", "files": [],
-                 "metadata": {"index": index}, "inputs": [], "source": None}
-        (folder / "versions.jsonl").write_text(json.dumps(state) + "\n")
-        (folder / "aliases.jsonl").write_text(json.dumps({"alias": "latest", "version": 1, "time": state["completed"]}) + "\n")
+        store.publish(project, f"group{index % 10}/item{index:04d}", [{"path": "x", "sha256": sha, "size": 1}], metadata={"index": index})
 
 
 def test_listing_two_thousand_artifacts(server):
@@ -176,40 +173,27 @@ def test_a_large_download_streams_without_loading_into_memory(tmp_path, sendfile
         process.wait(10)
 
 
-def test_the_index_follows_a_second_process(tmp_path, monkeypatch):
+def test_writes_of_a_second_process_are_seen_at_once(tmp_path):
+    import io
+
     root = tmp_path / "root"
     store = LocalStore(root)
     store.create_project("p")
-    import io
-
     data = b"one"
     sha = hashlib.sha256(data).hexdigest()
     store.put_blob(sha, io.BytesIO(data), len(data))
     entries = [{"path": "a.txt", "sha256": sha, "size": len(data)}]
     store.publish("p", "x", entries, metadata={"n": 1})
-    assert [item["name"] for item in store.summaries("p")] == ["x"]  # the index is loaded now
+    assert [item["name"] for item in store.summaries("p")] == ["x"]  # the listing is cached now
     script = (
         "import sys; from cairn import LocalStore; s = LocalStore(sys.argv[1]); e = [{'path': 'a.txt', 'sha256': sys.argv[2], 'size': 3}]\n"
         "s.publish('p', 'x', e, metadata={'n': 2}); s.publish('p', 'y/z', e); s.set_alias('p', 'x', 'best', 1)\n")
     subprocess.run([sys.executable, "-c", script, str(root), sha], check=True)
     assert [v["metadata"]["n"] for v in store.versions("p", "x")] == [1, 2]
     assert store.resolve("p:x")[2]["version"] == 2 and store.resolve("p:x@best")[2]["version"] == 1
-    summaries = {item["name"]: item for item in store.summaries("p")}  # the listing followed the hints
-    assert set(summaries) == {"x", "y/z"} and summaries["x"]["versions"] == 2 and summaries["x"]["aliases"]["best"] == 1
-
-    # a writer that died after its line but before its hint: single-artifact reads see it at once,
-    # the listing at the next sweep
-    log = root / "projects/p/artifacts/x/versions.jsonl"
-    state = json.loads(log.read_text().splitlines()[-1])
-    with log.open("a") as handle:
-        handle.write(json.dumps({**state, "version": 3, "uid": "0192f3a4-5b6c-7d8e-9f01-000000000003"}) + "\n")
-        handle.write('{"version": 4, "status": "runn')  # and a torn line it never finished
-    assert [v["version"] for v in store.versions("p", "x")] == [1, 2, 3]
-    monkeypatch.setattr(index_module, "SWEEP_SECONDS", 0.0)
-    assert {item["name"]: item for item in store.summaries("p")}["x"]["versions"] == 3
-    store.publish("p", "x", entries, metadata={"n": 5})  # a new line after the torn one is read whole
-    assert [v["version"] for v in LocalStore(root).versions("p", "x")] == [1, 2, 3, 4]
-    assert [v["version"] for v in store.versions("p", "x")] == [1, 2, 3, 4]
+    summaries = {item["name"]: item for item in store.summaries("p")}
+    assert set(summaries) == {"x", "y/z"} and summaries["x"]["versions"] == 2 and summaries["x"]["aliases"] == {"latest": 2, "best": 1}
+    assert summaries["x"]["metadata"] == {"n": 2}
 
 
 def _start_versions(root, count, barrier, results):

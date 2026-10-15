@@ -173,7 +173,7 @@ def test_alias_rules(local):
     local.set_alias("p", "run", "best", 1)
     local.set_alias("p", "run", "best", 2)
     assert local.aliases("p", "run") == {"latest": 2, "best": 2}
-    log = [json.loads(line) for line in (local.root / "projects/p/artifacts/run/aliases.jsonl").read_text().splitlines()]
+    log = local.alias_log("p", "run")  # every move is kept
     assert [(r["alias"], r["version"]) for r in log] == [("latest", 1), ("latest", 2), ("best", 1), ("best", 2)]
 
 

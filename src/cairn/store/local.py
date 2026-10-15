@@ -1,32 +1,28 @@
 """LocalStore: projects, artifacts, and immutable versions in a folder.
 
     <root>/
-      store.json                                       the store's uid (UUIDv7), made once, never changed
-      blobs/<aa>/<sha256-rest>                         file contents (blobs.BlobStore)
-      projects/<p>/project.json                        name, title, description, created
-      projects/<p>/consumers.jsonl                     consumer ref -> input ref, when a version with inputs completes
-      projects/<p>/artifacts/<name>/versions.jsonl     one line per version state change; the last line per version wins
-      projects/<p>/artifacts/<name>/aliases.jsonl      one line per alias move: alias, version, time
-      projects/<p>/artifacts/<name>/.numbers/<n>       empty; made with O_EXCL to claim version number n
-      projects/<p>/changes.jsonl                       a hint per write: the artifact's name (for the index)
+      store.json                 the store's uid (UUIDv7), made once, never changed
+      metadata.sqlite3           projects, versions, aliases and their log, consumers (db.py; WAL mode)
+      blobs/<aa>/<sha256-rest>   file contents (blobs.BlobStore)
+      server.lock                locked by the `cairn server` serving this root (db.ServerLock)
 
-Everything is append-only. A version starts `running` (it may grow), then becomes `completed` or
-`failed`; a completed version is never written again. Only completed versions resolve through
-`latest`, aliases, and labels, so readers never see half-published data.
+A version starts `running` (it may grow), then becomes `completed` or `failed`; a completed version
+is never written again. Only completed versions resolve through `latest`, aliases, and labels, so
+readers never see half-published data. Every change is one SQLite transaction: a publish (version,
+files, completion, `latest`, aliases, consumers) commits whole or not at all, and version numbers are
+handed out inside the transaction, so they are unique however many threads and processes publish.
 
 Every version has a `uid` (a UUIDv7, see uids.py), made when it starts or supplied by the client
-that created it (an outbox); a uid names one version for good. A store written before uids existed
-is upgraded as it is read: each version gets a deterministic uid (`uids.legacy`), persisted with one
-more state line once the version is final, and the root gets its store.json.
+that created it (an outbox); a uid names one version for good, in the whole store. A root written
+before the database existed (JSON Lines files) is imported when it is first opened (db.import_legacy);
+versions stored without a uid get their deterministic one (`uids.legacy`), and the root gets its
+store.json.
 
-Reads go through an in-memory index (index.py), loaded lazily per project and kept current from the
-files' appended lines, which picks up writes by other processes on this host too; see index.py for the
-consistency model. Writers to one artifact take that artifact's lock (writers to different artifacts
-run in parallel); every append is one write on an O_APPEND descriptor, then fsync. A version number is
-claimed by creating `.numbers/<n>` exclusively, so two processes never hand out the same number (a
-process that dies right after claiming leaves a gap in the numbers, never a duplicate). Other checks
-(a uid sent twice, "nothing changed since latest") hold within one process: run one writer process per
-store root, usually `cairn server`, and never write one store root from several hosts (fs.py).
+One writer process per root: while `cairn server` serves a root it locks `server.lock`, and other
+processes may read the root but not change its metadata (they publish through the server's URL);
+owner commands on the server's host (`cairn token create`) are the exception, and SQLite's locking
+keeps their small writes safe. Without a server, several processes on one host may write a root
+(SQLite serializes them). Never write a root over a network filesystem (fs.py).
 """
 
 from __future__ import annotations
@@ -34,21 +30,20 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import sqlite3
 import sys
-import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..ranges import byte_range
 from . import refs
+from .blobs import CHUNK, BlobStore, BlobWriter, clean_entries, now, resolve_entry
+from .db import Database, ServerLock, export
 from .errors import BadRange, Conflict, Forbidden, NotFound, StoreError, Unauthorized  # noqa: F401
-from .blobs import CHUNK, BlobStore, BlobWriter, append_bytes, append_lines, clean_entries, now, resolve_entry
 from .fs import network_filesystem
-from .index import ArtifactIndex, ProjectIndex
 from .refs import Ref
-from .uids import UID, legacy, new_uid, valid_uid
+from .uids import UID, new_uid, valid_uid
 
 
 @dataclass
@@ -109,6 +104,14 @@ def store_uid(root: Path) -> str:
     return valid_uid(json.loads(path.read_text())["uid"])
 
 
+def summary_row(states: dict[int, dict], aliases: dict[str, int]) -> tuple:
+    """(latest, versions, updated, metadata JSON, aliases JSON): an artifact's summary row (db.py)."""
+    stamps = [_stamp(state) for state in states.values()]
+    head = states.get(aliases.get("latest"))
+    return (aliases.get("latest"), len(states), max(stamps, default=""), json.dumps(head["metadata"] if head else {}),
+            json.dumps(aliases))
+
+
 def _check_tree(entries: list[dict]) -> None:
     """No path may be both a file and a folder."""
     paths = {entry["path"] for entry in entries}
@@ -119,22 +122,27 @@ def _check_tree(entries: list[dict]) -> None:
                 raise StoreError(f"{path}: {'/'.join(parts[:end])} is a file in this version")
 
 
+def _stamp(state: dict) -> str:
+    return state.get("completed") or state.get("created") or ""
+
+
 _WARNED: set[str] = set()
+_SUMMARY = "SELECT name, latest, versions, aliases, updated, metadata FROM artifacts"
 
 
 class LocalStore:
-    def __init__(self, root: Path | str, project: str | None = None, network_warning: bool = True):
+    def __init__(self, root: Path | str, project: str | None = None, network_warning: bool = True, served: bool = False):
         """`project` is the default for references without one. A store root on a network filesystem warns once
-        per process when it is first written (pass `network_warning=False` when the caller has decided)."""
+        per process when it is first written (pass `network_warning=False` when the caller has decided).
+        `served`: this process may change the metadata while a server holds the root (the server itself, and
+        owner commands on the server's host; see the module doc)."""
         self.root, self.project = Path(root), project
         self._blobs = BlobStore(self.root)  # creates blobs/, projects/, tmp/
-        self.lock = threading.Lock()  # project records
-        self._indexes: dict[str, ProjectIndex] = {}
-        self._indexes_lock = threading.Lock()
-        self._records: dict[str, tuple[tuple, dict]] = {}
-        self._held = threading.local()  # the artifacts this thread holds the write lock of (see _locked)
         self._network_checked = not network_warning
+        self._served = served
         self.uid = store_uid(self.root)
+        self._db = Database(self.root, self.uid)
+        self._listings: dict[str, tuple[int, list[dict]]] = {}
 
     def _writing(self) -> None:
         """Warn once if this root lies on a network filesystem (several writers there can corrupt it, see fs.py)."""
@@ -150,6 +158,18 @@ class LocalStore:
             print(f"warning: the store folder {self.root} is on a network filesystem ({fstype}); writes from several "
                   "processes or hosts can corrupt it. Run `cairn server` on one machine and point clients at its URL.",
                   file=sys.stderr, flush=True)
+
+    def _write(self):
+        """A metadata write transaction (db.Database.write); refused while another process serves this root."""
+        self._writing()
+        if not self._served and ServerLock.held(self.root):
+            raise StoreError(f"{self.root} is served by `cairn server`: change it through the server's URL "
+                             "(a second writer beside the server is refused)")
+        return self._db.write()
+
+    def export_metadata(self, folder: Path | str) -> dict[str, int]:
+        """Readable JSON Lines copies of the metadata (db.export); returns the row count per file."""
+        return export(self._db, Path(folder))
 
     # ------------------------------------------------------------------ blobs
 
@@ -224,240 +244,220 @@ class LocalStore:
 
     # --------------------------------------------------------------- projects
 
-    def _project_dir(self, project: str) -> Path:
-        index = self._indexes.get(project)  # a project with an index exists (projects are never removed)
-        if index is not None:
-            return index.folder
-        folder = self._blobs.projects / refs.valid_project(project)
-        if not (folder / "project.json").is_file():
+    @staticmethod
+    def _record_of(connection: sqlite3.Connection, project: str) -> dict:
+        row = connection.execute("SELECT record FROM projects WHERE name = ?", (refs.valid_project(project),)).fetchone()
+        if row is None:
             raise NotFound(f"unknown project {project!r}")
-        return folder
-
-    def _write_record(self, folder: Path, record: dict) -> None:
-        temporary = folder / f"project.json.{os.getpid()}.{secrets.token_hex(4)}.tmp"
-        temporary.write_text(json.dumps(record, indent=1))
-        os.replace(temporary, folder / "project.json")
+        return json.loads(row[0])
 
     def create_project(self, name: str, title: str | None = None, description: str = "") -> dict:
         """Create a project; an existing one is returned unchanged."""
-        folder = self._blobs.projects / refs.valid_project(name)
-        self._writing()
-        with self.lock:
-            if (folder / "project.json").is_file():
-                return json.loads((folder / "project.json").read_text())
+        refs.valid_project(name)
+        with self._db.read() as connection:
+            row = connection.execute("SELECT record FROM projects WHERE name = ?", (name,)).fetchone()
+        if row is not None:
+            return json.loads(row[0])
+        with self._write() as connection:
+            row = connection.execute("SELECT record FROM projects WHERE name = ?", (name,)).fetchone()
+            if row is not None:
+                return json.loads(row[0])
             record = {"name": name, "title": title or name, "description": description, "created": now()}
-            folder.mkdir(parents=True, exist_ok=True)
-            self._write_record(folder, record)
+            connection.execute("INSERT INTO projects (name, record) VALUES (?, ?)", (name, json.dumps(record)))
             return record
 
-    def _record(self, file: Path) -> dict:
-        """A project.json, re-read only when it changed."""
-        info = file.stat()
-        stamp = (info.st_ino, info.st_mtime_ns, info.st_size)
-        cached = self._records.get(str(file))
-        if cached is None or cached[0] != stamp:
-            cached = (stamp, json.loads(file.read_text()))
-            self._records[str(file)] = cached
-        return dict(cached[1])
-
     def get_project(self, name: str) -> dict:
-        return self._record(self._project_dir(name) / "project.json")
+        with self._db.read() as connection:
+            return self._record_of(connection, name)
 
     def update_project(self, name: str, title: str | None = None, description: str | None = None) -> dict:
-        folder = self._project_dir(name)
-        self._writing()
-        with self.lock:
-            record = json.loads((folder / "project.json").read_text())
+        with self._write() as connection:
+            record = self._record_of(connection, name)
             record.update({key: value for key, value in (("title", title), ("description", description)) if value is not None})
-            self._write_record(folder, record)
+            connection.execute("UPDATE projects SET record = ?, generation = generation + 1 WHERE name = ?", (json.dumps(record), name))
             return record
 
     def projects(self) -> list[dict]:
-        found = []
-        for file in sorted(self._blobs.projects.glob("*/project.json")):
-            try:
-                found.append(self._record(file))
-            except FileNotFoundError:
-                continue
-        return found
+        with self._db.read() as connection:
+            return [json.loads(row[0]) for row in connection.execute("SELECT record FROM projects ORDER BY name")]
 
     def overviews(self) -> list[dict]:
         """Every project record with its artifact count and last update."""
-        found = []
-        for record in self.projects():
-            summaries = self.summaries(record["name"])
-            found.append({**record, "artifacts": len(summaries),
-                          "updated": max((item["updated"] for item in summaries), default=record["created"])})
-        return found
+        with self._db.read() as connection:
+            counts = {row[0]: (row[1], row[2]) for row in
+                      connection.execute("SELECT project, count(*), max(updated) FROM artifacts GROUP BY project")}
+            found = []
+            for (text,) in connection.execute("SELECT record FROM projects ORDER BY name"):
+                record = json.loads(text)
+                count, updated = counts.get(record["name"], (0, None))
+                found.append({**record, "artifacts": count, "updated": updated or record["created"]})
+            return found
 
-    # --------------------------------------------------------------- the index
+    # --------------------------------------------------------------- artifacts
 
-    def _index(self, project: str) -> ProjectIndex:
-        index = self._indexes.get(project)  # projects are never removed: a known one needs no check
-        if index is not None:
-            return index
-        folder = self._project_dir(project)
-        with self._indexes_lock:
-            index = self._indexes.get(project)
-            if index is None:
-                index = self._indexes[project] = ProjectIndex(folder)
-            return index
+    @staticmethod
+    def _project(connection: sqlite3.Connection, project: str) -> None:
+        if connection.execute("SELECT 1 FROM projects WHERE name = ?", (refs.valid_project(project),)).fetchone() is None:
+            raise NotFound(f"unknown project {project!r}")
 
-    def _upgrade(self, artifact: ArtifactIndex, states: dict[int, dict], numbers: list[int]) -> dict[int, str]:
-        """Give versions stored without a uid their deterministic one (see the module doc); a final version keeps
-        it with one more state line (no other writer appends to a final version)."""
-        given, persist = {}, []
-        for number in numbers:
-            state = states[number]
-            if state.get("uid"):
-                continue
-            state["uid"] = legacy(f"{self.uid}/{artifact.project}/{artifact.name}/{number}", state.get("created"))
-            given[number] = state["uid"]
-            if state["status"] != "running":
-                persist.append(state)
-        if persist:
-            try:
-                append_lines(artifact.folder / "versions.jsonl", persist)
-            except OSError:  # a read-only store: the same uids are derived again next time
-                pass
-        return given
-
-    def _artifact(self, project: str, name: str, create: bool = False) -> ArtifactIndex:
-        """The artifact's index entry, up to date with its files (see index.py). Inside `_locked` for this artifact
-        it is not checked again: the lock holder brought it up to date and reads back its own appends (`_write`)."""
-        held = getattr(self._held, "keys", None)
-        if held and (project, name) in held:
-            return held[(project, name)]
+    def _check(self, connection: sqlite3.Connection, project: str, name: str) -> None:
+        self._project(connection, project)
         refs.valid_name(name)
-        return self._index(project).artifact(name, self._upgrade, create=create)
-
-    def _states(self, project: str, name: str) -> dict[int, dict]:
-        """The latest recorded state per version number (each with its uid): a snapshot, safe to iterate."""
-        return self._artifact(project, name).snapshot()[0]
-
-    def _artifact_dir(self, project: str, name: str) -> Path:
-        return self._project_dir(project) / "artifacts" / refs.valid_name(name)
-
-    def _by_uid(self, states: dict[int, dict], uid: str) -> dict | None:
-        return next((state for state in states.values() if state["uid"] == uid), None)
-
-    def _hint(self, project: str, name: str) -> None:
-        """Tell other processes' indexes which artifact changed (index.py); a hint, so no fsync. Inside `_locked`
-        the hint is written once, when the lock is released."""
-        dirty = getattr(self._held, "dirty", None)
-        if dirty is not None and (project, name) in getattr(self._held, "keys", {}):
-            dirty.add((project, name))
-            return
-        try:
-            append_bytes(self._index(project).folder / "changes.jsonl", (json.dumps({"artifact": name}) + "\n").encode(), sync=False)
-        except OSError:
-            pass
-
-    def _write(self, project: str, name: str, record: dict | list[dict]) -> None:
-        artifact = self._artifact(project, name, create=True)
-        append_lines(artifact.versions_tail.path, record if isinstance(record, list) else [record])
-        self._hint(project, name)
-        if artifact.refresh(self._upgrade):  # reads back this line (and any other process's)
-            self._index(project).bump()
-
-    def _claim(self, project: str, name: str, artifact: ArtifactIndex) -> int:
-        """The next version number, claimed by creating `.numbers/<n>` exclusively (unique across processes)."""
-        numbers = os.path.join(artifact.folder, ".numbers")
-        if not artifact.numbers_ready:
-            os.makedirs(numbers, exist_ok=True)
-            artifact.numbers_ready = True
-        candidate = max(artifact.snapshot()[0], default=0) + 1
-        while True:
-            try:
-                os.close(os.open(os.path.join(numbers, str(candidate)), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))
-                return candidate
-            except FileExistsError:  # another process took it: catch up with what it wrote
-                if artifact.refresh(self._upgrade):
-                    self._index(project).bump()
-                candidate = max(candidate + 1, max(artifact.snapshot()[0], default=0) + 1)
 
     def artifacts(self, project: str) -> list[str]:
-        return [name for name, _ in self._index(project).fresh(self._upgrade)]
+        with self._db.read() as connection:
+            self._project(connection, project)
+            return [row[0] for row in connection.execute("SELECT name FROM artifacts WHERE project = ? ORDER BY name", (project,))]
+
+    @staticmethod
+    def _state(connection, project: str, name: str, number: int) -> dict | None:
+        row = connection.execute("SELECT manifest FROM versions WHERE project = ? AND name = ? AND number = ?",
+                                 (project, name, number)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    @staticmethod
+    def _states(connection, project: str, name: str) -> dict[int, dict]:
+        return {row[0]: json.loads(row[1]) for row in connection.execute(
+            "SELECT number, manifest FROM versions WHERE project = ? AND name = ? ORDER BY number", (project, name))}
+
+    @staticmethod
+    def _by_uid(connection, uid: str) -> tuple[str, str, dict] | None:
+        """(project, name, record) of the version with this uid, anywhere in the store."""
+        row = connection.execute("SELECT project, name, manifest FROM versions WHERE uid = ?", (uid,)).fetchone()
+        return (row[0], row[1], json.loads(row[2])) if row else None
+
+    @staticmethod
+    def _aliases(connection, project: str, name: str) -> dict[str, int]:
+        return {row[0]: row[1] for row in connection.execute(
+            "SELECT alias, number FROM aliases WHERE project = ? AND name = ? ORDER BY position", (project, name))}
 
     def version_numbers(self, project: str, name: str) -> set[int]:
         """The artifact's version numbers (cheaper than `versions` when only they are needed)."""
-        artifact = self._artifact(project, name)
-        with artifact.lock:
-            return set(artifact.states)
+        with self._db.read() as connection:
+            self._check(connection, project, name)
+            return {row[0] for row in connection.execute("SELECT number FROM versions WHERE project = ? AND name = ?", (project, name))}
+
+    def last_number(self, project: str, name: str) -> int:
+        """The artifact's highest version number (0 without versions); a new version always gets the next one."""
+        with self._db.read() as connection:
+            self._check(connection, project, name)
+            return connection.execute("SELECT coalesce(max(number), 0) FROM versions WHERE project = ? AND name = ?",
+                                      (project, name)).fetchone()[0]
 
     def versions(self, project: str, name: str) -> list[dict]:
-        return [dict(state) for _, state in sorted(self._states(project, name).items())]
+        with self._db.read() as connection:
+            self._check(connection, project, name)
+            return list(self._states(connection, project, name).values())
 
     def get_version(self, project: str, name: str, version: int | str) -> dict:
         """One version's manifest, by number or uid, whatever its status."""
-        artifact = self._artifact(project, name)
-        with artifact.lock:
-            number = artifact.by_uid.get(version) if isinstance(version, str) else version
-            state = artifact.states.get(number) if number is not None else None
-            if state is not None and isinstance(version, str) and state.get("uid") != version:
-                state = None
-            if state is not None:
-                return dict(state)
-        raise NotFound(f"{project}:{name} has no version {version if isinstance(version, str) else f'v{version}'}")
+        with self._db.read() as connection:
+            self._check(connection, project, name)
+            if isinstance(version, str):
+                found = self._by_uid(connection, version)
+                state = found[2] if found and found[:2] == (project, name) else None
+            else:
+                state = self._state(connection, project, name, version)
+        if state is None:
+            raise NotFound(f"{project}:{name} has no version {version if isinstance(version, str) else f'v{version}'}")
+        return state
+
+    @staticmethod
+    def _summary(row) -> dict:
+        name, latest, versions, aliases, updated, metadata = row
+        return {"name": name, "latest": latest, "versions": versions, "aliases": json.loads(aliases), "updated": updated,
+                "metadata": json.loads(metadata)}
 
     def summary(self, project: str, name: str) -> dict:
         """The artifact at a glance: latest completed version (number and metadata), version count, aliases, last change."""
-        return dict(self._artifact(project, name).get_summary())
+        with self._db.read() as connection:
+            self._check(connection, project, name)
+            row = connection.execute(f"{_SUMMARY} WHERE project = ? AND name = ?", (project, name)).fetchone()
+        if row is None:
+            return {"name": name, "latest": None, "versions": 0, "aliases": {}, "updated": "", "metadata": {}}
+        return self._summary(row)
 
     def summaries(self, project: str) -> list[dict]:
         return list(self.summaries_stamped(project)[1])
 
     def summaries_stamped(self, project: str) -> tuple[tuple, list[dict]]:
-        """(stamp, summaries): the stamp changes whenever the listing may have; callers may cache on it."""
-        index = self._index(project)
-        items = index.fresh(self._upgrade)
-        with index.lock:
-            cached, generation = index.listing, index.generation
-        if cached is None or cached[0] != generation:
-            cached = (generation, [artifact.get_summary() for _, artifact in items])
-            with index.lock:
-                index.listing = cached
-        return (id(index), cached[0]), cached[1]
+        """(stamp, summaries): the stamp changes whenever the listing may have (the project's generation, which
+        every write to the project bumps), so callers may cache on it; the list is cached here the same way."""
+        with self._db.read() as connection:
+            row = connection.execute("SELECT generation FROM projects WHERE name = ?", (refs.valid_project(project),)).fetchone()
+            if row is None:
+                raise NotFound(f"unknown project {project!r}")
+            cached = self._listings.get(project)
+            if cached is None or cached[0] != row[0]:
+                rows = connection.execute(f"{_SUMMARY} WHERE project = ? ORDER BY name", (project,)).fetchall()
+                cached = (row[0], [self._summary(item) for item in rows])
+                self._listings[project] = cached
+        return (project, cached[0]), cached[1]
 
     def aliases(self, project: str, name: str) -> dict[str, int]:
         """Where each alias points now (the last move wins)."""
-        return self._artifact(project, name).snapshot()[1]
+        with self._db.read() as connection:
+            self._check(connection, project, name)
+            return self._aliases(connection, project, name)
 
-    def _running(self, project: str, name: str, version: int) -> dict:
-        state = self._states(project, name).get(version)
+    def alias_log(self, project: str, name: str) -> list[dict]:
+        """Every move of the artifact's aliases, oldest first: {alias, version, time}."""
+        with self._db.read() as connection:
+            self._check(connection, project, name)
+            return [{"alias": row[0], "version": row[1], "time": row[2]} for row in connection.execute(
+                "SELECT alias, number, time FROM alias_log WHERE project = ? AND name = ? ORDER BY seq", (project, name))]
+
+    # ------------------------------------------------------------------ writes (each one transaction)
+
+    @staticmethod
+    def _save(connection, project: str, name: str, state: dict, created: bool = False) -> None:
+        """Store a version's record, and keep the artifact's summary row and the project's generation current."""
+        values = (state["uid"], state["label"], state["status"], json.dumps(state), project, name, state["version"])
+        if created:
+            connection.execute("INSERT INTO versions (uid, label, status, manifest, project, name, number) VALUES (?, ?, ?, ?, ?, ?, ?)", values)
+            connection.execute("INSERT INTO artifacts (project, name, versions, updated) VALUES (?, ?, 1, ?) ON CONFLICT (project, name) "
+                               "DO UPDATE SET versions = versions + 1, updated = max(updated, excluded.updated)", (project, name, _stamp(state)))
+        else:
+            connection.execute("UPDATE versions SET uid = ?, label = ?, status = ?, manifest = ? WHERE project = ? AND name = ? AND number = ?", values)
+            connection.execute("UPDATE artifacts SET updated = max(updated, ?) WHERE project = ? AND name = ?", (_stamp(state), project, name))
+        connection.execute("UPDATE projects SET generation = generation + 1 WHERE name = ?", (project,))
+
+    def _running(self, connection, project: str, name: str, version: int) -> dict:
+        state = self._state(connection, project, name, version)
         if state is None:
             raise NotFound(f"{project}:{name}@v{version} does not exist")
         if state["status"] != "running":
             raise StoreError(f"{project}:{name}@v{version} is {state['status']} and can no longer change")
         return state
 
-    def _exact_inputs(self, inputs) -> list[str]:
+    def _exact_inputs(self, connection, inputs) -> list[str]:
         """Exact `project:name@v<n>` strings for input references; each must resolve to a completed version."""
         exact: list[str] = []
         for item in inputs or []:
-            project, name, version = self.resolve(item)
+            project, name, version = self._resolve(connection, item)
             text = refs.exact(project, name, version["version"])
             if text not in exact:
                 exact.append(text)
         return exact
 
-    def _start(self, project, name, label, metadata, source, uid=None, write: bool = True) -> dict:
-        """A new running version (its number claimed); written unless `write` is False (the caller writes it)."""
+    def _new(self, connection, project, name, label, metadata, source, uid=None) -> dict:
+        """A new running version's record, numbered next (unique: this runs inside a write transaction)."""
         if label is not None:
             refs.valid_word(label, "label")
         metadata = {} if metadata is None else metadata
         if not isinstance(metadata, dict):
             raise StoreError("metadata must be a dict")
         json.dumps(metadata)
-        artifact = self._artifact(project, name, create=True)
-        record = {"version": self._claim(project, name, artifact), "uid": new_uid() if uid is None else valid_uid(uid), "label": label,
-                  "status": "running", "created": now(), "files": [], "metadata": metadata, "inputs": [], "source": source}
-        if write:
-            self._write(project, name, record)
-        return record
+        uid = new_uid() if uid is None else valid_uid(uid)
+        other = self._by_uid(connection, uid)
+        if other is not None:
+            raise Conflict(f"uid {uid} already names {refs.exact(other[0], other[1], other[2]['version'])}")
+        number = connection.execute("SELECT coalesce(max(number), 0) + 1 FROM versions WHERE project = ? AND name = ?",
+                                    (project, name)).fetchone()[0]
+        return {"version": number, "uid": uid, "label": label, "status": "running", "created": now(), "files": [],
+                "metadata": metadata, "inputs": [], "source": source}
 
-    def _add(self, project, name, version, entries) -> dict:
-        state = self._running(project, name, version)
+    def _merged(self, state: dict, entries) -> dict:
         clean = clean_entries(entries)
         missing = self.missing(clean)
         if missing:
@@ -466,87 +466,73 @@ class LocalStore:
         merged.update({entry["path"]: entry for entry in clean})
         files = sorted(merged.values(), key=lambda entry: entry["path"])
         _check_tree(files)
-        record = {**state, "files": files}
-        self._write(project, name, record)
-        return record
+        return {**state, "files": files}
 
-    def _complete(self, project, name, version, inputs) -> dict:
-        state = self._running(project, name, version)
-        exact = self._exact_inputs(inputs)
-        record = {**state, "status": "completed", "completed": now(), "inputs": exact}
-        self._write(project, name, record)
-        self._completed(project, name, version, exact)
-        return record
-
-    def _completed(self, project, name, version, exact) -> None:
+    def _completed(self, connection, project, name, version, exact) -> None:
         """After a version completed: `latest` moves to it, and the versions it consumed learn of it."""
-        self._move_alias(project, name, "latest", version)
+        self._move_alias(connection, project, name, "latest", version)
         me = refs.exact(project, name, version)
         for text in exact:
-            source = refs.parse(text)
-            append_lines(self._project_dir(source.project) / "consumers.jsonl", [{"consumer": me, "input": text, "time": now()}])
+            connection.execute("INSERT OR IGNORE INTO consumers (input, consumer, time) VALUES (?, ?, ?)", (text, me, now()))
 
-    def _move_alias(self, project, name, alias, version) -> None:
-        if self.aliases(project, name).get(alias) != version:
-            artifact = self._artifact(project, name, create=True)
-            append_lines(artifact.aliases_tail.path, [{"alias": alias, "version": version, "time": now()}])
-            self._hint(project, name)
-            if artifact.refresh(self._upgrade):
-                self._index(project).bump()
-
-    @contextmanager
-    def _locked(self, project: str, name: str):
-        """Hold this process's write lock of one artifact (index.ArtifactIndex.write_lock), with its index brought up
-        to date once; until the lock is released this thread reads the artifact from the index without checking."""
-        self._writing()
-        artifact = self._artifact(project, name, create=True)
-        with artifact.write_lock:
-            if artifact.refresh(self._upgrade):
-                self._index(project).bump()
-            held = getattr(self._held, "keys", None)
-            if held is None:
-                self._held.keys, self._held.dirty = {}, set()
-                held = self._held.keys
-            held[(project, name)] = artifact
-            try:
-                yield artifact
-            finally:
-                del held[(project, name)]
-                if (project, name) in self._held.dirty:
-                    self._held.dirty.discard((project, name))
-                    self._hint(project, name)
+    def _move_alias(self, connection, project, name, alias, version) -> None:
+        row = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = ?", (project, name, alias)).fetchone()
+        if row is not None and row[0] == version:
+            return
+        cursor = connection.execute("INSERT INTO alias_log (project, name, alias, number, time) VALUES (?, ?, ?, ?, ?)",
+                                    (project, name, alias, version, now()))
+        connection.execute("INSERT INTO aliases VALUES (?, ?, ?, ?, ?) ON CONFLICT (project, name, alias) DO UPDATE SET number = excluded.number",
+                           (project, name, alias, version, cursor.lastrowid))
+        aliases = json.dumps(self._aliases(connection, project, name))
+        if alias == "latest":
+            head = self._state(connection, project, name, version)
+            connection.execute("UPDATE artifacts SET latest = ?, metadata = ?, aliases = ? WHERE project = ? AND name = ?",
+                               (version, json.dumps(head["metadata"]), aliases, project, name))
+        else:
+            connection.execute("UPDATE artifacts SET aliases = ? WHERE project = ? AND name = ?", (aliases, project, name))
+        connection.execute("UPDATE projects SET generation = generation + 1 WHERE name = ?", (project,))
 
     def start_version(self, project: str, name: str, label: str | None = None, metadata: dict | None = None,
                       source: dict | None = None, uid: str | None = None) -> int:
         """Start a running version; returns its number. With `uid` (made by the client), starting the same version
         again returns its number; a uid this artifact already has for a different label or metadata is a Conflict."""
-        with self._locked(project, name):
+        with self._write() as connection:
+            self._check(connection, project, name)
             if uid is not None:
-                known = self._by_uid(self._states(project, name), valid_uid(uid))
-                if known is not None:
-                    if known["label"] != label or known["metadata"] != (metadata or {}):
-                        raise Conflict(f"uid {uid} already names {project}:{name}@v{known['version']} with another label or metadata")
-                    return known["version"]
-            return self._start(project, name, label, metadata, source, uid)["version"]
+                known = self._by_uid(connection, valid_uid(uid))
+                if known is not None and known[:2] == (project, name):
+                    state = known[2]
+                    if state["label"] != label or state["metadata"] != (metadata or {}):
+                        raise Conflict(f"uid {uid} already names {project}:{name}@v{state['version']} with another label or metadata")
+                    return state["version"]
+            state = self._new(connection, project, name, label, metadata, source, uid)
+            self._save(connection, project, name, state, created=True)
+            return state["version"]
 
     def add_files(self, project: str, name: str, version: int, entries: list[dict]) -> None:
         """Add or replace files in a running version (entries as in `blobs.clean_entries`, blobs already uploaded)."""
-        with self._locked(project, name):
-            self._add(project, name, version, entries)
+        with self._write() as connection:
+            self._check(connection, project, name)
+            self._save(connection, project, name, self._merged(self._running(connection, project, name, version), entries))
 
     def complete_version(self, project: str, name: str, version: int, inputs=None) -> None:
         """Freeze a version and move `latest` to it; `inputs` are the references it consumed."""
-        with self._locked(project, name):
-            self._complete(project, name, version, inputs)
+        with self._write() as connection:
+            self._check(connection, project, name)
+            state = self._running(connection, project, name, version)
+            exact = self._exact_inputs(connection, inputs)
+            self._save(connection, project, name, {**state, "status": "completed", "completed": now(), "inputs": exact})
+            self._completed(connection, project, name, version, exact)
 
     def fail_version(self, project: str, name: str, version: int) -> None:
-        with self._locked(project, name):
-            state = self._running(project, name, version)
-            self._write(project, name, {**state, "status": "failed", "completed": now()})
+        with self._write() as connection:
+            self._check(connection, project, name)
+            state = self._running(connection, project, name, version)
+            self._save(connection, project, name, {**state, "status": "failed", "completed": now()})
 
     def publish(self, project: str, name: str, entries: list[dict], label: str | None = None, metadata: dict | None = None,
                 inputs=None, aliases=(), source: dict | None = None, uid: str | None = None) -> int:
-        """Start, fill, and complete a version in one step.
+        """Start, fill, and complete a version in one step, in one transaction (all of it is stored, or none).
 
         When the latest completed version already has these files, inputs, and metadata, no version
         is created and its number is returned (the aliases are still applied). With `uid`, publishing
@@ -554,80 +540,89 @@ class LocalStore:
         """
         clean = sorted(clean_entries(entries), key=lambda entry: entry["path"])
         _check_tree(clean)
-        with self._locked(project, name):
-            exact = self._exact_inputs(inputs)
-            states, current = self._artifact(project, name, create=True).snapshot()
-            known = self._by_uid(states, valid_uid(uid)) if uid is not None else None
-            head = current.get("latest")
-            state = states.get(head) if head else None
+        missing = self.missing(clean)  # blobs are never removed, so checking before the transaction is safe
+        if missing:
+            raise StoreError(f"{len(missing)} blobs are not in the store yet, e.g. {missing[0]}")
+        for alias in aliases:
+            refs.valid_word(alias, "alias")
+        with self._write() as connection:
+            self._check(connection, project, name)
+            exact = self._exact_inputs(connection, inputs)
+            known = self._by_uid(connection, valid_uid(uid)) if uid is not None else None
+            head = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = 'latest'",
+                                      (project, name)).fetchone()
+            state = self._state(connection, project, name, head[0]) if head else None
             if known is not None:
-                if known["status"] != "completed" or not _same(known, clean, exact, metadata or {}):
-                    raise Conflict(f"uid {uid} already names {project}:{name}@v{known['version']} with other content")
-                version = known["version"]
+                if known[:2] != (project, name) or known[2]["status"] != "completed" or not _same(known[2], clean, exact, metadata or {}):
+                    raise Conflict(f"uid {uid} already names {refs.exact(known[0], known[1], known[2]['version'])} with other content")
+                version = known[2]["version"]
             elif state is not None and _same(state, clean, exact, metadata or {}):
                 version = state["version"]
-            elif not self.missing(clean):  # the usual case: the version's three state lines in one append (one fsync)
-                running = self._start(project, name, label, metadata, source, uid, write=False)
-                filled = {**running, "files": clean}
-                done = {**filled, "status": "completed", "completed": now(), "inputs": exact}
-                self._write(project, name, [running, filled, done])
-                version = done["version"]
-                self._completed(project, name, version, exact)
-            else:  # blobs are missing: the version is started and then fails, as it always did
-                version = self._start(project, name, label, metadata, source, uid)["version"]
-                try:
-                    self._add(project, name, version, clean)
-                    self._complete(project, name, version, exact)
-                except Exception:
-                    self._write(project, name, {**self._states(project, name)[version], "status": "failed", "completed": now()})
-                    raise
+            else:
+                record = self._new(connection, project, name, label, metadata, source, uid)
+                record = {**record, "files": clean, "status": "completed", "completed": now(), "inputs": exact}
+                self._save(connection, project, name, record, created=True)
+                version = record["version"]
+                self._completed(connection, project, name, version, exact)
             for alias in aliases:
-                self._set_alias(project, name, alias, version)
+                self._set_alias(connection, project, name, alias, version)
         return version
 
-    def _set_alias(self, project, name, alias, version) -> None:
+    def _set_alias(self, connection, project, name, alias, version) -> None:
         refs.valid_word(alias, "alias")
-        state = self._states(project, name).get(version)
+        state = self._state(connection, project, name, version)
         if state is None or state["status"] != "completed":
             raise StoreError(f"alias {alias!r}: {project}:{name}@v{version} is not a completed version")
-        self._move_alias(project, name, alias, version)
+        self._move_alias(connection, project, name, alias, version)
 
     def set_alias(self, project: str, name: str, alias: str, version: int) -> None:
         """Point `alias` at a completed version. `latest` moves by itself and cannot be set."""
         if alias == "latest":
             raise StoreError("'latest' moves automatically when a version completes")
-        with self._locked(project, name):
-            self._set_alias(project, name, alias, version)
+        with self._write() as connection:
+            self._check(connection, project, name)
+            self._set_alias(connection, project, name, alias, version)
 
     # ------------------------------------------------------------- resolving
 
-    def resolve(self, ref: Ref | str) -> tuple[str, str, dict]:
-        """(project, name, version record) for a reference; no selector means `latest`."""
+    def _resolve(self, connection, ref: Ref | str) -> tuple[str, str, dict]:
         ref = refs.parse(ref) if isinstance(ref, str) else ref
         project = ref.project or self.project
         if project is None:
             raise StoreError(f"reference {ref} has no project and the store has no default")
-        states, aliases = self._artifact(project, ref.name).snapshot()
-        if not states:
+        self._check(connection, project, ref.name)
+        if connection.execute("SELECT 1 FROM artifacts WHERE project = ? AND name = ?", (project, ref.name)).fetchone() is None:
             raise NotFound(f"no artifact {project}:{ref.name}")
         if ref.exact:
-            state = states.get(ref.version) if ref.version is not None else self._by_uid(states, ref.uid)
+            if ref.version is not None:
+                state = self._state(connection, project, ref.name, ref.version)
+            else:
+                found = self._by_uid(connection, ref.uid)
+                state = found[2] if found and found[:2] == (project, ref.name) else None
             if state is None:
                 raise NotFound(f"{project}:{ref.name} has no version {ref.selector}")
             if state["status"] != "completed":
                 raise StoreError(f"{project}:{ref.name}@{ref.selector} is {state['status']}, not completed")
-            return project, ref.name, dict(state)
+            return project, ref.name, state
         selector = ref.selector or "latest"
-        number = aliases.get(selector)
-        if number is None:
-            labelled = [n for n, state in states.items() if state["label"] == selector and state["status"] == "completed"]
-            number = max(labelled, default=None)
-        if number is None:
+        row = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = ?",
+                                 (project, ref.name, selector)).fetchone()
+        if row is None:
+            row = connection.execute("SELECT max(number) FROM versions WHERE project = ? AND name = ? AND label = ? AND status = 'completed'",
+                                     (project, ref.name, selector)).fetchone()
+        if row is None or row[0] is None:
             raise NotFound(f"{project}:{ref.name}@{selector} matches no completed version")
-        return project, ref.name, dict(states[number])
+        return project, ref.name, self._state(connection, project, ref.name, row[0])
+
+    def resolve(self, ref: Ref | str) -> tuple[str, str, dict]:
+        """(project, name, version record) for a reference; no selector means `latest`."""
+        with self._db.read() as connection:
+            return self._resolve(connection, ref)
 
     def lineage(self, ref: Ref | str) -> dict[str, list[str]]:
         """The versions this one consumed and the versions that consumed it, as exact references."""
-        project, name, version = self.resolve(ref)
-        me = refs.exact(project, name, version["version"])
-        return {"inputs": list(version["inputs"]), "consumers": self._index(project).lineage_consumers(me)}
+        with self._db.read() as connection:
+            project, name, version = self._resolve(connection, ref)
+            me = refs.exact(project, name, version["version"])
+            consumers = [row[0] for row in connection.execute("SELECT consumer FROM consumers WHERE input = ? ORDER BY seq", (me,))]
+        return {"inputs": list(version["inputs"]), "consumers": consumers}

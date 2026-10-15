@@ -1,12 +1,12 @@
 """Filesystem helpers: copy-on-write clones, and telling a network filesystem from a local one.
 
-A store root is a folder of append-only files. Its appends (O_APPEND), its exclusive creates, and the
-index's size and mtime checks are safe between processes on one host with a local filesystem. Over NFS
-and other network filesystems they are not: appends from two clients are not atomic, attribute caching
-hides fresh writes for seconds, and locks are unreliable. So a store root on a network filesystem has
-one writer process (`cairn server`) or none: `cairn server` refuses such a root unless told it is the
-only writer (`--allow-network-fs`), and a LocalStore that writes to one warns once. (The pull cache is
-NFS-safe on its own: it only ever writes once and renames, see cache.py.)
+A store root holds a SQLite database (db.py) and content-addressed blob files. SQLite's locking (and WAL's
+shared memory) and the server's flock are safe between processes on one host with a local filesystem.
+Over NFS and other network filesystems they are not: locks are unreliable, WAL needs memory shared by
+every reader, and attribute caching hides fresh writes for seconds. So a store root on a network
+filesystem has one writer process (`cairn server`) or none: `cairn server` refuses such a root unless told
+it is the only process using it (`--allow-network-fs`), and a LocalStore that writes to one warns once.
+(The pull cache is NFS-safe on its own: it only ever writes once and renames, see cache.py.)
 """
 
 from __future__ import annotations

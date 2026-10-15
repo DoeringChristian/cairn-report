@@ -115,7 +115,7 @@ def create_token(root: Path, project: str, write: bool = False, name: str | None
     if not (root / "token").is_file():
         raise SystemExit(f"{root} is not a store root (no token file); `cairn server {root}` creates one")
     refs.valid_project(project)
-    LocalStore(root).create_project(project)
+    LocalStore(root, served=True).create_project(project)  # an owner command: allowed beside a running server
     tokens = Tokens(root)
     identifier = secrets.token_hex(4)
     name = name or f"{project}-{'write' if write else 'read'}-{identifier}"

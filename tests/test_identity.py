@@ -125,24 +125,35 @@ def test_client_supplied_uids_are_idempotent_and_conflicts_refused(tmp_path):
         local.start_version("p", "run", uid="not-a-uid")
 
 
+def legacy_root(root: Path) -> None:
+    """A store root as written before the metadata database and before uids: JSON Lines files only."""
+    import hashlib
+
+    data = b"1"
+    sha = hashlib.sha256(data).hexdigest()
+    (root / "blobs" / sha[:2]).mkdir(parents=True)
+    (root / "blobs" / sha[:2] / sha[2:]).write_bytes(data)
+    folder = root / "projects" / "p"
+    (folder / "artifacts" / "run").mkdir(parents=True)
+    (folder / "project.json").write_text(json.dumps({"name": "p", "title": "P", "description": "", "created": "t0"}))
+    entry = {"path": "a.txt", "sha256": sha, "size": 1, "mtime": None}
+    base = {"label": None, "files": [], "metadata": {}, "inputs": [], "source": None}
+    rows = [{**base, "version": 1, "status": "running", "created": "t1"},
+            {**base, "version": 1, "status": "running", "created": "t1", "files": [entry]},
+            {**base, "version": 1, "status": "completed", "created": "t1", "completed": "t2", "files": [entry]},
+            {**base, "version": 2, "status": "running", "created": "t3"}]
+    (folder / "artifacts" / "run" / "versions.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    (folder / "artifacts" / "run" / "aliases.jsonl").write_text(json.dumps({"alias": "latest", "version": 1, "time": "t2"}) + "\n")
+
+
 def test_a_store_without_uids_is_upgraded_on_load(tmp_path, monkeypatch):
     root = tmp_path / "old"
-    local = LocalStore(root)
-    local.create_project("p")
-    local.publish("p", "run", put(local, {"a.txt": "1"}))
-    local.start_version("p", "run")  # a running version
-    log = root / "projects/p/artifacts/run/versions.jsonl"
-    rows = [json.loads(line) for line in log.read_text().splitlines()]
-    log.write_text("".join(json.dumps({key: value for key, value in row.items() if key != "uid"}) + "\n" for row in rows))
-    (root / "store.json").unlink()  # as written before uids existed
-
+    legacy_root(root)
     upgraded = LocalStore(root)
     assert (root / "store.json").is_file()
     first = {version["version"]: version["uid"] for version in upgraded.versions("p", "run")}
     assert all(UID.fullmatch(uid) for uid in first.values())
-    persisted = [json.loads(line) for line in log.read_text().splitlines()]
-    assert persisted[-1]["uid"] == first[1] and persisted[-1]["status"] == "completed"  # final versions keep their uid
-    assert not any(row.get("uid") == first[2] for row in persisted)  # a running one is left to its writer
+    assert first[1] == legacy(f"{upgraded.uid}/p/run/1", "t1")  # the uid earlier versions of cairn derived
     assert {version["version"]: version["uid"] for version in LocalStore(root).versions("p", "run")} == first  # stable
     upgraded.complete_version("p", "run", 2)
     assert LocalStore(root).get_version("p", "run", 2)["uid"] == first[2]  # its writer kept the uid

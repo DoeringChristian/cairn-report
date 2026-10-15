@@ -67,6 +67,7 @@ from urllib.parse import parse_qs, unquote
 from .._version import __version__
 from ..store import BadRange, Conflict, LocalStore, NotFound, Ref, StoreError, refs
 from ..store.blobs import SHA256, clean_entries
+from ..store.db import ServerLock
 from ..store.fs import network_filesystem
 from ..store.tokens import Principal, Tokens, init_root, read_token
 from ..store.uids import UID, valid_uid
@@ -300,9 +301,9 @@ class StoreApp:
                 return self._listing(project)
             case ["projects", project, "artifacts", name]:
                 allow(principal, project)
-                if not store.version_numbers(project, name):
-                    raise NotFound(f"no artifact {project}:{name}")
                 summary = store.summary(project, name)
+                if not summary["versions"]:
+                    raise NotFound(f"no artifact {project}:{name}")
                 latest = summary["latest"]
                 return _json(200, {**summary, "latest_version": store.get_version(project, name, latest) if latest else None})
             case ["projects", project, "artifacts", name, "versions"]:
@@ -386,11 +387,11 @@ class StoreApp:
                     raise ValueError("aliases must be a list of names")
                 if payload.get("source") is not None and not isinstance(payload["source"], dict):
                     raise ValueError("source must be an object")
-                before = store.version_numbers(project, name)
+                before = store.last_number(project, name)
                 number = store.publish(project, name, entries, label=payload.get("label"), metadata=payload.get("metadata"),
                                        inputs=self._inputs(principal, project, payload.get("inputs")), aliases=aliases,
                                        source=payload.get("source"), uid=self._uid(payload))
-                created = number not in before
+                created = number > before  # new versions are numbered after every existing one
                 return _json(201 if created else 200, {"version": number, "uid": store.get_version(project, name, number)["uid"],
                                                        "created": created})
             case ["projects", project, "artifacts", name, "aliases"]:
@@ -535,6 +536,7 @@ class StoreServer:
         self.uvicorn = uvicorn.Server(config)
         self._done = threading.Event()
         self._started = False
+        self.lock = None  # the root's ServerLock, released by server_close
 
     @property
     def log(self):
@@ -569,6 +571,8 @@ class StoreServer:
     def server_close(self) -> None:
         self.socket.close()
         self.app.executor.shutdown(wait=False, cancel_futures=True)
+        if self.lock is not None:
+            self.lock.release()
 
 
 def _network_root(root: Path, allowed: bool) -> bool:
@@ -596,9 +600,17 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     if _network_root(root, allow_network_fs):
         print(f"warning: {root} is on a network filesystem ({network_filesystem(root)}); this server must be the only "
               "process writing it", file=sys.stderr, flush=True)
-    store = LocalStore(root, network_warning=False)
-    app = StoreApp(store, Auth(read_token(root / "token"), Tokens(root), no_auth), max_blob)
-    return StoreServer(app, host, port, app.auth.owner_token)
+    lock = ServerLock(root)
+    lock.acquire()  # one server per root, and other processes leave its metadata alone (store/db.py)
+    try:
+        store = LocalStore(root, network_warning=False, served=True)
+        app = StoreApp(store, Auth(read_token(root / "token"), Tokens(root), no_auth), max_blob)
+        server = StoreServer(app, host, port, app.auth.owner_token)
+    except BaseException:
+        lock.release()
+        raise
+    server.lock = lock
+    return server
 
 
 def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,

@@ -140,8 +140,12 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
    - **An async server:** the `[server]` extra brings uvicorn (its fast event loop and HTTP parser)
      and Starlette. Uploads and downloads stream, and blob downloads use `sendfile`.
    - **A faster store core:**
-     - an in-memory index per project of versions, aliases, and consumers, kept current on write;
-     - a lock per artifact instead of one global lock;
+     - the metadata (projects, versions, aliases and their log, consumers, a summary row per artifact) in
+       one SQLite database per root (WAL, short transactions, the server as its single writer); blobs stay
+       files; an old JSON Lines root is imported once (decided with the owner on 2026-10-15, replacing the
+       planned in-memory index and per-artifact locks);
+     - store roots on network filesystems refused by `cairn server` (`--allow-network-fs` for a single
+       writer);
      - upload hashing in large chunks while the data streams;
      - batched missing-blob checks;
      - caching headers on everything immutable;

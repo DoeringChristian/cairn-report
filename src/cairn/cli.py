@@ -1,5 +1,5 @@
 """Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | sync | status |
-server | ui | token | migrate | finalize-study`.
+server | ui | token | migrate | export-metadata | finalize-study`.
 
 Every command that talks to the store first tries to send what the outbox holds for it (quietly, and only
 when something is queued); `sync` does that by hand and says what happened."""
@@ -259,6 +259,17 @@ def cmd_migrate(args) -> None:
         print(line)
 
 
+def cmd_export_metadata(args) -> None:
+    from .store import LocalStore
+
+    root = args.root
+    if not (root / "store.json").is_file():
+        raise SystemExit(f"{root} is not a store root (no store.json)")
+    counts = LocalStore(root).export_metadata(args.folder)
+    for file, count in counts.items():
+        print(f"{args.folder / file}  {count} rows")
+
+
 def cmd_token_create(args) -> None:
     from .store.tokens import create_token
 
@@ -383,6 +394,11 @@ def main(argv: list[str] | None = None) -> None:
     migrate.add_argument("old_root", type=Path)
     migrate.add_argument("new_root", type=Path, help="a new folder or an existing store")
     migrate.set_defaults(run=cmd_migrate)
+    export_metadata = commands.add_parser("export-metadata", help="write a store root's metadata as readable JSON Lines "
+                                          "(projects, versions, the alias log, consumers), for backups and inspection")
+    export_metadata.add_argument("root", type=Path)
+    export_metadata.add_argument("folder", type=Path)
+    export_metadata.set_defaults(run=cmd_export_metadata)
     token = commands.add_parser("token", help="project-scoped tokens").add_subparsers(dest="token_command", required=True)
     token_create = token.add_parser("create", help="print a new token for one project (shown once, stored hashed)")
     token_create.add_argument("root", type=Path)
