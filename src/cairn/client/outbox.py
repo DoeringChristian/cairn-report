@@ -33,11 +33,8 @@ the uid's number is remembered for offline pulls.
 
 from __future__ import annotations
 
-import ctypes
-import ctypes.util
 import hashlib
 import os
-import shutil
 import socket
 import sys
 import threading
@@ -47,6 +44,7 @@ from pathlib import Path
 from ..store import INPUTS_FILE
 from ..store.blobs import now
 from ..store.cache import blob_cache, cache_root, place, scratch
+from ..store.fs import clone_or_copy
 from ..store.errors import StoreError, Unreachable
 from ..store.uids import new_uid
 from . import state
@@ -57,38 +55,6 @@ PENDING_STATES = ("pending", "running", "completed", "failed")
 
 
 # ------------------------------------------------------------------ staging
-
-
-def _clonefile():
-    if sys.platform != "darwin":
-        return None
-    try:
-        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-        function = libc.clonefile
-        function.argtypes, function.restype = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_int
-        return function
-    except (OSError, AttributeError):
-        return None
-
-
-_CLONE = _clonefile()
-FICLONE = 0x40049409
-
-
-def clone_or_copy(source: Path, target: Path) -> None:
-    """A copy-on-write clone where the filesystem has them (APFS, Btrfs, XFS), else a plain copy."""
-    if _CLONE is not None and _CLONE(os.fsencode(source), os.fsencode(target), 0) == 0:
-        return
-    if sys.platform.startswith("linux"):
-        try:
-            import fcntl
-
-            with open(source, "rb") as reader, open(target, "wb") as writer:
-                fcntl.ioctl(writer.fileno(), FICLONE, reader.fileno())
-            return
-        except (OSError, ImportError):
-            Path(target).unlink(missing_ok=True)
-    shutil.copyfile(source, target)
 
 
 def _digest(path: Path) -> tuple[str, int]:

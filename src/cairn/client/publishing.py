@@ -26,7 +26,6 @@ from pathlib import Path
 
 from ..config import Config, load_config
 from ..store import INPUTS_ENV, INPUTS_FILE, LocalStore, StoreError, read_inputs, refs
-from .http import Limited
 from ..store.errors import Unreachable
 from .http import HashCache, entries_for, scan  # noqa: F401
 from .open import as_store, open_store, versions_of
@@ -53,9 +52,7 @@ def stage_local(store: LocalStore, local: Path, config: Config, cache: HashCache
     entries, sources = entries_for(files, cache)
     cache.save()
     for sha in store.missing(entries):
-        file, size = sources[sha]
-        with file.open("rb") as handle:
-            store.put_blob(sha, Limited(handle, size), size)
+        store.put_file(sha, sources[sha][0])  # a copy-on-write clone where the filesystem allows, verified
     return entries
 
 

@@ -16,8 +16,11 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .fs import clone_or_copy
+
 SHA256 = re.compile(r"[0-9a-f]{64}")
-CHUNK = 1 << 20
+CONTROL = re.compile(r"[\x00-\x1f]")
+CHUNK = 4 << 20  # blobs are read, hashed and written in 4 MB pieces
 
 
 def now() -> str:
@@ -28,7 +31,7 @@ def valid_path(path) -> bool:
     """A relative POSIX path without `.`/`..`, empty parts, or control characters."""
     if not isinstance(path, str) or not 0 < len(path) <= 1024 or "\\" in path:
         return False
-    return all(part not in ("", ".", "..") and not any(ord(char) < 32 for char in part) for part in path.split("/"))
+    return not CONTROL.search(path) and all(part not in ("", ".", "..") for part in path.split("/"))
 
 
 def link_target(path: str, target) -> str | None:
@@ -81,12 +84,104 @@ def resolve_entry(files: list[dict], path: str) -> dict | None:
 
 
 def append_lines(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
+    """Append rows to a JSON Lines file in one `write` on an O_APPEND descriptor, then fsync.
+
+    One write keeps concurrent appenders (threads or processes on this host) from interleaving inside a
+    line. A file whose last line was torn (a writer died mid-line) first gets a newline, so the new rows
+    never fuse with the torn one."""
+    data = "".join(json.dumps(row) + "\n" for row in rows).encode()
+    append_bytes(path, data, sync=True)
+
+
+def append_bytes(path: Path, data: bytes, sync: bool = True) -> None:
+    flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
+    try:
+        descriptor = os.open(path, flags, 0o644)
+    except FileNotFoundError:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, flags, 0o644)
+    try:
+        size = os.fstat(descriptor).st_size
+        if size and os.pread(descriptor, 1, size - 1) != b"\n":
+            data = b"\n" + data
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            view = view[written:]
+        if sync:
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+class BlobWriter:
+    """One blob being written: hashed while it arrives, kept in a temporary file, fsynced, verified, renamed.
+
+        writer = store.blob_writer(sha)
+        for chunk in body: writer.write(chunk)   # chunks of any size; write in 1-8 MB pieces for speed
+        created = writer.finish()                 # ValueError if the bytes do not hash to `sha`
+
+    When the blob is already stored, nothing is written to disk: the bytes are only hashed (an upload that
+    does not match its name is still refused). `abort()` drops a half-written blob."""
+
+    def __init__(self, blobs: "BlobStore", sha: str, size: int | None = None):
+        self.blobs, self.sha, self.size = blobs, sha, size
+        self.digest, self.received = hashlib.sha256(), 0
+        self.target = blobs.blob_name(sha)  # plain strings: this runs once per upload, pathlib costs show
+        self.exists = os.path.isfile(self.target)
+        self.temporary = None if self.exists else f"{blobs.tmp_name}/{sha}.{secrets.token_hex(6)}"
+        self.handle = None if self.exists else open(self.temporary, "wb", buffering=0)
+
+    def write(self, chunk) -> None:
+        self.hash_part(chunk)
+        self.write_part(chunk)
+
+    def hash_part(self, chunk) -> None:
+        """Hash the next piece (hashlib releases the GIL for large pieces, so this may run beside `write_part` on
+        the same piece in another thread; pieces must arrive in order)."""
+        self.digest.update(chunk)
+        self.received += len(chunk)
+
+    def write_part(self, chunk) -> None:
+        """Write the next piece to the temporary file (nothing when the blob is already stored)."""
+        if self.handle is not None:
+            view = memoryview(chunk)
+            while view:
+                view = view[self.handle.write(view):]
+
+    def finish(self) -> bool:
+        """Verify and place the blob; False if it was already stored."""
+        try:
+            if self.size is not None and self.received != self.size:
+                raise ValueError("upload ended before Content-Length bytes arrived")
+            if self.digest.hexdigest() != self.sha:
+                raise ValueError("content does not match its SHA-256 (did the file change during upload?)")
+            if self.handle is None:
+                return False
+            os.fsync(self.handle.fileno())
+            self.handle.close()
+            self.handle = None
+            if os.path.isfile(self.target):
+                return False
+            try:
+                os.replace(self.temporary, self.target)
+            except FileNotFoundError:  # the first blob of its folder
+                os.makedirs(os.path.dirname(self.target), exist_ok=True)
+                os.replace(self.temporary, self.target)
+            return True
+        finally:
+            self.abort()
+
+    def abort(self) -> None:
+        if self.handle is not None:
+            self.handle.close()
+            self.handle = None
+        if self.temporary is not None:
+            try:
+                os.unlink(self.temporary)
+            except FileNotFoundError:
+                pass
+            self.temporary = None
 
 
 class BlobStore:
@@ -97,31 +192,51 @@ class BlobStore:
         self.blobs, self.projects, self.tmp = root / "blobs", root / "projects", root / "tmp"
         for folder in (self.blobs, self.projects, self.tmp):
             folder.mkdir(parents=True, exist_ok=True)
+        self.blobs_name, self.tmp_name = os.fspath(self.blobs), os.fspath(self.tmp)
+
+    def blob_name(self, sha: str) -> str:
+        return f"{self.blobs_name}/{sha[:2]}/{sha[2:]}"
 
     def blob_path(self, sha: str) -> Path:
-        return self.blobs / sha[:2] / sha[2:]
+        return Path(self.blob_name(sha))
 
     def has_blob(self, sha: str) -> bool:
-        return self.blob_path(sha).is_file()
+        return os.path.isfile(self.blob_name(sha))
+
+    def writer(self, sha: str, size: int | None = None) -> BlobWriter:
+        return BlobWriter(self, sha, size)
 
     def put_blob(self, sha: str, stream, size: int) -> bool:
         """Store `size` bytes from `stream` if they hash to `sha`; False if the blob already existed."""
-        target = self.blob_path(sha)
-        temporary = self.tmp / f"{sha}.{secrets.token_hex(6)}"
-        digest, remaining = hashlib.sha256(), size
+        writer = self.writer(sha, size)
         try:
-            with temporary.open("wb") as handle:
-                while remaining:
-                    chunk = stream.read(min(CHUNK, remaining))
-                    if not chunk:
-                        raise ValueError("upload ended before Content-Length bytes arrived")
+            remaining = size
+            while remaining:
+                chunk = stream.read(min(CHUNK, remaining))
+                if not chunk:
+                    raise ValueError("upload ended before Content-Length bytes arrived")
+                writer.write(chunk)
+                remaining -= len(chunk)
+            return writer.finish()
+        finally:
+            writer.abort()
+
+    def put_file(self, sha: str, source: Path) -> bool:
+        """Store a local file as blob `sha`: a copy-on-write clone where the filesystem allows (no extra space),
+        else a copy; the copy is hashed again, so a file that changed since it was hashed is refused (ValueError)."""
+        target = self.blob_path(sha)
+        if target.is_file():
+            return False
+        temporary = self.tmp / f"{sha}.{secrets.token_hex(6)}"
+        try:
+            clone_or_copy(source, temporary)
+            digest = hashlib.sha256()
+            with open(temporary, "rb", buffering=0) as handle:
+                while chunk := handle.read(CHUNK):
                     digest.update(chunk)
-                    handle.write(chunk)
-                    remaining -= len(chunk)
-                handle.flush()
                 os.fsync(handle.fileno())
             if digest.hexdigest() != sha:
-                raise ValueError("content does not match its SHA-256 (did the file change during upload?)")
+                raise ValueError(f"{source}: content does not match its SHA-256 (did the file change during publishing?)")
             if target.is_file():
                 return False
             target.parent.mkdir(exist_ok=True)
@@ -130,5 +245,21 @@ class BlobStore:
         finally:
             temporary.unlink(missing_ok=True)
 
+    def missing_hashes(self, hashes) -> list[str]:
+        """The hashes (sorted, unique) that are not stored, in one call. A batch dense enough (many hashes per
+        blob folder) lists each folder it touches once instead of checking every blob on its own."""
+        wanted = set(hashes)
+        prefixes = {sha[:2] for sha in wanted}
+        if len(wanted) < 64 * len(prefixes):  # few per folder: one stat each is cheaper than listing the folders
+            return sorted(sha for sha in wanted if not self.has_blob(sha))
+        present: set[str] = set()
+        for prefix in prefixes:
+            try:
+                with os.scandir(self.blobs / prefix) as entries:
+                    present.update(prefix + entry.name for entry in entries)
+            except FileNotFoundError:
+                continue
+        return sorted(wanted - present)
+
     def missing(self, entries: list[dict]) -> list[str]:
-        return sorted({entry["sha256"] for entry in entries if "sha256" in entry and not self.has_blob(entry["sha256"])})
+        return self.missing_hashes(entry["sha256"] for entry in entries if "sha256" in entry)

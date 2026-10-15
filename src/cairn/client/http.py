@@ -27,6 +27,7 @@ TOKEN_ENV = "CAIRN_STORE_TOKEN"
 SKIP_NAMES = {"__pycache__", ".DS_Store"}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 BATCH = 5_000
+BLOCK = 1 << 20  # uploads are sent in 1 MB blocks (http.client's default is 8 KB)
 
 
 class ClientError(Exception):
@@ -84,8 +85,8 @@ class Client:
     def _connection(self):
         if self.parsed.scheme == "https":
             return http.client.HTTPSConnection(self.parsed.hostname, self.parsed.port, timeout=self.timeout,
-                                               context=ssl.create_default_context())
-        return http.client.HTTPConnection(self.parsed.hostname, self.parsed.port, timeout=self.timeout)
+                                               context=ssl.create_default_context(), blocksize=BLOCK)
+        return http.client.HTTPConnection(self.parsed.hostname, self.parsed.port, timeout=self.timeout, blocksize=BLOCK)
 
     def request(self, method: str, path: str, body=None, headers: dict | None = None,
                 expect=(200,), stream_to: Path | None = None):
