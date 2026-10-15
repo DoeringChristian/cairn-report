@@ -123,8 +123,8 @@ allow_network_fs = false
 exclude = ["*.pkl"]
 ```
 
-`[store]` (0.13.0) is not read: Cairn names the keys to rename. A 0.13.0 project folder (`.cairn/store/`) is
-refused with the one command that converts it (`cairn upgrade`).
+There is no migration and no compatibility code: Cairn was not in use before this design, so 0.14 starts
+with fresh repos (`[store]` is an unknown key like any other).
 
 ## Commands
 
