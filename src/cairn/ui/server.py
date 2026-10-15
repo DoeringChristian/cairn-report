@@ -529,8 +529,11 @@ class UIHandler(BaseHTTPRequestHandler):
         for key, value in headers.items():
             self.send_header(key, value)
         self.end_headers()
-        for chunk in read.chunks:
-            self.wfile.write(chunk)
+        try:
+            for chunk in read.chunks:
+                self.wfile.write(chunk)
+        finally:
+            read.close()  # also when the client went away halfway
 
     # ------------------------------------------------------------------ pages
 

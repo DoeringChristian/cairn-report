@@ -40,13 +40,13 @@ src/cairn/
 ├── store/        core, no HTTP: refs, uids (UUIDv7), local (LocalStore), blobs, tokens, cache (the two roots, pull, uid-keyed, NFS-safe), errors, inputs
 ├── client/       http (Client, scan/hash/upload), remote (RemoteStore), objects (connect, Store, Project, Artifact, Version),
 │                 publishing (publish, Publication, --watch), drafts (draft, Draft, current_draft), runs (init, Run, the process's run),
-│                 system (info, system metrics, output capture), code (source snapshot, packages), logger (Writer, RunLogger), replica (the local replica: data and cache roots,
-│                 records, claims, heartbeats, store files, migration), sync (sending pending versions), prune,
+│                 system (info, system metrics, output capture), code (source snapshot, packages), logger (Writer, shared by runs and drafts), replica (the local replica: data and cache roots,
+│                 records, claims, heartbeats, store files), sync (sending pending versions), prune,
 │                 offline (resolution through the replica), open (open_store)
 ├── server/       app (handler + routes), auth, files (/files, Range, ETag), spawn (UI child); exports make_server, serve_store
 ├── ui/           server (UI HTTP server + /ui-api), sessions, backends (Local/RemoteBackend), static/ (built app)
 ├── reports/      build, serve, share, publishing (report -> artifact), template/
-└── runs/         logger (re-exports client.logger), hydra (run_experiment, StudyCompletion, finalize_study, the cairn.run and cairn.draft resolvers), snapshot
+└── runs/         hydra (run_experiment, StudyCompletion, finalize_study, the cairn.run and cairn.draft resolvers), snapshot
 web/              React + TS + Vite source of the UI (builds into src/cairn/ui/static/)
 ```
 
@@ -74,8 +74,7 @@ Allowed imports (besides the leaves `config`, `ranges`, `formats`, `_version`, w
 - `cairn build`, `cairn serve`, `cairn share` (reports)
 - `cairn finalize-study`
 
-The config file becomes `cairn.toml`. `cairn-report.toml` is still read, with a warning, for one
-release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep their names.
+The config file becomes `cairn.toml`; a `cairn-report.toml` is an error that asks for the rename. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep their names.
 
 ## Steps
 
@@ -121,7 +120,7 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
    - **Drafts** (owner request, on `artifact-store`): "a cairn managed artifact folder instead of the run
      folders, so we can also point hydra at those". `cairn.draft(name)` / `Artifact.draft()` is a fresh folder in
      `<base>/drafts/<name>/<uid>/` that is published (like `cairn.publish`, the version taking the draft's uid) and
-     removed when it closes, kept on an exception; it is the run logger (RunLogger moved to client/logger.py, so
+     removed when it closes, kept on an exception; it is a writer on its folder (client/logger.py, so
      `client` may import the leaf `formats`); pulls go into every open draft (and loose pulls into the next ones),
      `use()` declares draft-to-draft inputs (published inputs first; both replaced by runs, below); `watch=True` reuses `Publication`. Hydra:
      the `${cairn.draft:name}` resolver (cached, so one folder per job and per sweep), `run_experiment` publishes a
@@ -141,8 +140,8 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
      deleted are still refused; the server inherits it); lineage of an exact version works in any status and
      answers `nodes` (status, kind). The replica creates a running input version on the server before sending
      an output that names it. `Version.run`, `upstream()`, `downstream()`, `cairn.lineage(through_runs=True)`.
-     Writer API: `add({...})` and `add_*` with per-item metadata (Draft has only these; `RunLogger` keeps the old
-     names deprecated for one release); `formats.py` folds multi-key entries and old lines. Hydra: `${cairn.run:}`
+     Writer API: `add({...})` and `add_*` with per-item metadata (runs and drafts share the `Writer`; there is no
+     writer for a bare folder); `formats.py` folds multi-key entries and cairn-report 0.11 lines. Hydra: `${cairn.run:}`
      reserves the run folder (the job folder), a sweep is a run per trial (label `<sweep>/<n>`) plus a summary run
      whose inputs are the trials. UI: Run panel, run nodes and a data-only toggle, a Runs tab, and (owner request)
      `GET /files/<p>/<name>@<sel>.zip` in the UI server (streamed, ZIP64; the store server is unchanged).
@@ -168,17 +167,16 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
      relocatable folder, `<project>/.cairn/` (`CAIRN_DIR`, or `[cairn] dir`), with its own `.gitignore` of `*`:
      `store/` (was `.store/`), `pending/` (the data root), `cache/` (the cache root), `build/` (was
      `generated/reports/`). `CAIRN_DATA_DIR` and `CAIRN_CACHE_DIR` still override single roots; outside a
-     project the XDG folders apply. `.store/` and global pending records of the project move in on first use.
+     project the XDG folders apply.
    - **The local replica** (owner-approved, replaces the outbox; on branch `replica`):
      - two roots: `CAIRN_DATA_DIR` (durable, default `<project>/.cairn/pending`, `~/.local/share/cairn` outside a project;
        the project sits on persistent storage on a cluster) holds pending and running versions and
-       their blobs, like W&B's offline runs; `CAIRN_STATE_DIR` is read for one release with a warning and
-       old `~/.local/state/cairn` records are moved over on first use; `cairn sync --data-dir PATH` flushes
+       their blobs, like W&B's offline runs; `cairn sync --data-dir PATH` flushes
        a given data root from a login node; `CAIRN_CACHE_DIR` (throwaway, may be node-local scratch) holds synced
        versions and downloads; pending data never lives only in the cache;
      - one record per version, `versions/<uid>/manifest.json` (sync `synced | pending | rejected |
        running`), files under `versions/<uid>/files/` (what `pull` returns); `stores/<store-uid>.json`
-       keeps each server's URL, last contact, and last known aliases; the old outbox layout is migrated;
+       keeps each server's URL, last contact, and last known aliases;
      - pending versions are usable at once (`pull`, `open`, report inputs; by uid, alias, label,
        latest), lineage records `project:name@<uid>` until the server numbers it;
      - running versions write a heartbeat; any flusher fails one whose heartbeat is older than

@@ -21,15 +21,12 @@ from . import offline, replica
 
 
 def verify_replica(repair: bool = False) -> Report:
-    """The cache (repairable) and every data root's pending versions (never repaired: they may be the only copy)."""
+    """The cache (repairable) and the data root's pending versions (never repaired: they may be the only copy)."""
     report = Report()
     needed: set[str] = set()
-    for root in replica.data_roots():
-        with replica.data_root_at(root):
-            needed |= replica.needed()
+    needed |= replica.needed()
     report.merge(verify_cache(cache_root(), repair, synced=True, keep=needed))
-    for root in replica.data_roots():  # pending versions: reported, never repaired
-        report.merge(verify_cache(root, False, synced=False))
+    report.merge(verify_cache(replica.data_root(), False, synced=False))  # pending versions: reported, never repaired
     return report
 
 
@@ -45,7 +42,7 @@ def verify_ref(store, ref: str, repair: bool = False) -> Report:
         report.add("digest", label, f"the manifest's files hash to {manifest_digest(entries)}, not the recorded {digest}")
     elif digest is None and version.get("status") == "completed":
         report.add("digest", label, "the version has no manifest digest")
-    roots = [cache_root(), *replica.data_roots()]
+    roots = [cache_root(), replica.data_root()]
     for root in roots:
         folder = files_folder(root, version["uid"])
         if folder.is_dir():

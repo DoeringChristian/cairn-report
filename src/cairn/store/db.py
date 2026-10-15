@@ -10,7 +10,7 @@ summary row per artifact, in one SQLite file (`<root>/metadata.sqlite3`, WAL mod
     alias_log  every alias move, in order: project, name, alias, number, time
     consumers  input ref -> consumer ref, in the order they were recorded
     retention  (project, prefix) -> rule (JSON: keep_last, keep_days, keep_aliased; see gc.py); made when first set
-    meta       schema, legacy (import state), sweeps (how many blob sweeps ran; gc.py)
+    meta       schema, sweeps (how many blob sweeps ran; gc.py)
 
 A deleted version stays in `versions` as a tombstone (status `deleted`, its file list dropped), so its number and
 uid are never handed out again; `artifacts.versions` counts the versions that are not deleted.
@@ -19,9 +19,6 @@ Every write is one short transaction (`BEGIN IMMEDIATE`), so a crash leaves eith
 none of it. Writers in one process queue on a lock before they take SQLite's; writers in other processes
 on the same host wait for SQLite's lock (`busy_timeout`). Commits are durable (`synchronous=FULL`).
 SQLite's locking needs a local filesystem: never put a root on NFS and the like (fs.py).
-
-A root written before the database existed (JSON Lines files under `projects/`) is imported on first open,
-in one transaction, and the old files are kept as `*.migrated` (see `import_legacy`).
 """
 
 from __future__ import annotations
@@ -32,9 +29,6 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-
-from ..formats import read_jsonl
-from .uids import legacy
 
 FILE = "metadata.sqlite3"
 SCHEMA = 1
@@ -92,17 +86,15 @@ class Database:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        if self.meta(connection, "legacy") != "done":
-            import_legacy(self)
 
     @staticmethod
     def _ready(connection: sqlite3.Connection) -> bool:
-        """The schema exists and any legacy import is done."""
+        """The schema exists."""
         try:
-            rows = dict(connection.execute("SELECT key, value FROM meta WHERE key IN ('schema', 'legacy')").fetchall())
+            row = connection.execute("SELECT value FROM meta WHERE key = 'schema'").fetchone()
         except sqlite3.OperationalError:  # no meta table yet
             return False
-        return rows.get("schema") == str(SCHEMA) and rows.get("legacy") == "done"
+        return row is not None and row[0] == str(SCHEMA)
 
     def connection(self) -> sqlite3.Connection:
         connection = getattr(self._local, "connection", None)
@@ -143,77 +135,6 @@ class Database:
             yield connection
         finally:
             connection.execute("COMMIT")
-
-
-# ------------------------------------------------------------------ the JSON Lines layout before the database
-
-
-def _legacy_files(root: Path) -> list[Path]:
-    projects = root / "projects"
-    if not projects.is_dir():
-        return []
-    return sorted([*projects.glob("*/project.json"), *projects.rglob("*.jsonl")])
-
-
-def import_legacy(database: Database) -> None:
-    """Import a root written before the database (projects/<p>/project.json, consumers.jsonl, and per artifact
-    versions.jsonl and aliases.jsonl) in one transaction, then rename the old files to `*.migrated`.
-
-    The last state line per version wins; a version without a uid gets its deterministic legacy uid
-    (`uids.legacy`, the same one earlier versions derived). A crash after the commit only leaves files
-    unrenamed: the next open renames them (the import itself never runs twice)."""
-    root = database.root
-    with database.write() as connection:
-        if Database.meta(connection, "legacy") is None:
-            projects = root / "projects"
-            for record_file in sorted(projects.glob("*/project.json")) if projects.is_dir() else []:
-                _import_project(connection, database.store_uid, record_file.parent)
-            connection.execute("INSERT INTO meta VALUES ('legacy', 'imported')")
-    renamed = True
-    for file in _legacy_files(root):
-        try:
-            os.replace(file, file.with_name(file.name + ".migrated"))
-        except FileNotFoundError:  # another process renamed it first
-            pass
-        except OSError:  # a read-only root: the database is what counts now; try again next time
-            renamed = False
-    if renamed:
-        with database.write() as connection:
-            connection.execute("UPDATE meta SET value = 'done' WHERE key = 'legacy'")
-
-
-def _import_project(connection: sqlite3.Connection, store_uid: str, folder: Path) -> None:
-    from .local import summary_row
-
-    record = json.loads((folder / "project.json").read_text())
-    project = folder.name
-    connection.execute("INSERT OR IGNORE INTO projects (name, record) VALUES (?, ?)", (project, json.dumps(record)))
-    base = folder / "artifacts"
-    for log in sorted(base.rglob("versions.jsonl")) if base.is_dir() else []:
-        name = log.parent.relative_to(base).as_posix()
-        states: dict[int, dict] = {}
-        for row in read_jsonl(log):
-            if isinstance(row.get("version"), int):
-                states[row["version"]] = row
-        for number, state in sorted(states.items()):
-            if not state.get("uid"):
-                state["uid"] = legacy(f"{store_uid}/{project}/{name}/{number}", state.get("created"))
-            connection.execute("INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?, ?)",
-                               (project, name, number, state["uid"], state.get("label"), state["status"], json.dumps(state)))
-        aliases: dict[str, int] = {}
-        for row in read_jsonl(log.parent / "aliases.jsonl"):
-            if not isinstance(row.get("alias"), str) or not isinstance(row.get("version"), int):
-                continue
-            cursor = connection.execute("INSERT INTO alias_log (project, name, alias, number, time) VALUES (?, ?, ?, ?, ?)",
-                                        (project, name, row["alias"], row["version"], row.get("time") or ""))
-            connection.execute("INSERT INTO aliases VALUES (?, ?, ?, ?, ?) ON CONFLICT (project, name, alias) "
-                               "DO UPDATE SET number = excluded.number", (project, name, row["alias"], row["version"], cursor.lastrowid))
-            aliases[row["alias"]] = row["version"]
-        connection.execute("INSERT INTO artifacts VALUES (?, ?, ?, ?, ?, ?, ?)", (project, name, *summary_row(states, aliases)))
-    for row in read_jsonl(folder / "consumers.jsonl"):
-        if isinstance(row.get("input"), str) and isinstance(row.get("consumer"), str):
-            connection.execute("INSERT OR IGNORE INTO consumers (input, consumer, time) VALUES (?, ?, ?)",
-                               (row["input"], row["consumer"], row.get("time") or ""))
 
 
 def export(database: Database, folder: Path) -> dict[str, int]:

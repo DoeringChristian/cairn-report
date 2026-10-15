@@ -17,7 +17,7 @@ from cairn.server import make_server
 from cairn.store.errors import Conflict
 from cairn.store.tokens import init_root
 from cairn.store import refs
-from cairn.store.uids import UID, legacy, new_uid, uid_time
+from cairn.store.uids import UID, new_uid, uid_time
 
 from test_store import env, folder, put  # noqa: F401
 
@@ -72,9 +72,6 @@ def test_uids_are_unique_valid_and_time_ordered():
     earlier = new_uid()
     time.sleep(0.01)
     assert new_uid() > earlier
-    assert legacy("s/p/a/1", "2026-01-01T00:00:00+00:00") == legacy("s/p/a/1", "2026-01-01T00:00:00+00:00")
-    assert legacy("s/p/a/1", None) != legacy("s/p/a/2", None) and UID.fullmatch(legacy("x", "bad date"))
-    assert uid_time(legacy("x", "2026-01-01T00:00:00+00:00")) == 1767225600
 
 
 def test_refs_accept_uids_and_reserve_their_form():
@@ -123,41 +120,6 @@ def test_client_supplied_uids_are_idempotent_and_conflicts_refused(tmp_path):
         local.start_version("p", "run", label="other", uid=running)
     with pytest.raises(ValueError):
         local.start_version("p", "run", uid="not-a-uid")
-
-
-def legacy_root(root: Path) -> None:
-    """A store root as written before the metadata database and before uids: JSON Lines files only."""
-    import hashlib
-
-    data = b"1"
-    sha = hashlib.sha256(data).hexdigest()
-    (root / "blobs" / sha[:2]).mkdir(parents=True)
-    (root / "blobs" / sha[:2] / sha[2:]).write_bytes(data)
-    folder = root / "projects" / "p"
-    (folder / "artifacts" / "run").mkdir(parents=True)
-    (folder / "project.json").write_text(json.dumps({"name": "p", "title": "P", "description": "", "created": "t0"}))
-    entry = {"path": "a.txt", "sha256": sha, "size": 1, "mtime": None}
-    base = {"label": None, "files": [], "metadata": {}, "inputs": [], "source": None}
-    rows = [{**base, "version": 1, "status": "running", "created": "t1"},
-            {**base, "version": 1, "status": "running", "created": "t1", "files": [entry]},
-            {**base, "version": 1, "status": "completed", "created": "t1", "completed": "t2", "files": [entry]},
-            {**base, "version": 2, "status": "running", "created": "t3"}]
-    (folder / "artifacts" / "run" / "versions.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-    (folder / "artifacts" / "run" / "aliases.jsonl").write_text(json.dumps({"alias": "latest", "version": 1, "time": "t2"}) + "\n")
-
-
-def test_a_store_without_uids_is_upgraded_on_load(tmp_path, monkeypatch):
-    root = tmp_path / "old"
-    legacy_root(root)
-    upgraded = LocalStore(root)
-    assert (root / "store.json").is_file()
-    first = {version["version"]: version["uid"] for version in upgraded.versions("p", "run")}
-    assert all(UID.fullmatch(uid) for uid in first.values())
-    assert first[1] == legacy(f"{upgraded.uid}/p/run/1", "t1")  # the uid earlier versions of cairn derived
-    assert {version["version"]: version["uid"] for version in LocalStore(root).versions("p", "run")} == first  # stable
-    upgraded.complete_version("p", "run", 2)
-    assert LocalStore(root).get_version("p", "run", 2)["uid"] == first[2]  # its writer kept the uid
-    assert (cairn.pull(f"p:run@{first[1]}//a.txt", store=upgraded, record=False)).read_text() == "1"
 
 
 # --------------------------------------------------------------------- cache
@@ -236,6 +198,7 @@ def test_server_keeps_client_uids_and_exposes_the_store_uid(tmp_path, env):
             connection.request(method, path, body=body, headers=headers)
             response = connection.getresponse()
             data = response.read()
+            connection.close()
             return response.status, json.loads(data) if data.startswith(b"{") or data.startswith(b"[") else data
 
         assert call("GET", "/api/v2/store", token=None)[0] == 401

@@ -1,17 +1,14 @@
-"""Where Cairn keeps things: the base folder (`.cairn`), the roots inside it, and the migrations from earlier layouts."""
+"""Where Cairn keeps things: the base folder (`.cairn`) and the roots inside it."""
 
-import json
 from pathlib import Path
 
 import pytest
 
-from cairn import config as config_module
-from cairn.client import replica
 from cairn.client.open import open_store
 from cairn.config import cairn_base, load_config
 from cairn.runs.snapshot import _denied
 from cairn.store import cache
-from cairn.store.cache import cache_root, data_roots, data_root
+from cairn.store.cache import cache_root, data_root
 
 
 @pytest.fixture
@@ -23,8 +20,6 @@ def proj(tmp_path, monkeypatch):
     folder.mkdir()
     (folder / "pyproject.toml").write_text("")
     monkeypatch.chdir(folder)
-    monkeypatch.setattr(config_module, "_NOTED", set())
-    monkeypatch.setattr(replica, "_checked", set())
     return folder.resolve()
 
 
@@ -54,10 +49,6 @@ def test_each_root_has_its_own_overrides(proj, tmp_path, monkeypatch):
     monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / "scratch"))
     assert (data_root(), cache_root()) == (tmp_path / "data", tmp_path / "scratch")
-    monkeypatch.delenv("CAIRN_DATA_DIR")
-    monkeypatch.setenv("CAIRN_STATE_DIR", str(tmp_path / "state-dir"))
-    monkeypatch.setattr(cache, "_warned", set())
-    assert data_root() == tmp_path / "state-dir"
     cache.use_data_dir(tmp_path / "flag")  # --data-dir beats the environment
     assert data_root() == tmp_path / "flag"
     (proj / "cairn.toml").write_text('output_dir = "site"\n[store]\npath = "mine"\n')
@@ -76,12 +67,33 @@ def test_outside_a_project_the_xdg_folders_are_used(tmp_path, monkeypatch):
     assert data_root() == tmp_path / "chosen" / "pending"
 
 
-def test_outputs_dir_is_ignored_with_one_warning(proj, capsys):
+def test_old_config_keys_are_errors(proj):
     (proj / "cairn.toml").write_text('outputs_dir = "runs"\n')
-    load_config()
-    load_config()
-    err = capsys.readouterr().err
-    assert err.count("outputs_dir is no longer used") == 1
+    with pytest.raises(ValueError, match="unknown keys.*outputs_dir"):
+        load_config()
+    (proj / "cairn.toml").write_text('[hub]\nurl = "x"\n')
+    with pytest.raises(ValueError, match="unknown keys.*hub"):
+        load_config()
+
+
+def test_cairn_report_toml_is_not_read(proj):
+    (proj / "cairn-report.toml").write_text('reports_dir = "docs"\n')
+    with pytest.raises(ValueError, match="rename it to cairn.toml"):
+        load_config()
+    (proj / "cairn.toml").write_text("")  # both: cairn.toml wins, the old file is just ignored
+    assert load_config().reports_dir == proj / "reports"
+
+
+def test_a_folder_with_only_the_old_config_is_still_a_project(tmp_path, monkeypatch):
+    (tmp_path / "cairn-report.toml").write_text("")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="rename it to cairn.toml"):
+        load_config()
+
+
+def test_the_removed_state_dir_variable_does_nothing(proj, tmp_path, monkeypatch):
+    monkeypatch.setenv("CAIRN_STATE_DIR", str(tmp_path / "state-dir"))
+    assert data_root() == proj / ".cairn" / "pending"
 
 
 # ------------------------------------------------------------------ .gitignore
@@ -103,82 +115,6 @@ def test_every_creator_writes_the_gitignore(proj):
     assert (proj / ".cairn" / ".gitignore").read_text() == "*\n"
 
 
-# ------------------------------------------------------------------ migrations
-
-
-def test_old_store_moves_into_the_base_once(proj, capsys):
-    (proj / ".store").mkdir()
-    (proj / ".store" / "marker").write_text("x")
-    open_store(load_config())
-    assert (proj / ".cairn" / "store" / "marker").read_text() == "x"
-    assert not (proj / ".store").exists()
-    assert "moved the local store" in capsys.readouterr().err
-    open_store(load_config())  # idempotent: nothing more to move, nothing printed
-    assert capsys.readouterr().err == ""
-
-
-def test_old_store_is_never_overwritten(proj, capsys):
-    (proj / ".store").mkdir()
-    (proj / ".store" / "marker").write_text("old")
-    (proj / ".cairn" / "store").mkdir(parents=True)
-    (proj / ".cairn" / "store" / "marker").write_text("new")
-    open_store(load_config())
-    assert (proj / ".cairn" / "store" / "marker").read_text() == "new"
-    assert (proj / ".store" / "marker").read_text() == "old"
-    assert "exists already" in capsys.readouterr().err
-
-
-def test_an_explicit_store_path_is_left_alone(proj):
-    (proj / "cairn.toml").write_text('[store]\npath = ".store"\n')
-    (proj / ".store").mkdir()
-    open_store(load_config())
-    assert (proj / ".store").is_dir() and not (proj / ".cairn" / "store").exists()
-
-
-def pending_record(root: Path, uid: str, folder: Path, sync: str = "pending") -> None:
-    target = root / "versions" / uid
-    target.mkdir(parents=True)
-    (target / "manifest.json").write_text(json.dumps({
-        "uid": uid, "sync": sync, "status": "completed", "project": "p", "name": "n", "url": "http://x",
-        "source": {"host": "h", "folder": str(folder)}, "files": [], "created": "2026-01-01T00:00:00+00:00"}))
-
-
-def test_global_pending_moves_by_source_folder(proj, tmp_path, capsys):
-    old = tmp_path / "xdg-data" / "cairn"
-    pending_record(old, "uid-in", proj / "runs" / "a")
-    pending_record(old, "uid-out", tmp_path / "other-project" / "runs")
-    pending_record(old, "uid-running", proj / "runs" / "b", sync="running")
-    replica.ensure_layout()
-    new = proj / ".cairn" / "pending" / "versions"
-    assert (new / "uid-in" / "manifest.json").is_file() and not (old / "versions" / "uid-in").exists()
-    assert (old / "versions" / "uid-out").is_dir() and (old / "versions" / "uid-running").is_dir()
-    assert "moved 1 pending versions" in capsys.readouterr().err
-    replica._checked.clear()
-    replica.ensure_layout()  # idempotent
-    assert capsys.readouterr().err == ""
-    assert [record["uid"] for record in replica.records()] == ["uid-in"]
-    assert [record["uid"] for record in replica.records(all_roots=True)] == ["uid-in", "uid-out", "uid-running"]
-    assert data_roots() == [proj / ".cairn" / "pending", old]
-
-
-def test_global_pending_never_overwrites(proj, tmp_path):
-    old = tmp_path / "xdg-data" / "cairn"
-    pending_record(old, "uid-1", proj)
-    pending_record(proj / ".cairn" / "pending", "uid-1", proj, sync="rejected")
-    replica.ensure_layout()
-    assert (old / "versions" / "uid-1").is_dir()
-    assert replica.load("uid-1")["sync"] == "rejected"
-
-
-def test_nothing_moves_when_the_data_root_is_chosen(proj, tmp_path, monkeypatch):
-    old = tmp_path / "xdg-data" / "cairn"
-    pending_record(old, "uid-1", proj)
-    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path / "data"))
-    replica.ensure_layout()
-    assert (old / "versions" / "uid-1").is_dir()
-    assert data_roots() == [tmp_path / "data"]
-
-
 # ------------------------------------------------------------------ build output and snapshots
 
 
@@ -195,6 +131,6 @@ def test_reports_build_into_the_base(proj):
 
 
 def test_snapshots_skip_the_cairn_folder():
-    for part in (".cairn", ".store", "generated"):
+    for part in (".cairn", "generated"):
         assert _denied(Path(part) / "x.py")
     assert _denied(Path(".cairn") / ".gitignore")

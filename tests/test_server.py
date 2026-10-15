@@ -313,7 +313,8 @@ def test_cli_pull_prints_the_path_and_copies_into_a_folder(server, env, capsys):
     main(["pull", "data@v1", "--no-record"])
     path = capsys.readouterr().out.strip()
     assert (env / "cairn.toml").is_file() and not (env / ".cairn-inputs.jsonl").exists()
-    assert open(os.path.join(path, "a.txt")).read() == "1"
+    with open(os.path.join(path, "a.txt")) as handle:
+        assert handle.read() == "1"
     main(["pull", "data@v1", "--into", str(env / "copy")])
     assert capsys.readouterr().out.strip() == str(env / "copy")
     assert (env / "copy" / "sub" / "b.txt").read_text() == "2" and not (env / "copy" / ".cairn-complete").exists()
@@ -456,6 +457,7 @@ def launch(tmp_path, *flags):
 def stop_process(process):
     process.terminate()
     process.wait(10)
+    process.stdout.close()
 
 
 def test_store_serve_starts_its_ui_as_a_child_with_the_token_in_its_environment_only(tmp_path):
@@ -552,15 +554,20 @@ def test_the_spawned_ui_exits_when_the_server_is_killed(tmp_path):
         server.wait()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
+            probe = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
             try:
-                http.client.HTTPConnection("127.0.0.1", port, timeout=1).request("GET", "/")
+                probe.request("GET", "/")
             except OSError:
                 break
+            finally:
+                probe.close()
             time.sleep(0.5)
         else:
             raise AssertionError("the UI kept running after its server was killed")
     finally:
         server.kill()
+        server.wait()
+        server.stdout.close()
 
 
 def test_the_server_extra_is_required(tmp_path, monkeypatch):

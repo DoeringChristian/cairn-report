@@ -38,7 +38,7 @@ def test_the_first_use_pull_or_draft_starts_the_run(configured, env):
     assert cairn.run() is None
     used = cairn.use("datasets/toy@latest")
     run = cairn.run()
-    assert isinstance(run, cairn.Run) and run.implicit and run.name == f"runs/{runs.default_name()}"
+    assert isinstance(run, cairn.Run) and run.name == f"runs/{runs.default_name()}"
     assert isinstance(used, cairn.Version) and used == dataset and used.ref == "study:datasets/toy@v1"
     assert (used.path / "x.txt").read_text() == "1"  # materialized on first use
     store = cairn.connect()
@@ -63,10 +63,28 @@ def test_one_run_per_process(env):
     assert version.metadata == {"kind": "run", "note": "first", "config": {"lr": 0.1}} and version.label == run.label
     assert cairn.run() is None
     implicit = cairn.draft("again")  # after finish(), a new run starts
-    assert cairn.run() is not run and cairn.run().implicit
-    with pytest.raises(cairn.StoreError, match="before those"):
-        cairn.init(config={"lr": 0.2})
+    assert cairn.run() is not run
+    cairn.init(config={"lr": 0.2}, metadata={"note": "late"})  # the run the draft started takes them now
+    assert cairn.connect().version(cairn.run().ref).metadata == {"kind": "run", "config": {"lr": 0.2}, "note": "late"}
+    assert cairn.run().config == {"lr": 0.2}
     implicit.discard()
+
+
+def test_init_after_an_implicit_start_updates_the_running_run(configured, env):
+    dataset = published_dataset(env)
+    cairn.use("datasets/toy@latest")  # starts the run implicitly
+    run = cairn.run()
+    assert cairn.connect().version(run.ref).metadata == {"kind": "run"}
+    assert cairn.init(config={"lr": 0.1}, metadata={"note": "late"}) is run
+    assert cairn.init(metadata={"extra": 1}) is run and run.config == {"lr": 0.1}
+    with pytest.raises(cairn.StoreError, match="one run per process"):  # only another name is refused
+        cairn.init(name="other", config={"lr": 0.2})
+    running = {"kind": "run", "config": {"lr": 0.1}, "note": "late", "extra": 1}
+    if cairn.connect().remote:  # the server hears of it with the next sync
+        cairn.connect().sync()
+    assert cairn.connect().version(run.ref).metadata == running
+    version = finish_and_sync(run)
+    assert version.status == "completed" and version.metadata == running and version.inputs == [dataset.ref]
 
 
 def test_use_refuses_versions_that_are_not_completed(env):
@@ -297,6 +315,82 @@ def test_sigterm_fails_the_run(script_project):
     assert "terminated by signal SIGTERM" in (kept.folder / "logs" / "error.txt").read_text()
 
 
+EXITS = [("sys.exit(3)", 3), ("raise SystemExit(4)", 4), ("sys.exit('boom')", 1), ("raise SystemExit('boom')", 1),
+         ("def main():\n    sys.exit(5)\nmain()", 5), ("sys.exit(0)", 0), ("sys.exit()", 0),
+         ("try:\n    sys.exit(2)\nexcept SystemExit:\n    pass", 0)]
+
+
+@pytest.mark.parametrize("statement, code", EXITS, ids=[statement.split("\n")[0] for statement, _ in EXITS])
+def test_a_non_zero_exit_fails_the_run(env, statement, code):
+    """`sys.exit(n)` and `raise SystemExit(n)` that leave the script: n != 0 (or a message) fails the run."""
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    (env / "exit.py").write_text("import sys, cairn\ncairn.init(name='exit', system=False, code=False)\n" + statement + "\n")
+    result = subprocess.run([sys.executable, "exit.py"], cwd=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == code, result.stderr
+    version = cairn.connect().version("runs/exit@latest" if code == 0 else "runs/exit@v1")
+    if code == 0:
+        assert version.status == "completed" and "exit_code" not in version.metadata
+        return
+    assert version.status == "failed" and version.metadata["exit_code"] == code
+    [kept] = drafts.drafts()
+    assert (kept.folder / "logs" / "error.txt").read_text() == f"the process exited with code {code}\n"
+
+
+def test_an_unhandled_exception_keeps_its_traceback_and_records_no_exit_code(env):
+    (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
+    (env / "boom.py").write_text("import cairn\ncairn.init(name='boom', system=False, code=False)\nraise ValueError('x')\n")
+    assert subprocess.run([sys.executable, "boom.py"], cwd=env, capture_output=True).returncode == 1
+    [kept] = drafts.drafts()
+    assert "ValueError: x" in (kept.folder / "logs" / "error.txt").read_text()
+    assert "exit_code" not in cairn.connect().version("runs/boom@v1").metadata
+
+
+def test_a_sigkilled_run_does_not_stay_running(script_project, capsys):
+    from cairn.cli import main
+
+    process = job(script_project, "wait")
+    deadline = time.time() + 60
+    while not (script_project / "started").exists() and time.time() < deadline:
+        time.sleep(0.05)
+    store = cairn.LocalStore(script_project / ".cairn" / "store", "study")
+    [run] = store.versions("study", "runs/job")
+    assert run["status"] == "running" and (store.root / "heartbeats" / run["uid"]).is_file()
+    process.kill()  # SIGKILL: no handler, no atexit
+    process.communicate(timeout=60)
+    assert process.returncode == -signal.SIGKILL
+    main(["status"])  # `cairn status` opens the store, which fails the version whose process is gone
+    assert f"failed study:runs/job@v1: the process died (no heartbeat since " in capsys.readouterr().out
+    after = cairn.LocalStore(store.root, "study").get_version("study", "runs/job", 1)
+    assert after["status"] == "failed" and after["error"].startswith("the process died (no heartbeat since ")
+    assert not (store.root / "heartbeats" / run["uid"]).exists()
+    assert cairn.connect().version("runs/job@v1").status == "failed"  # also through the object API
+    assert cairn.LocalStore(store.root).aliases("study", "runs/job") == {}  # `latest` never moved to it
+
+
+def test_a_local_version_is_failed_by_age_or_dead_owner_and_never_while_alive(tmp_path):
+    from cairn.store.uids import new_uid
+
+    store = cairn.LocalStore(tmp_path / "store", "p")
+    store.create_project("p")
+    mine, stale, foreign, bare = new_uid(), new_uid(), new_uid(), new_uid()
+    for uid in (mine, stale, foreign, bare):
+        store.start_version("p", "run", label=uid[-8:], uid=uid)
+    store.beat(mine)  # this process: alive
+    beats = tmp_path / "store" / "heartbeats"
+    now = time.time()
+    (beats / stale).write_text(json.dumps({"time": now - 10_000, "host": "other-host", "pid": 1}))  # too old
+    (beats / foreign).write_text(json.dumps({"time": now - 5, "host": "other-host", "pid": 2 ** 22}))  # recent, elsewhere
+    reaped = dict(cairn.LocalStore(tmp_path / "store", "p", heartbeat_timeout=600).reaped)
+    assert list(reaped) == ["p:run@v2"] and "no heartbeat since" in reaped["p:run@v2"]
+    states = {version["uid"]: version["status"] for version in store.versions("p", "run")}
+    assert states == {mine: "running", stale: "failed", foreign: "running", bare: "running"}  # `bare` never had a heartbeat
+    time.sleep(0.05)
+    assert {ref for ref, _ in store.reap(0.01)} == {"p:run@v1", "p:run@v3"}  # a tiny timeout: whoever has not beaten lately
+    assert {v["status"] for v in store.versions("p", "run")} == {"failed", "running"}
+    store.complete_version("p", "run", 4)
+    assert not (beats / bare).exists()
+
+
 def test_capture_and_system_can_be_turned_off(env):
     (env / "cairn.toml").write_text('[store]\nproject = "study"\n')
     code = "import cairn; run = cairn.init(name='quiet', capture=False, system=False, code=False); print('hi')"
@@ -406,7 +500,8 @@ def test_a_hydra_job_is_a_run_in_its_job_folder(run_project):
     assert run.status == "completed" and run.inputs == [dataset.ref] and run.consumers == ["study:models/toy@v1"]
     assert run.metadata["kind"] == "run" and run.metadata["config"]["experiment"]["pull"] == "datasets/toy@latest"
     assert run.metadata["overrides"] == ["experiment.pull=datasets/toy@latest"]
-    assert "training" in run.open("logs/stdout.txt").read().decode()
+    with run.open("logs/stdout.txt") as handle:
+        assert "training" in handle.read().decode()
     assert store.version("models/toy@v1").inputs == [run.ref]
     assert drafts.drafts() == []
 

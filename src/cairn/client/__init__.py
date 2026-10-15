@@ -4,7 +4,7 @@ the local replica (replica.py: pending and synced versions in the state and cach
 prune.py: trimming the cache), resolution through it (offline.py), and `open_store` (open.py), which picks
 LocalStore or RemoteStore from cairn.toml. drafts.py: folders managed by Cairn that become a version when they
 close (`cairn.draft`), runs.py: the process's run (`cairn.init`), system.py and code.py: what a run records about
-the machine and the source, logger.py: the writer runs and drafts share (and `RunLogger` for plain folders)."""
+the machine and the source, logger.py: the writer runs and drafts share."""
 
 from __future__ import annotations
 

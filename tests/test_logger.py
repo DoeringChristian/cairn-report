@@ -10,7 +10,8 @@ import pytest
 
 from cairn.reports.build import build_all
 from cairn.config import load_config
-from cairn.runs.logger import RunLogger, read_artifacts, read_jsonl, read_scalars
+from cairn.client.logger import Writer
+from cairn.formats import read_artifacts, read_jsonl, read_scalars
 
 
 def histogram(values):
@@ -22,13 +23,13 @@ def histogram(values):
 def test_round_trip(tmp_path):
     (tmp_path / "pyproject.toml").write_text("")
     run = tmp_path / "outputs" / "demo" / "t0"
-    log = RunLogger(run)
-    log.scalar("rmse", 0.5)
-    log.scalar("rmse", 0.25)
-    log.scalar("loss", 1.0, step=3)
-    log.scalar("bad", math.nan)
-    log.table("cases", [{"case": "a", "error": 1}, {"case": "b", "error": 2}])
-    log.figure("hist", histogram, [1, 2, 2, 3])
+    log = Writer(run)
+    log.add({"rmse": 0.5})
+    log.add({"rmse": 0.25})
+    log.add({"loss": 1.0, "step": 3})
+    log.add({"bad": math.nan})
+    log.add_table("cases", [{"case": "a", "error": 1}, {"case": "b", "error": 2}])
+    log.add_figure("hist", histogram, None, [1, 2, 2, 3])
     assert read_scalars(run) == {"rmse": 0.25, "loss": 1.0, "bad": None}
     artifacts = read_artifacts(run)
     assert set(artifacts) == {"tables/cases.csv", "figures/hist.png"}
@@ -40,11 +41,13 @@ def test_round_trip(tmp_path):
 
 
 def test_rejects_bad_names_and_values(tmp_path):
-    log = RunLogger(tmp_path / "run")
+    log = Writer(tmp_path / "run")
     with pytest.raises(ValueError):
-        log.scalar("Bad/Name", 1)
+        log.add_text("Bad/Name", "x")
     with pytest.raises(TypeError):
-        log.scalar("flag", True)
+        log.add({1: 2})
+    with pytest.raises(TypeError):
+        log.add({})
 
 
 def test_report_reads_logged_run(tmp_path, monkeypatch):
@@ -54,7 +57,7 @@ def test_report_reads_logged_run(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text("")
     monkeypatch.chdir(tmp_path)
     run = tmp_path / "outputs" / "demo" / "2026-01-01_00-00-00"
-    RunLogger(run).scalar("rmse", 0.125)
+    Writer(run).add({"rmse": 0.125})
     store.publish("demo", run)
     (tmp_path / "reports" / "main").mkdir(parents=True)
     (tmp_path / "reports" / "main" / "report.md").write_text(
@@ -69,10 +72,10 @@ def test_report_reads_logged_run(tmp_path, monkeypatch):
 def test_origin_capture_is_cheap(tmp_path):
     import time
 
-    log = RunLogger(tmp_path / "run")
+    log = Writer(tmp_path / "run")
     start = time.perf_counter()
     for step in range(2000):
-        log.scalar("loss", 1.0 / (step + 1), step=step)
+        log.add({"loss": 1.0 / (step + 1), "step": step})
     per_call = (time.perf_counter() - start) / 2000
     assert per_call < 0.001, f"{per_call * 1e6:.0f} µs per scalar"
     assert read_jsonl(tmp_path / "run" / "metrics.jsonl")[0]["origin"]["function"] == "test_origin_capture_is_cheap"
@@ -82,7 +85,6 @@ def test_origin_capture_is_cheap(tmp_path):
 
 
 def test_add_and_add_star_with_metadata(tmp_path):
-    from cairn.client.logger import Writer
     from cairn.formats import read_series
 
     (tmp_path / "pyproject.toml").write_text("")
@@ -129,23 +131,7 @@ def test_add_and_add_star_with_metadata(tmp_path):
     assert not any(hasattr(Draft, old) for old in ("scalar", "scalars", "figure", "plotly", "table", "image", "video", "artifact", "text", "use"))
 
 
-def test_run_logger_keeps_the_old_names_with_a_warning(tmp_path):
-    log = RunLogger(tmp_path / "run")
-    with pytest.warns(DeprecationWarning, match="RunLogger.scalar"):
-        log.scalar("rmse", 0.5, step=1)
-    with pytest.warns(DeprecationWarning, match="RunLogger.scalars"):
-        log.scalars({"a": 1, "b": 2})
-    with pytest.warns(DeprecationWarning):
-        log.text("solver", "ok")
-    with pytest.warns(DeprecationWarning):
-        log.artifact("model", b"w", suffix=".pt")
-    with pytest.warns(DeprecationWarning):
-        log.json("final", {"x": 1})
-    assert read_scalars(tmp_path / "run") == {"rmse": 0.5, "a": 1, "b": 2}
-    assert set(read_artifacts(tmp_path / "run")) == {"logs/solver.txt", "artifacts/model.pt", "data/final.json"}  # where they were
-
-
-def test_report_readers_take_old_lines_and_multi_key_entries(tmp_path):
+def test_report_readers_take_cairn_report_lines_and_multi_key_entries(tmp_path):
     from cairn.formats import fold_scalars, fold_series
 
     old = [{"name": "loss", "value": 1.0, "step": 0, "time": "t", "origin": {}},

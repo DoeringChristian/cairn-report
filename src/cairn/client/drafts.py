@@ -40,7 +40,7 @@ from pathlib import Path
 
 from ..config import cairn_base, protect
 from ..store import StoreError, refs
-from ..store.cache import data_root, read_json, write_json
+from ..store.cache import data_root, pid_alive as _pid_alive, read_json, write_json
 from ..store.uids import UID, new_uid
 from . import logger as _logger
 from .logger import Writer
@@ -62,16 +62,6 @@ def drafts_root() -> Path:
 
 def _record_path(folder: Path) -> Path:
     return folder.parent / f"{folder.name}{SUFFIX}"
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except (PermissionError, OverflowError):
-        return True
-    return True
 
 
 def _label() -> str:
@@ -290,11 +280,14 @@ class Draft(Writer):
         return (self.record.get("metadata") or {}).get("config")
 
     def set_metadata(self, **values) -> None:
-        """Add metadata (for example `config=`, `overrides=`) before the draft is published."""
-        if self._pub is not None:
-            raise StoreError(f"{self.name}@{self.uid} is already running on the store: its metadata is fixed")
+        """Add metadata (for example `config=`, `overrides=`) until the draft is published; a running version in the
+        store gets it too."""
+        self._ensure_open()
         self.record["metadata"] = {**(self.record.get("metadata") or {}), **values}
         self._save()
+        if self._pub is not None:
+            with self._lock:
+                self._pub.set_metadata(self.record["metadata"])
 
     # ------------------------------------------------------------ watching
 

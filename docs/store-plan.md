@@ -119,7 +119,7 @@ cairn-report publish runs/sweep/latest sweep --watch -- python experiments/run.p
 - **Hydra stays optional.** `cairn_report.runs` (run.json, latest, StudyCompletion) remains as the
   `[hydra]` extra, independent of the store. A project may call `store.publish` at the end of its
   experiment if it wants automatic publishing.
-- **The logger stays local.** `RunLogger` only writes files; live upload of a running job is
+- **The logger stays local.** The writer (`Writer`) only writes files; live upload of a running job is
   `publish --watch`. The hub backend goes, and so does MLflow: `mlflow_backend.py`, `mlflow:`
   references, the `[logger.mlflow]` keys, the `cairn-report mlflow` command, and
   `tests/test_mlflow.py`.

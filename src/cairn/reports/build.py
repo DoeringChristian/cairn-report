@@ -52,7 +52,7 @@ from ..config import Config, load_config, protect
 from ..formats import METRICS, fold_scalars, fold_series, read_jsonl
 from ..client.offline import local_folder, resolve_version
 from ..client.replica import exact_ref
-from ..store import StoreError, default_root, refs, data_root
+from ..store import StoreError, cache_root, refs, data_root
 
 PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
@@ -362,7 +362,7 @@ class Guard:
     def __init__(self, build: "Build", line):
         self.build, self.line, self.busy = build, line, False
         self.allowed = build.allowed_roots()
-        self.watched = [real(PROJECT), real(default_root()), real(data_root()),
+        self.watched = [real(PROJECT), real(cache_root()), real(data_root()),
                         *([real(build.store_root)] if build.store_root else [])]
         self.environment = environment_roots()
         self.violations: list[str] = []
@@ -1315,8 +1315,7 @@ def index_html(entries: list[dict], names: dict[str, str]) -> str:
 def write_site(reports: dict[str, Path], names: dict[str, str]) -> None:
     """site.json (the flat report list for each page's navigation) and the project index page."""
     entries = site_entries(reports)
-    page = CONFIG.page if CONFIG else {}
-    site = {"title": "Reports", "reports": entries, "copy_preamble": page.get("copy_preamble", "")}
+    site = {"title": "Reports", "reports": entries}
     (OUTPUT_ROOT / "site.json").write_text(json.dumps(site, indent=2) + "\n")
     (OUTPUT_ROOT / "index.html").write_text(index_html(entries, names))
 

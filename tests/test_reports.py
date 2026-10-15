@@ -56,9 +56,11 @@ def test_serve_answers_the_index_at_root(project):
     httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
-        body = urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/").read().decode()
+        with urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/") as response:
+            body = response.read().decode()
     finally:
         httpd.shutdown()
+        httpd.server_close()
     assert 'href="alpha/">Alpha</a>' in body
 
 
@@ -124,7 +126,7 @@ def test_custom_css_and_template_override(project):
     (project / "style.css").write_text(":root { --accent: #224488; }\n")
     (project / "template").mkdir()
     (project / "template" / "report-extra.css").write_text("/* replaced */\n")
-    (project / "cairn.toml").write_text('[style]\ncss = ["style.css"]\ntemplate_dir = "template"\n[page]\ncopy_preamble = "Handle these."\n')
+    (project / "cairn.toml").write_text('[style]\ncss = ["style.css"]\ntemplate_dir = "template"\n')
     build_all(load_config(project))
     out = built(project)
     page = (out / "alpha" / "index.html").read_text()
@@ -132,7 +134,7 @@ def test_custom_css_and_template_override(project):
     assert (out / "_static" / custom).read_text().startswith(":root")
     extra = re.search(r'href="\.\./_static/(report-extra\.[0-9a-f]+\.css)"', page).group(1)
     assert (out / "_static" / extra).read_text() == "/* replaced */\n"
-    assert json.loads((out / "site.json").read_text())["copy_preamble"] == "Handle these."
+    assert set(json.loads((out / "site.json").read_text())) == {"title", "reports"}
 
 
 def test_config_rejects_unknown_keys(tmp_path):
@@ -386,7 +388,7 @@ def test_an_undeclared_store_cache_file_fails(project):
     # declared, the same file is fine
     alpha = project / "reports" / "alpha" / "report.md"
     alpha.write_text(alpha.read_text().replace("  descent: descent@latest\n", "  descent: descent@latest\n  other: other@latest\n")
-                     .replace(f"open({str(cached)!r}).read()", "metric('Secret', open(inputs.other / 'x.txt').read())"))
+                     .replace(f"open({str(cached)!r}).read()", "with open(inputs.other / 'x.txt') as handle:\n    metric('Secret', handle.read())"))
     build_all(load_config(project))
     assert "<strong>secret</strong>" in (built(project) / "alpha" / "narrative.html").read_text()
 
@@ -394,8 +396,8 @@ def test_an_undeclared_store_cache_file_fails(project):
 def test_raw_open_of_declared_and_report_files_and_other_places_is_allowed(project, tmp_path):
     add_block(project, (
         "import json, tempfile, pathlib, os\n"
-        "steps = json.load(open(inputs.descent / 'data' / 'summary.json'))['steps']\n"
-        "svg = open(REPORT_ROOT / 'assets' / 'strip.svg').read()\n"
+        "with open(inputs.descent / 'data' / 'summary.json') as handle:\n    steps = json.load(handle)['steps']\n"
+        "with open(REPORT_ROOT / 'assets' / 'strip.svg') as handle:\n    svg = handle.read()\n"
         "assert pathlib.Path(REPORT_ROOT / 'assets' / 'strip.svg').read_text() == svg\n"
         "assert os.listdir(inputs.descent) and os.listdir(REPORT_ROOT)\n"
         "with tempfile.TemporaryDirectory() as folder:\n    (pathlib.Path(folder) / 'x').write_text('ok')\n"
@@ -407,7 +409,7 @@ def test_raw_open_of_declared_and_report_files_and_other_places_is_allowed(proje
 
 def test_the_guard_is_off_outside_report_blocks(project):
     build_all(load_config(project))
-    open(project / "pyproject.toml").read()  # the audit hook stays installed but only enforces while a block runs
+    (project / "pyproject.toml").read_text()  # the audit hook stays installed but only enforces while a block runs
     assert list(store.pull("descent@v1").iterdir())
 
 

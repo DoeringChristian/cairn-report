@@ -375,11 +375,16 @@ def cmd_status(args) -> None:
 
     config = load_config(args.project)
     url = (config.store.get("url") or "").rstrip("/")
+    if not url:
+        from .client.open import open_store
+
+        for ref, why in open_store(config).reaped:  # opening the store fails the versions whose process died
+            print(f"failed {ref}: {why}")
     if not url and not args.all:
         print("the configured store is a local folder: nothing is ever pending (--all shows every server's versions)")
         return
     uid = replica.known_uid(url) if url else None
-    rows = replica.records(all_roots=True) + (replica.synced_records() if args.all else [])
+    rows = replica.records() + (replica.synced_records() if args.all else [])
     rows = [row for row in rows if args.all or replica.belongs(row, url, uid)]
     now = time.time()
     for row in sorted(rows, key=lambda row: row["uid"]):

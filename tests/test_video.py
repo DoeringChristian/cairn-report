@@ -11,7 +11,7 @@ from cairn.reports import serve as server
 import cairn as store
 from cairn.reports.build import build_all, mp4_size
 from cairn.config import load_config
-from cairn.runs.logger import RunLogger
+from cairn.client.logger import Writer
 from cairn.ranges import byte_range
 
 pytest.importorskip("imageio_ffmpeg")
@@ -19,8 +19,8 @@ pytest.importorskip("imageio_ffmpeg")
 
 def write_video(run_dir, name="rollout", size=(48, 63)):
     frames = np.linspace(0, 1, 12)[:, None, None] * np.ones((12, *size))
-    log = RunLogger(run_dir)
-    path = log.video(name, frames, fps=12)
+    log = Writer(run_dir)
+    path = log.add_video(name, frames, fps=12)
     log.close()
     return path
 
@@ -76,3 +76,4 @@ def test_served_video_answers_range_requests(project, monkeypatch):
             assert response.read() == path.read_bytes()[10:20]
     finally:
         httpd.shutdown()
+        httpd.server_close()

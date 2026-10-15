@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from ..config import Config, load_config, migrate_store, protect
+from ..config import Config, load_config, protect
 from ..store import LocalStore, StoreError, refs
 from .http import connect, project_name
+from .replica import heartbeat_timeout
 from .remote import RemoteStore
 
 
@@ -15,9 +16,8 @@ def open_store(config: Config | None = None) -> LocalStore | RemoteStore:
     project = project_name(config)
     if settings.get("url"):
         return RemoteStore(connect(config), project)
-    migrate_store(config)
     protect(config.cairn_dir, config.store_path)
-    store = LocalStore(config.store_path, project)
+    store = LocalStore(config.store_path, project, heartbeat_timeout=heartbeat_timeout(config))
     store.create_project(store.project)
     return store
 

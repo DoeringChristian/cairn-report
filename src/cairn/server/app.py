@@ -21,6 +21,7 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
       GET  /api/v2/projects/<p>/artifacts/<name>/aliases         {alias: version}
       POST /api/v2/projects/<p>/artifacts/<name>/versions        {uid?, label?, metadata?, source?} -> {version, uid} (running)
       POST .../versions/<n>/files {entries}   (409 + `missing` when blobs are absent)   .../complete {inputs?, digest?}   .../fail
+      POST .../versions/<n>/metadata {metadata}                  replace the metadata of a running version
       POST /api/v2/projects/<p>/artifacts/<name>/publish         {uid?, entries, label?, metadata?, inputs?, aliases?, source?, digest?}
                                                                  -> {version, uid, created}  (created=false: nothing changed,
                                                                  or this uid was published already)
@@ -406,6 +407,9 @@ class StoreApp:
                         return _json(409, {"error": "upload these blobs first", "missing": missing})
                     store.add_files(project, name, number, entries)
                     return _json(200, {"files": len(entries)})
+                if action == "metadata":
+                    store.set_metadata(project, name, number, payload.get("metadata"))
+                    return _json(200, {"version": number})
                 if action == "complete":
                     store.complete_version(project, name, number, self._inputs(principal, project, payload.get("inputs")),
                                            digest=self._digest(payload))

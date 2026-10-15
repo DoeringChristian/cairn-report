@@ -1,5 +1,5 @@
 """The local replica: durable state apart from the throwaway cache, pending versions usable before upload, promotion,
-heartbeats across hosts, concurrent flushers on one shared data root, `cairn prune`, and the old layout's migration."""
+heartbeats across hosts, concurrent flushers on one shared data root, `cairn prune`."""
 
 import json
 import multiprocessing
@@ -45,7 +45,7 @@ def test_roots_follow_the_environment(tmp_path, monkeypatch):
     assert cache_root() == tmp_path / "xdg-cache" / "cairn"
 
 
-def test_data_root_resolution_order(tmp_path, monkeypatch, capsys):
+def test_data_root_resolution_order(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     monkeypatch.delenv("CAIRN_DATA_DIR")
     assert data_root() == tmp_path / "xdg" / "cairn"  # never inside a project, even with cwd in one
@@ -54,15 +54,6 @@ def test_data_root_resolution_order(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path / "env"))
     assert data_root() == tmp_path / "env"  # the environment beats XDG
-    capsys.readouterr()
-
-    monkeypatch.delenv("CAIRN_DATA_DIR")  # the deprecated name still works, with one warning
-    monkeypatch.setenv("CAIRN_STATE_DIR", str(tmp_path / "legacy"))
-    monkeypatch.setattr(cache_module, "_warned", set())
-    assert data_root() == tmp_path / "legacy" and data_root() == tmp_path / "legacy"
-    assert capsys.readouterr().err.count("CAIRN_STATE_DIR is deprecated") == 1
-    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path / "env"))
-    assert data_root() == tmp_path / "env"  # the new name wins when both are set
     cache_module.use_data_dir(tmp_path / "flag")  # `--data-dir` beats everything
     assert data_root() == tmp_path / "flag"
 
@@ -79,39 +70,6 @@ def test_pending_survives_deleting_the_cache_and_lives_in_the_project_folder(dow
     down.start()
     assert f"uploaded study:data@v1 (uid {version.uid})" in run(capsys, "sync")[0]
     assert data_versions() == []
-
-
-def _old_state(env, tmp_path, monkeypatch, versions):
-    """Publish while down with the data root at tmp/state/cairn, where releases before the data root kept it."""
-    old = tmp_path / "state" / "cairn"
-    monkeypatch.setenv("CAIRN_DATA_DIR", str(old))
-    published = [cairn.connect().artifact("data").publish(folder(env, f"d{index}", {"a.txt": str(index)})) for index in range(versions)]
-    return old, published
-
-
-def test_pending_versions_move_from_the_old_state_folder_to_the_data_root(down, env, tmp_path, capsys, monkeypatch):
-    old, (first, second) = _old_state(env, tmp_path, monkeypatch, 2)
-    (old / "stores").mkdir(exist_ok=True)
-    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path / "new-data"))
-    capsys.readouterr()
-
-    out, err = run(capsys, "status")
-    assert first.uid in out and second.uid in out and "moved 2 pending versions" in err
-    new = tmp_path / "new-data"
-    assert sorted(path.name for path in (new / "versions").iterdir()) == sorted([first.uid, second.uid])
-    assert not (old / "versions").exists() and not (old / "blobs").exists()
-    down.start()
-    out = run(capsys, "sync")[0]  # their contents came along
-    assert "uploaded study:data@v1" in out and "uploaded study:data@v2" in out
-
-
-def test_the_old_state_folder_is_left_alone_when_it_is_the_data_root(down, env, tmp_path, capsys, monkeypatch):
-    old, (version,) = _old_state(env, tmp_path, monkeypatch, 1)
-    monkeypatch.delenv("CAIRN_DATA_DIR")
-    monkeypatch.setenv("CAIRN_STATE_DIR", str(old))  # the deprecated variable pointed there
-    out, err = run(capsys, "status")
-    assert version.uid in out and "deprecated" in err and "moved" not in err
-    assert (old / "versions" / version.uid).is_dir()
 
 
 def test_sync_and_status_use_the_data_root_or_data_dir(down, env, tmp_path, capsys, monkeypatch):
@@ -383,54 +341,3 @@ def test_prune_with_one_root_for_both_keeps_pending_versions_and_their_blobs(dow
     down.start()
     store.sync()
     assert down.versions()[-1]["uid"] == pending.uid
-
-
-# -------------------------------------------------------------------- migration
-
-
-def test_the_outbox_layout_is_migrated_on_first_use(down, env, capsys):
-    """A machine upgraded with versions in the old outbox, old hints, and an old-layout cache."""
-    import hashlib
-
-    from cairn.store.uids import new_uid
-
-    cache = cache_root()
-    down.start()
-    store_uid = cairn.LocalStore(down.root).uid
-    down.stop()
-    contents = b"queued before the upgrade"
-    sha = hashlib.sha256(contents).hexdigest()
-    (cache / "blobs" / sha[:2]).mkdir(parents=True)
-    (cache / "blobs" / sha[:2] / sha).write_bytes(contents)
-    uid, cached_uid = new_uid(), new_uid()
-    entry = {"uid": uid, "kind": "publish", "state": "pending", "url": down.url, "project": "study", "name": "data",
-             "label": "old", "metadata": {"k": 1}, "inputs": [], "aliases": ["best"], "source": None,
-             "files": [{"path": "a.txt", "sha256": sha, "size": len(contents), "mtime": 0}], "staged": [sha],
-             "created": "2026-10-15T10:00:00+00:00", "owner": {"host": "h", "pid": 1}, "number": None, "pushed": {}, "error": None}
-    (cache / "outbox" / store_uid).mkdir(parents=True)
-    (cache / "outbox" / store_uid / f"{uid}.json").write_text(json.dumps(entry))
-    (cache / "stores.json").write_text(json.dumps({down.url: store_uid}))
-    (cache / "resolved").mkdir()
-    (cache / "resolved" / f"{store_uid}.json").write_text(json.dumps({"study:old@best": {"uid": cached_uid, "version": 7},
-                                                                      "study:old@v7": {"uid": cached_uid, "version": 7}}))
-    old_folder = cache / "versions" / cached_uid  # a pulled version as the old cache kept it
-    old_folder.mkdir(parents=True)
-    (old_folder / "x.txt").write_text("cached before")
-    manifest = {"version": 7, "uid": cached_uid, "status": "completed", "files": [{"path": "x.txt", "sha256": "0" * 64, "size": 13}]}
-    (old_folder / ".cairn-complete").write_text(json.dumps({"store": store_uid, "project": "study", "name": "old", "version": 7,
-                                                            "uid": cached_uid, "manifest": manifest}))
-
-    out, _ = run(capsys, "status")
-    assert f"pending\tstudy:data\t-\t{uid}\tcompleted\th\t" in out
-    assert not (cache / "outbox").exists() and not (cache / "resolved").exists() and not (cache / "stores.json").exists()
-    assert (data_root() / "blobs" / sha[:2] / sha).read_bytes() == contents
-    assert json.loads((data_root() / "stores" / f"{store_uid}.json").read_text())["url"] == down.url
-    path = cairn.pull("old@best", record=False, offline=True)  # the old hints and the old cache folder still answer
-    assert path == old_folder / "files" and (path / "x.txt").read_text() == "cached before"
-    assert not (path / ".cairn-complete").exists()
-
-    down.start()
-    assert "uploaded study:data@v1" in run(capsys, "sync")[0]
-    [version] = down.versions()
-    assert (version["uid"], version["label"], version["metadata"]) == (uid, "old", {"k": 1})
-    assert cairn.LocalStore(down.root).aliases("study", "data")["best"] == 1

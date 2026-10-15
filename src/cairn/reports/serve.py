@@ -110,4 +110,7 @@ def _serve(config: Config, host: str, port: int, strict_port: bool, build: bool)
     if chosen != port:
         print(f"Port {port} is in use; serving on {chosen} instead.", flush=True)
     print(f"Reports: http://{host}:{chosen}/", flush=True)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()

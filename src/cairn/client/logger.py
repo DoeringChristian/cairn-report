@@ -1,10 +1,8 @@
 """The run logger: write run evidence to fixed locations with its code origin.
 
 `Writer` is the API a `cairn.Draft` and a `cairn.Run` share (`add`, `add_figure`, ...), so a job writes straight
-into the artifact version its folder becomes. For a plain folder use `RunLogger(folder)` (also importable as
-`cairn.runs.logger.RunLogger`): the same writer, plus the names of earlier releases (`scalar`, `figure`, ...) as
-deprecated aliases for one release. It only writes files: no tracking, no store. This module defines the file
-format for both sides: the report builder reads it with the `read_*` functions of cairn/formats.py. Every call
+into the artifact version its folder becomes. It only writes files: no tracking, no store. This module defines the
+file format for both sides: the report builder reads it with the `read_*` functions of cairn/formats.py. Every call
 writes one well-defined file. The two indexes are append-only JSON Lines, so nothing already written is ever
 rewritten:
 
@@ -21,7 +19,7 @@ rewritten:
 
 Usage:
 
-    log = RunLogger(output_dir)                 # or a draft, or the run (cairn.init)
+    log = cairn.init()                          # the run, or a draft (cairn.draft)
     log.add({"loss": loss, "psnr": psnr, "step": step})   # one entry, any keys
     log.add_table("trials", rows)
     log.add_figure("error_histogram", error_histogram, {"step": step}, errors)  # calls the plot function
@@ -45,13 +43,11 @@ import os
 import re
 import shutil
 import sys
-import warnings
 from datetime import datetime, timezone
-from numbers import Number
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
-from ..formats import ARTIFACTS, METRICS, fold_artifacts, fold_scalars, read_artifacts, read_jsonl, read_scalars  # noqa: F401
+from ..formats import ARTIFACTS, METRICS
 
 NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,95}")
 THIS_FILE = Path(__file__).resolve()
@@ -346,70 +342,3 @@ class Writer:
             "line": line,
             "function": target.__qualname__,
         }
-
-
-class RunLogger(Writer):
-    """The writer on a plain folder. The method names of earlier releases still work for one release, with a
-    DeprecationWarning, and write where they did (`text` into logs/, `artifact` into artifacts/)."""
-
-    def _deprecated(self, old: str, new: str) -> None:
-        warnings.warn(f"RunLogger.{old}() is deprecated; use {new}", DeprecationWarning, stacklevel=3)
-
-    def scalar(self, name: str, value: Number, step: int | None = None) -> None:
-        self._deprecated("scalar", "add({name: value, 'step': step})")
-        self._check(name)
-        number = _plain(value)
-        if isinstance(number, bool) or not isinstance(number, Number):
-            raise TypeError(f"scalar {name!r} must be a number, got {type(value).__name__}")
-        self.add({name: number} if step is None else {name: number, "step": step})
-
-    def scalars(self, values: Mapping[str, Number], step: int | None = None) -> None:
-        self._deprecated("scalars", "add({...})")
-        for name, value in values.items():
-            self._check(name)
-            number = _plain(value)
-            if isinstance(number, bool) or not isinstance(number, Number):
-                raise TypeError(f"scalar {name!r} must be a number, got {type(value).__name__}")
-        entry = {name: _plain(value) for name, value in values.items()}
-        self.add(entry if step is None else {**entry, "step": step})
-
-    def table(self, name: str, rows: Iterable[Mapping[str, Any]]) -> Path:
-        self._deprecated("table", "add_table")
-        return self.add_table(name, rows)
-
-    def json(self, name: str, value: Any) -> Path:
-        self._deprecated("json", "add_json")
-        return self.add_json(name, value)
-
-    def figure(self, name: str, figure: Any, *args, svg: bool = False, dpi: int = 160, **kwargs) -> Path:
-        self._deprecated("figure", "add_figure(name, figure, metadata, *args)")
-        return self._figure(name, figure, None, args, kwargs, svg, dpi)
-
-    def plotly(self, name: str, figure: Any) -> Path:
-        self._deprecated("plotly", "add_plotly")
-        return self.add_plotly(name, figure)
-
-    def image(self, name: str, image: Any) -> Path:
-        self._deprecated("image", "add_image")
-        return self.add_image(name, image)
-
-    def video(self, name: str, video: Any, fps: float = 30) -> Path:
-        self._deprecated("video", "add_video")
-        return self.add_video(name, video, fps=fps)
-
-    def artifact(self, name: str, source: Path | str | bytes, suffix: str | None = None) -> Path:
-        self._deprecated("artifact", "add_file")
-        if isinstance(source, (str, Path)):
-            source = Path(source)
-            if not source.is_file():
-                raise ValueError(f"artifact {name!r}: {source} is not a file (archive directories first)")
-            data, suffix = source.read_bytes(), suffix or "".join(source.suffixes)
-        else:
-            data = bytes(source)
-            if not suffix:
-                raise ValueError(f"artifact {name!r} from bytes needs a suffix, e.g. suffix='.pt'")
-        return self._write(name, "artifact", f"artifacts/{name}{suffix}", data)
-
-    def text(self, name: str, content: str) -> Path:
-        self._deprecated("text", "add_text")
-        return self._write(name, "log", f"logs/{name}.txt", content.encode("utf-8"))

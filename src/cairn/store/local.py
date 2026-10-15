@@ -5,6 +5,7 @@
       metadata.sqlite3           projects, versions, aliases and their log, consumers (db.py; WAL mode)
       blobs/<aa>/<sha256-rest>   file contents (blobs.BlobStore)
       server.lock                locked by the `cairn server` serving this root (db.ServerLock)
+      heartbeats/<uid>           a running version's owner {time, host, pid}, rewritten while it runs (see `reap`)
 
 A version starts `running` (it may grow), then becomes `completed` or `failed`; a completed version
 is never written again, except to delete it. Only completed versions resolve through `latest`, aliases, and labels, so
@@ -13,10 +14,7 @@ files, completion, `latest`, aliases, consumers) commits whole or not at all, an
 handed out inside the transaction, so they are unique however many threads and processes publish.
 
 Every version has a `uid` (a UUIDv7, see uids.py), made when it starts or supplied by the client
-that created it (a client's local replica); a uid names one version for good, in the whole store. A root written
-before the database existed (JSON Lines files) is imported when it is first opened (db.import_legacy);
-versions stored without a uid get their deterministic one (`uids.legacy`), and the root gets its
-store.json.
+that created it (a client's local replica); a uid names one version for good, in the whole store.
 
 One writer process per root: while `cairn server` serves a root it locks `server.lock`, and other
 processes may read the root but not change its metadata (they publish through the server's URL);
@@ -36,14 +34,17 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import socket
 import sqlite3
 import sys
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..ranges import byte_range
 from . import gc, refs
+from .cache import pid_alive
 from .blobs import CHUNK, BlobStore, BlobWriter, clean_entries, now, resolve_entry
 from .db import RETENTION_TABLE, Database, ServerLock, export
 from .digest import manifest_digest
@@ -143,11 +144,14 @@ _SUMMARY = "SELECT name, latest, versions, aliases, updated, metadata FROM artif
 
 
 class LocalStore:
-    def __init__(self, root: Path | str, project: str | None = None, network_warning: bool = True, served: bool = False):
+    def __init__(self, root: Path | str, project: str | None = None, network_warning: bool = True, served: bool = False,
+                 heartbeat_timeout: float = 600.0):
         """`project` is the default for references without one. A store root on a network filesystem warns once
         per process when it is first written (pass `network_warning=False` when the caller has decided).
         `served`: this process may change the metadata while a server holds the root (the server itself, and
-        owner commands on the server's host; see the module doc)."""
+        owner commands on the server's host; see the module doc). Opening the store fails the running versions whose
+        owner is gone (`reap`; `heartbeat_timeout` seconds without a heartbeat, or its process dead on this host);
+        what it failed is in `self.reaped`."""
         self.root, self.project = Path(root), project
         self._blobs = BlobStore(self.root)  # creates blobs/, projects/, tmp/
         self._network_checked = not network_warning
@@ -156,6 +160,7 @@ class LocalStore:
         self._db = Database(self.root, self.uid)
         self._add_digests()
         self._listings: dict[str, tuple[int, list[dict]]] = {}
+        self.reaped = self.reap(heartbeat_timeout)
 
     def _add_digests(self) -> None:
         """Give every completed version that has no manifest digest its digest, once per root, in one transaction
@@ -176,6 +181,62 @@ class LocalStore:
                 connection.execute("INSERT OR REPLACE INTO meta VALUES ('digests', 'done')")
         except sqlite3.OperationalError:  # a read-only root: the digests are added by the first writer that opens it
             pass
+
+    # ------------------------------------------------------------------ heartbeats
+
+    def _beat_file(self, uid: str) -> Path:
+        return self.root / "heartbeats" / valid_uid(uid)
+
+    def beat(self, uid: str) -> None:
+        """The owner of a running version says it is alive (never raises: a missed beat only makes the version
+        look dead later)."""
+        path = self._beat_file(uid)
+        try:
+            path.parent.mkdir(exist_ok=True)
+            temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            temporary.write_text(json.dumps({"time": time.time(), "host": socket.gethostname(), "pid": os.getpid()}))
+            os.replace(temporary, path)
+        except OSError:
+            pass
+
+    def _clear_beat(self, uid: str) -> None:
+        try:
+            self._beat_file(uid).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def reap(self, timeout: float = 600.0) -> list[tuple[str, str]]:
+        """Fail the running versions whose owner is gone: no heartbeat for `timeout` seconds, or its process (on
+        this host) is dead. Only versions that have a heartbeat (`beat`) are judged. Returns [(ref, reason)].
+        Skipped while a server holds the root and on a read-only root."""
+        folder = self.root / "heartbeats"
+        if not folder.is_dir() or (not self._served and ServerLock.held(self.root)):
+            return []
+        failed = []
+        for path in sorted(folder.iterdir()):
+            if path.name.startswith(".") or not UID.fullmatch(path.name):
+                continue
+            try:
+                beat = json.loads(path.read_text())
+                stamp = float(beat["time"])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            gone = beat.get("host") == socket.gethostname() and isinstance(beat.get("pid"), int) and not pid_alive(beat["pid"])
+            if not gone and time.time() - stamp <= timeout:
+                continue
+            since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stamp))
+            reason = f"the process died (no heartbeat since {since})"
+            try:
+                with self._write() as connection:
+                    found = self._by_uid(connection, path.name)
+                    if found is not None and found[2]["status"] == "running":
+                        project, name, state = found
+                        self._save(connection, project, name, {**state, "status": "failed", "completed": now(), "error": reason})
+                        failed.append((refs.exact(project, name, state["version"]), reason))
+            except (StoreError, sqlite3.OperationalError, OSError):
+                continue  # served, read-only, or busy: the next open tries again
+            self._clear_beat(path.name)
+        return failed
 
     def _writing(self) -> None:
         """Warn once if this root lies on a network filesystem (several writers there can corrupt it, see fs.py)."""
@@ -572,6 +633,16 @@ class LocalStore:
             self._check(connection, project, name)
             self._save(connection, project, name, self._merged(self._running(connection, project, name, version), entries))
 
+    def set_metadata(self, project: str, name: str, version: int, metadata: dict) -> None:
+        """Replace the metadata of a running version (a completed one never changes)."""
+        if not isinstance(metadata, dict):
+            raise StoreError("metadata must be a dict")
+        json.dumps(metadata)
+        with self._write() as connection:
+            self._check(connection, project, name)
+            state = self._running(connection, project, name, version)
+            self._save(connection, project, name, {**state, "metadata": metadata})
+
     def complete_version(self, project: str, name: str, version: int, inputs=None, digest: str | None = None) -> None:
         """Freeze a version and move `latest` to it; `inputs` are the references it consumed. The version's manifest
         digest is computed from its files; a `digest` the client supplies must equal it (else Conflict, and nothing changes)."""
@@ -583,12 +654,15 @@ class LocalStore:
             _check_digest(digest, actual, f"{project}:{name}@v{version}")
             self._save(connection, project, name, {**state, "status": "completed", "completed": now(), "inputs": exact, "digest": actual})
             self._completed(connection, project, name, version, exact)
+        self._clear_beat(state["uid"])
 
-    def fail_version(self, project: str, name: str, version: int) -> None:
+    def fail_version(self, project: str, name: str, version: int, error: str | None = None) -> None:
         with self._write() as connection:
             self._check(connection, project, name)
             state = self._running(connection, project, name, version)
-            self._save(connection, project, name, {**state, "status": "failed", "completed": now()})
+            self._save(connection, project, name, {**state, "status": "failed", "completed": now(),
+                                                   **({"error": error} if error else {})})
+        self._clear_beat(state["uid"])
 
     def publish(self, project: str, name: str, entries: list[dict], label: str | None = None, metadata: dict | None = None,
                 inputs=None, aliases=(), source: dict | None = None, uid: str | None = None,

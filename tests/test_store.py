@@ -289,9 +289,9 @@ def test_remote_store_without_a_token_and_plain_http(env, monkeypatch):
     assert isinstance(store.open_store(), store.RemoteStore)
 
 
-def test_old_hub_table_points_to_the_store(env):
+def test_a_hub_table_is_an_unknown_key(env):
     (env / "cairn.toml").write_text('[hub]\nurl = "https://hub.example.org"\n')
-    with pytest.raises(ValueError, match=r"\[hub\] was removed.*\[store\] url"):
+    with pytest.raises(ValueError, match=r"unknown keys \['hub'\]"):
         store.open_store()
 
 
@@ -317,20 +317,15 @@ def test_import_cairn_stays_light():
     assert subprocess.run([sys.executable, "-c", "import cairn; import cairn.client.publishing; assert callable(cairn.publish) and callable(cairn.pull) and cairn.Publication and cairn.__version__"]).returncode == 0
 
 
-def test_config_file_cairn_toml_and_deprecated_name(tmp_path, capsys):
+def test_config_file_is_cairn_toml(tmp_path):
     from cairn import config
     from cairn.config import load_config
 
     (tmp_path / "cairn-report.toml").write_text('[store]\nproject = "old"\n')
-    config._WARNED.clear()
-    assert load_config(tmp_path).store["project"] == "old"
-    err = capsys.readouterr().err
-    assert "cairn-report.toml is deprecated" in err and err.count("\n") == 1
-    (tmp_path / "cairn.toml").write_text('[store]\nproject = "new"\n')
-    with pytest.raises(ValueError, match="both cairn.toml and cairn-report.toml"):
+    with pytest.raises(ValueError, match="rename it to cairn.toml"):
         load_config(tmp_path)
-    (tmp_path / "cairn-report.toml").unlink()
-    assert load_config(tmp_path).store["project"] == "new" and capsys.readouterr().err == ""
+    (tmp_path / "cairn.toml").write_text('[store]\nproject = "new"\n')
+    assert load_config(tmp_path).store["project"] == "new"
     nested = tmp_path / "a" / "b"
     nested.mkdir(parents=True)
     assert config.find_project(nested) == tmp_path.resolve()

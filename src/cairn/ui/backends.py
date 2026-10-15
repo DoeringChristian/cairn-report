@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..client.http import Client, connect
 from ..client.remote import RemoteStore
-from ..config import Config, load_config, migrate_store, protect
+from ..config import Config, load_config, protect
 from ..store import LocalStore, Unauthorized
 from ..store.tokens import OWNER, Tokens, read_token
 from .sessions import Session
@@ -75,7 +75,6 @@ def open_backend(store: str | None = None, config: Config | None = None, no_auth
             if config.store.get("url"):
                 store = config.store["url"]
             else:
-                migrate_store(config)
                 protect(config.cairn_dir, config.store_path)
                 return LocalBackend(config.store_path, no_auth)
         else:

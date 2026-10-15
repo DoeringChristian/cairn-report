@@ -58,9 +58,9 @@ def test_no_arguments_and_no_mappings_is_an_error(env):
         main(["publish"])
 
 
-def test_old_logger_table_is_refused(env):
+def test_a_logger_table_is_an_unknown_key(env):
     (env / "cairn.toml").write_text('[logger]\nbackends = ["mlflow"]\n')
-    with pytest.raises(ValueError, match=r"\[logger\] was removed"):
+    with pytest.raises(ValueError, match=r"unknown keys \['logger'\]"):
         main(["publish"])
 
 

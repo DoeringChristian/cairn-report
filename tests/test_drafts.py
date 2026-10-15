@@ -378,7 +378,8 @@ def test_hydra_single_run_publishes_its_draft(hydra_project):
     assert version.inputs == ["study:runs/demo@v1"] and LABEL.fullmatch(version.label)  # the job's run
     assert version.metadata["config"]["experiment"]["pull"] == "datasets/toy@latest"
     assert version.metadata["overrides"] == ["experiment.pull=datasets/toy@latest"]
-    assert json.loads(version.open("run.json").read())["status"] == "completed"
+    with version.open("run.json") as handle:
+        assert json.loads(handle.read())["status"] == "completed"
     run = store.version("runs/demo@v1")
     assert run.status == "completed" and run.inputs == [dataset.ref] and run.consumers == [version.ref]
     assert run.metadata["kind"] == "run" and run.metadata["config"]["run"]["name"] == "demo"
@@ -415,7 +416,8 @@ def test_hydra_multirun_publishes_one_sweep_draft(hydra_project):
     assert version.inputs == ["study:runs/demo@v1", "study:runs/demo@v2"]  # the trials' runs
     assert [store.version(ref).inputs for ref in version.inputs] == [[first.ref], [second.ref]]
     assert [v.ref for v in version.upstream()] == [first.ref, second.ref]
-    study = json.loads(version.open("run.json").read())
+    with version.open("run.json") as handle:
+        study = json.loads(handle.read())
     assert study["kind"] == "study" and [t["status"] for t in study["trials"]] == ["completed", "completed"]
     assert version.metadata["overrides"] == ["experiment.pull=datasets/a@v1,datasets/b@v1"]
     assert drafts.drafts() == []  # one draft for the whole sweep, gone after publishing

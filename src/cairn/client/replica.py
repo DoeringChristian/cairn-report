@@ -19,9 +19,6 @@ inputs, aliases, source, plus `sync` (synced | pending | rejected | running), `s
 completed | running | failed), `owner` (host, pid), `number` (None until the server assigns it), and
 `error`. Every record update is write-temp-and-rename; there are no locks (see sync.py for claims).
 A server never reached has no known uid yet: its store file is `url-<hash>.json` until it answers.
-
-The layout before the replica (`<cache>/outbox/`, `<cache>/resolved/`, `<cache>/stores.json`, version
-folders holding their files beside `.cairn-complete`) is converted on first use and then removed.
 """
 
 from __future__ import annotations
@@ -29,23 +26,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 from ..store.blobs import now
-from ..config import find_project_root
-from ..store.cache import (FILES, RECORD, blob_cache, cache_root, data_root, data_root_at, data_roots, files_folder,
-                           global_data_root, hostname, install, link_files, old_state_root, place, project_pending_default,
-                           read_json, read_record, remove, scratch, version_folder, write_json)
+from ..store.cache import (FILES, RECORD, blob_cache, cache_root, data_root, files_folder, hostname, install,
+                           link_files, pid_alive, read_json, read_record, remove, scratch, version_folder, write_json)
 from ..store.errors import StoreError
 from ..store.refs import Ref
 
 HEARTBEAT = "heartbeat"
 CLAIM = ".flushing-"
-LAYOUT = "layout"  # <cache>/layout: "2" once the cache uses this layout
 DEFAULT_TIMEOUT = 600.0
 
 
@@ -77,7 +69,6 @@ def folder_of(uid: str) -> Path:
 
 def load(uid: str) -> dict | None:
     """The local record of a version uid (None if this machine has none: never made here, or synced)."""
-    ensure_layout()
     record = read_record(folder_of(uid))
     return record if record and record.get("sync") != "synced" else None
 
@@ -86,16 +77,8 @@ def save(record: dict) -> None:
     write_json(folder_of(record["uid"]) / RECORD, {key: value for key, value in record.items() if not key.startswith("_")})
 
 
-def records(all_roots: bool = False) -> list[dict]:
-    """Every local record (any store), oldest first (by uid); with `all_roots`, those of the global data root too."""
-    if all_roots:
-        extra = data_roots()[1:]
-        found = records()
-        for root in extra:
-            with data_root_at(root):
-                found += records()
-        return sorted(found, key=lambda record: record["uid"])
-    ensure_layout()
+def records() -> list[dict]:
+    """Every local record (any store), oldest first (by uid)."""
     found = []
     base = data_root() / "versions"
     if not base.is_dir():
@@ -111,7 +94,6 @@ def records(all_roots: bool = False) -> list[dict]:
 
 def synced_records() -> list[dict]:
     """Every synced version in the cache, oldest first (by uid)."""
-    ensure_layout()
     base = cache_root() / "versions"
     found = []
     if base.is_dir():
@@ -316,16 +298,6 @@ def last_beat(record: dict) -> float:
     return float(beat_.get("time") or epoch(record.get("created")))
 
 
-def pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except (PermissionError, OverflowError):
-        return True
-    return True
-
-
 def dead(record: dict, timeout: float) -> str | None:
     """Why a running version's owner is gone (None while it may still run).
 
@@ -422,7 +394,6 @@ def _store_path(key: str) -> Path:
 
 def known_uid(url: str) -> str | None:
     """The uid of the server at `url`, if it ever answered."""
-    ensure_layout()
     url = url.rstrip("/")
     folder = data_root() / "stores"
     if not folder.is_dir():
@@ -495,221 +466,3 @@ def remember_aliases(key: str | None, project: str, name: str, aliases: dict[str
 def stores() -> list[dict]:
     folder = data_root() / "stores"
     return [read_json(path) or {} for path in sorted(folder.glob("*.json"))] if folder.is_dir() else []
-
-
-# ---------------------------------------------------------------- migration
-
-_checked: set[tuple[str, str]] = set()
-
-
-def ensure_layout() -> None:
-    """Convert the layout before the replica, once per process and pair of roots (see the module doc)."""
-    roots = (str(cache_root()), str(data_root()))
-    if roots in _checked:
-        return
-    _checked.add(roots)
-    try:
-        move_old_state()
-        move_global_pending()
-    except OSError:
-        pass
-    cache = cache_root()
-    if (cache / LAYOUT).is_file() or not cache.is_dir():
-        return
-    try:
-        migrate(cache)
-        write_json(cache / LAYOUT, 2)
-    except OSError:
-        _checked.discard(roots)
-
-
-def move_old_state() -> list[str]:
-    """Move pending records from the data root's predecessor (`$XDG_STATE_HOME/cairn`, else
-    `~/.local/state/cairn`) into the data root, with their blobs and store files; returns what was moved.
-    The old folder is removed once empty. (Nothing moves when `$CAIRN_STATE_DIR` named the old folder: it
-    is the data root then.)"""
-    old = old_state_root()
-    new = global_data_root() if project_pending_default() is not None else data_root()
-    if not (old / "versions").is_dir() or os.path.realpath(old) == os.path.realpath(new):
-        return []
-    moved = []
-    for folder in sorted((old / "versions").iterdir()):
-        record = read_record(folder)
-        if ".tmp-" in folder.name or not record:
-            continue
-        target = version_folder(new, record["uid"])
-        if target.exists():
-            remove(folder)
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.rename(folder, target)
-        except OSError:
-            shutil.copytree(folder, target, symlinks=True)
-            remove(folder)
-        for item in record.get("files", []):
-            if "sha256" in item and blob_cache(old, item["sha256"]).is_file() and not data_blob(item["sha256"]).is_file():
-                _copy_blob(blob_cache(old, item["sha256"]), data_blob(item["sha256"]))
-        moved.append(record["uid"])
-    for path in sorted((old / "stores").glob("*.json")) if (old / "stores").is_dir() else []:
-        if not (new / "stores" / path.name).exists():
-            (new / "stores").mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, new / "stores" / path.name)
-    for name in ("versions", "blobs", "stores"):
-        shutil.rmtree(old / name, ignore_errors=True)
-    try:
-        old.rmdir()
-    except OSError:
-        pass
-    if moved:
-        print(f"cairn: moved {len(moved)} pending versions from {old} to {new}", file=sys.stderr)
-    return moved
-
-
-def move_global_pending() -> list[str]:
-    """Move pending records from the global data root whose `source.folder` lies inside this project into the
-    project's pending root (used only when that is the data root); returns the uids moved. Running versions
-    stay (their job writes to the old place); so do records of other projects. Never overwrites."""
-    if project_pending_default() is None:
-        return []
-    old, new, project = global_data_root(), data_root(), find_project_root()
-    if project is None or not (old / "versions").is_dir() or os.path.realpath(old) == os.path.realpath(new):
-        return []
-    moved = []
-    for folder in sorted((old / "versions").iterdir()):
-        record = None if ".tmp-" in folder.name else read_record(folder)
-        if not record or record.get("sync") in ("synced", "running"):
-            continue
-        where = (record.get("source") or {}).get("folder")
-        if not where or not _inside(Path(where), project):
-            continue
-        target = version_folder(new, record["uid"])
-        if target.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.rename(folder, target)
-        except OSError:
-            shutil.copytree(folder, target, symlinks=True)
-            remove(folder)
-        for item in record.get("files", []):
-            if "sha256" in item and blob_cache(old, item["sha256"]).is_file() and not data_blob(item["sha256"]).is_file():
-                _copy_blob(blob_cache(old, item["sha256"]), data_blob(item["sha256"]))
-        moved.append(record["uid"])
-    if moved:
-        left = set()
-        for folder in (old / "versions").iterdir():
-            record = None if ".tmp-" in folder.name else read_record(folder)
-            left |= {item["sha256"] for item in (record or {}).get("files", []) if "sha256" in item}
-        for uid in moved:
-            for item in (read_record(version_folder(new, uid)) or {}).get("files", []):
-                if "sha256" in item and item["sha256"] not in left:
-                    blob_cache(old, item["sha256"]).unlink(missing_ok=True)
-        print(f"cairn: moved {len(moved)} pending versions of this project from {old} to {new}", file=sys.stderr)
-    return moved
-
-
-def _inside(path: Path, folder: Path) -> bool:
-    try:
-        path = path.resolve()
-    except OSError:
-        return False
-    return folder in [path, *path.parents]
-
-
-def migrate(cache: Path) -> list[str]:
-    """Convert `<cache>/outbox/`, `resolved/`, `stores.json`, and old version folders; returns what was done."""
-    done = []
-    old_stores = read_json(cache / "stores.json") or {}
-    urls = {store_key(url): url for url in old_stores} | {uid: url for url, uid in old_stores.items()}
-    for key in {*old_stores.values()}:
-        if key:
-            remember_uid(urls[key], key)
-    resolved = cache / "resolved"
-    if resolved.is_dir():
-        for file in resolved.glob("*.json"):
-            key = file.stem
-            hints: dict = {}
-            for text, value in (read_json(file) or {}).items():
-                head, _, selector = text.rpartition("@")
-                if head and isinstance(value, dict) and value.get("uid"):
-                    hints.setdefault(head, {})[selector] = value
-            path = _store_path(key)
-            known = read_json(path) or {}
-            for artifact, values in hints.items():
-                known.setdefault("artifacts", {}).setdefault(artifact, {}).update(values)
-            if urls.get(key):
-                known.setdefault("url", urls[key])
-            if key in old_stores.values():
-                known["uid"] = key
-            write_json(path, known)
-            file.unlink(missing_ok=True)
-            done.append(f"hints of {key}")
-        shutil.rmtree(resolved, ignore_errors=True)
-    outbox = cache / "outbox"
-    if outbox.is_dir():
-        for file in sorted(outbox.glob("*/*.json")):
-            entry = read_json(file)
-            if isinstance(entry, dict) and entry.get("uid") and not load(entry["uid"]):
-                save(_converted(entry, file.parent.name))
-                for item in entry.get("files", []):
-                    if "sha256" in item and not data_blob(item["sha256"]).is_file():
-                        source = blob_cache(cache, item["sha256"])
-                        if source.is_file():
-                            _copy_blob(source, data_blob(item["sha256"]))
-                done.append(f"queued {entry['uid']}")
-            file.unlink(missing_ok=True)
-        shutil.rmtree(outbox, ignore_errors=True)
-    (cache / "stores.json").unlink(missing_ok=True)
-    versions = cache / "versions"
-    if versions.is_dir():
-        for folder in versions.iterdir():
-            marker = folder / ".cairn-complete"
-            if ".tmp-" in folder.name or not marker.is_file():
-                continue
-            old = read_json(marker) or {}
-            build = scratch(folder)
-            try:
-                build.mkdir()
-                os.rename(folder, build / FILES)
-                os.chmod(build / FILES / ".cairn-complete", 0o644)
-                (build / FILES / ".cairn-complete").unlink()
-                write_json(build / RECORD, {"uid": old.get("uid", folder.name), "sync": "synced", "store": old.get("store"),
-                                            "project": old.get("project"), "name": old.get("name"), "version": old.get("version"),
-                                            "manifest": old.get("manifest"), "accessed": now(), "accessed_at": time.time()})
-                install(build, folder)
-                done.append(f"cached {folder.name}")
-            except OSError:
-                pass
-            finally:
-                if build.exists():
-                    remove(build)
-    return done
-
-
-def _copy_blob(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = scratch(target)
-    try:
-        try:
-            os.link(source, temporary)
-        except OSError:
-            shutil.copyfile(source, temporary)
-            os.chmod(temporary, 0o444)
-        place(temporary, target)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _converted(entry: dict, key: str) -> dict:
-    """An outbox entry as a local record."""
-    old = entry.get("state")
-    sync = {"pending": "pending", "completed": "pending", "failed": "pending", "running": "running", "rejected": "rejected"}.get(old, "pending")
-    status = {"failed": "failed", "running": "running"}.get(old, "completed")
-    if old == "rejected" and entry.get("kind") == "running" and entry.get("number") is None:
-        status = "completed"
-    record = {key_: entry.get(key_) for key_ in ("uid", "kind", "url", "project", "name", "label", "metadata", "inputs", "aliases",
-                                                  "source", "files", "created", "owner", "number", "pushed", "error")}
-    record.update(sync=sync, status=status, store=key, pushed=entry.get("pushed") or {}, files=entry.get("files") or [],
-                  inputs=entry.get("inputs") or [], aliases=entry.get("aliases") or [])
-    return record

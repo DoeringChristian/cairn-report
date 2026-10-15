@@ -3,7 +3,7 @@ writes them and the report builder and store that read them share one definition
 
 `metrics.jsonl` holds one entry per `add({...})`: the dict as given (any keys; `step` is just a key), plus
 `time`, `origin`, and, when a value was not finite, `nonfinite` ({key: "nan"}; the value itself is null).
-Lines of earlier releases hold one scalar each, `{name, value, step, time, origin[, nonfinite]}`; the readers
+Lines written by cairn-report 0.11 hold one scalar each, `{name, value, step, time, origin[, nonfinite]}`; the readers
 take both."""
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-METRICS = "metrics.jsonl"  # one entry per add() (or, from earlier releases, one event per logged scalar)
+METRICS = "metrics.jsonl"  # one entry per add() (cairn-report 0.11 wrote one event per logged scalar)
 ARTIFACTS = "artifacts.jsonl"  # one event per logged file
 RESERVED = ("time", "origin", "nonfinite")  # added by the logger, never a logged value
 OLD_KEYS = {"name", "value", "step", "time", "origin", "nonfinite"}
@@ -33,7 +33,7 @@ def read_jsonl(path: Path | str) -> list[dict]:
 
 
 def is_old_event(event: dict) -> bool:
-    """A line of an earlier release: one scalar as {name, value, step, ...} and nothing else. (An entry logged
+    """A line of cairn-report 0.11: one scalar as {name, value, step, ...} and nothing else. (An entry logged
     with exactly the keys `name` and `value`, and nothing but `step` besides, reads the same way.)"""
     return isinstance(event.get("name"), str) and "value" in event and set(event) <= OLD_KEYS
 

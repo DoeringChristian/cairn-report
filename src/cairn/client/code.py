@@ -77,7 +77,6 @@ SOURCE_NAMES = {
 DENIED_PARTS = {
     ".git",
     ".cairn",  # Cairn's own folder: store, pending and cached versions, built pages
-    ".store",  # the local store of earlier releases
     ".pixi",
     ".venv",
     "__pycache__",

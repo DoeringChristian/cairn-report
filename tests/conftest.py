@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pytest
 
-from cairn.runs.logger import RunLogger
+from cairn.client.logger import Writer
 
 RUN = "demo/2026-01-01_00-00-00"
 
@@ -27,7 +27,7 @@ def write(path: Path, text: str) -> Path:
 def make_data(base: Path) -> Path:
     """A small folder of results, as a run writes them: metrics, a figure, a JSON file."""
     run = base / "descent-run"
-    log = RunLogger(run)
+    log = Writer(run)
     log.add({"rmse": 0.5})
     log.add_figure("hist", histogram, None, [1, 2, 2, 3])
     log.add_json("summary", {"steps": 3})
@@ -58,7 +58,7 @@ def make_tree(project: Path) -> Path:
 def make_run(project: Path, status: str = "completed") -> Path:
     run = project / "outputs" / RUN
     write(run / ".hydra" / "config.yaml", "seed: 0\n")
-    log = RunLogger(run)
+    log = Writer(run)
     log.add({"rmse": 0.5})
     log.add_figure("hist", histogram, None, [1, 2, 2, 3])
     (run / "run.json").write_text(json.dumps({"status": status}))
@@ -77,7 +77,6 @@ def isolated_roots(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path / "data"))  # tests that check the default delete this
-    monkeypatch.delenv("CAIRN_STATE_DIR", raising=False)
     cache.use_data_dir(None)
     monkeypatch.delenv("CAIRN_CACHE_DIR", raising=False)
     monkeypatch.delenv("CAIRN_DIR", raising=False)

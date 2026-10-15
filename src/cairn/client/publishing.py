@@ -13,7 +13,9 @@ local record first (sync `running`) and is created on the server (under its uid)
 answers, so a job starts and finishes while the server is down; its completion or failure turns it
 pending and is sent like any publish. While it runs, a heartbeat thread rewrites its `heartbeat`
 (time, host, pid) every few seconds; a flusher on any host fails the version once the heartbeat is
-older than `[store] heartbeat_timeout`.
+older than `[store] heartbeat_timeout`. A running version in a local store has a heartbeat too
+(`<store>/heartbeats/<uid>`): opening the store fails it once its process is dead or the heartbeat is old
+(LocalStore.reap), so a killed job never stays `running`.
 """
 
 from __future__ import annotations
@@ -111,11 +113,13 @@ class Publication:
         self._entry: dict | None = None
         self._replica = None
         self._beating: threading.Event | None = None
+        from .replica import heartbeat_timeout
+
+        self.timeout = heartbeat_timeout(self.config)
         if isinstance(self.store, RemoteStore):
-            from .replica import heartbeat_timeout
             from .sync import Replica
 
-            self._replica = Replica(self.store, heartbeat_timeout(self.config))
+            self._replica = Replica(self.store, self.timeout)
 
     @property
     def source(self) -> dict:
@@ -156,12 +160,13 @@ class Publication:
         from . import replica
 
         stop = self._beating = threading.Event()
-        every = max(0.05, min(60.0, self._replica.timeout / 5))
+        every = max(0.05, min(60.0, self.timeout / 5))
         uid = self.uid
+        beat = replica.beat if self._replica is not None else self.store.beat
 
         def loop():
             while not stop.wait(every):
-                replica.beat(uid)
+                beat(uid)
 
         threading.Thread(target=loop, name=f"cairn-heartbeat {uid}", daemon=True).start()
 
@@ -180,9 +185,14 @@ class Publication:
                 self._push()
             return self.version
         if self.version is None:
+            from ..store.uids import new_uid
+
+            self.uid = self.uid or new_uid()
+            self.store.beat(self.uid)  # before the version exists: a crash right after still leaves one that can be failed
             self.store.create_project(self.project)
             self.version = self.store.start_version(self.project, self.name, self.label, self.metadata, self.source, uid=self.uid)
             self.uid = self.store.get_version(self.project, self.name, self.version)["uid"]
+            self._start_beating()
         return self.version
 
     def sync(self) -> int:
@@ -207,6 +217,18 @@ class Publication:
             self.store.add_files(self.project, self.name, self.version, fresh)
         return len(fresh)
 
+    def set_metadata(self, metadata: dict) -> None:
+        """Replace the metadata of the running version (not once it completed or failed); sent with the next sync
+        on a store server."""
+        self.metadata = metadata
+        if self._replica is not None:
+            if self._entry is not None:
+                self._entry["metadata"] = metadata
+                self._save()
+                self._push()
+        elif self.version is not None:
+            self.store.set_metadata(self.project, self.name, self.version, metadata)
+
     def complete(self) -> int | None:
         """Sync a last time, freeze the version, move `latest`, and apply the aliases. On a store server that does
         not answer, the completed version is pending (`queued` is True) and the number is None until it is sent."""
@@ -222,6 +244,7 @@ class Publication:
 
                 start_uploader(self.store)
             return self.version
+        self._stop_beating()
         self.store.complete_version(self.project, self.name, self.version, merged)
         for alias in self.aliases:
             self.store.set_alias(self.project, self.name, alias, self.version)
@@ -239,6 +262,7 @@ class Publication:
                     start_uploader(self.store)
             return
         if self.version is not None:
+            self._stop_beating()
             self.store.fail_version(self.project, self.name, self.version)
 
     def __enter__(self) -> "Publication":

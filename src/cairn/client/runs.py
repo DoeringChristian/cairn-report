@@ -5,11 +5,11 @@
     run.add({"loss": loss, "step": step})             # the run is a writer too: its metrics.jsonl
     with cairn.draft("models/student") as model:      # an output of the run: its one input is the run's version
         model.add_file("model.pt")
-    # the run completes when the process exits (failed on an unhandled exception, a crash, or SIGTERM)
+    # the run completes when the process exits (failed on an unhandled exception, a non-zero exit, a crash, or SIGTERM)
 
 A `Run` is a draft (cairn/client/drafts.py) of the artifact `runs/<name>`, with `metadata.kind = "run"` and
 `metadata.config`. The name defaults to the script's stem (`python -m pkg.mod`: the module's name; an interactive
-session: `interactive`). There is one current run per process: a second `init()` returns it (and refuses another
+session: `interactive`). There is one current run per process: a second `init()` returns it (adding its `config` and `metadata`, and refusing another
 name), `cairn.run()` returns it or None. Its version is created at once (running), so the outputs published while
 it runs name it by its uid; with a store server it is synced every `[store] interval` seconds (`watch`, the
 default there) with a heartbeat, so the UI shows it live; with a local store it is synced when it ends (`watch=True`
@@ -31,8 +31,12 @@ Lineage: what the process pulls (`cairn.use`, `cairn.pull`, `Version.pull`/`open
 drafts are outputs of that run; `cairn.init()` there starts a separate run.
 
 Completion: at exit (`atexit`), the open drafts of the run are published, then the run; an unhandled exception
-(`sys.excepthook`) or SIGTERM (when no other handler is installed) fails it, keeping its folder and writing
-logs/error.txt. `run.finish()` ends it earlier (a Hydra job does, cairn/runs/hydra.py), after which the process may
+(`sys.excepthook`), a non-zero exit (`sys.exit(2)`, `raise SystemExit("message")`: the exit code goes to
+logs/error.txt and `metadata.exit_code`; `sys.exit(0)` and `sys.exit()` complete it) or SIGTERM (when no other
+handler is installed) fails it, keeping its folder and writing logs/error.txt. A process killed without a chance to
+run any of this (SIGKILL, the OOM killer) leaves the version `running` until the store notices the missing
+heartbeat: it fails it the next time anything opens the store (local store: `LocalStore.reap`; store server: a
+flusher, see sync.py). `run.finish()` ends it earlier (a Hydra job does, cairn/runs/hydra.py), after which the process may
 start another one.
 """
 
@@ -60,6 +64,7 @@ CAPTURE_DEFAULT = True  # tests turn it off for the runs pytest itself starts
 _CURRENT: "Run | None" = None
 _LOCK = threading.RLock()
 _HOOKS = {"installed": False, "excepthook": None}
+_EXIT: dict = {"code": None, "error": None}  # the exit code of a SystemExit that left the main module (see _watch_exit)
 _logger._OWN_FILES.add(Path(__file__).resolve())
 
 
@@ -102,7 +107,7 @@ class Run(Draft):
 
     def __init__(self, name: str | None = None, *, config=None, metadata: dict | None = None, watch: bool | None = None,
                  capture: bool = True, system: bool | float = True, code: bool = True, store=None, label: str | None = None,
-                 folder: Path | None = None, adopt: Draft | None = None, inputs=(), implicit: bool = False):
+                 folder: Path | None = None, adopt: Draft | None = None, inputs=()):
         self.run_name = _slug(name or default_name())
         meta = {"kind": "run", **(metadata or {})}
         if config is not None:
@@ -121,7 +126,6 @@ class Run(Draft):
             self.record["inputs"] = list(inputs)
             self._save()
         self.options = {"watch": watch, "capture": capture, "system": system, "code": code}
-        self.implicit = implicit
         self._captures: list = []
         self._sampler = None
         self._code_thread: threading.Thread | None = None
@@ -294,7 +298,7 @@ def current() -> Run | None:
 
 def init(name: str | None = None, *, config=None, metadata: dict | None = None, watch: bool | None = None, capture: bool | None = None,
          system: bool | float = True, code: bool = True, store=None, label: str | None = None, _adopt: Draft | None = None,
-         _folder: Path | None = None, _inputs=(), _implicit: bool = False) -> Run:
+         _folder: Path | None = None, _inputs=()) -> Run:
     """Start this process's run (see the module doc), or return it when it already runs.
 
     `name` (default: the script's stem) makes it a version of `runs/<name>`; `config` (plain values) becomes
@@ -302,20 +306,19 @@ def init(name: str | None = None, *, config=None, metadata: dict | None = None, 
     keeps the running version synced while it runs; `capture` tees stdout and stderr into logs/; `system` samples
     the machine every 10 s (or every `system` seconds); `code` snapshots the source and the installed packages.
     `store` as for `cairn.publish` (None: the configured store). A second call returns the current run; with
-    another name it raises, and a config or metadata for a run that the first `use`/`pull`/`draft` started
-    implicitly cannot be added any more (call `init` first)."""
+    another name it raises, and a `config` or `metadata` given then is added to the running run (also when the
+    first `use`/`pull`/`draft` started it implicitly)."""
     with _LOCK:
         if _CURRENT is not None:
             run = _CURRENT
             if name is not None and _slug(name) != run.run_name:
                 raise StoreError(f"this process's run is {run.name}@{run.uid}: one run per process (finish() it first)")
-            if run.implicit and (config is not None or metadata):
-                raise StoreError(f"{run.name}@{run.uid} was started by the first cairn.use/pull/draft: call cairn.init(config=...)"
-                                 " before those")
+            if config is not None or metadata:  # e.g. the run was started by the first cairn.use(): complete it now
+                run.set_metadata(**({"config": config} if config is not None else {}), **(metadata or {}))
             return run
         run = Run(name, config=config, metadata=metadata, watch=watch,
                   capture=CAPTURE_DEFAULT if capture is None else capture, system=system, code=code, store=store,
-                  label=label, folder=_folder, adopt=_adopt, inputs=_inputs, implicit=_implicit)
+                  label=label, folder=_folder, adopt=_adopt, inputs=_inputs)
         try:
             run.start()
         except BaseException:
@@ -338,7 +341,7 @@ def ensure(store=None) -> Run | None:
         return _CURRENT
     if os.environ.get(RUN_ENV):
         return None
-    return init(store=store, _implicit=True)
+    return init(store=store)
 
 
 def input_for(draft: Draft) -> str | None:
@@ -378,12 +381,68 @@ def _install_hooks() -> None:
         atexit.register(_at_exit)
     _HOOKS["excepthook"] = sys.excepthook
     sys.excepthook = _excepthook
+    _watch_exit()
     if threading.current_thread() is threading.main_thread():
         try:
             if signal.getsignal(signal.SIGTERM) in (signal.SIG_DFL, None):
                 signal.signal(signal.SIGTERM, _on_signal)
         except (ValueError, OSError):
             pass
+
+
+def _exit_code(error: SystemExit) -> int:
+    """The process exit code of a SystemExit: None is 0, an int is itself, anything else (a message) is 1."""
+    code = error.code
+    if code is None:
+        return 0
+    return code if isinstance(code, int) else 1
+
+
+def _watch_exit() -> None:
+    """Learn the exit code of a SystemExit that leaves the main module (`sys.exit(n)` or `raise SystemExit(n)`).
+
+    Python calls no hook for it: `sys.excepthook` does not see SystemExit, and the code is gone when the exit callbacks
+    run. From Python 3.12 `sys.monitoring` reports every frame an exception leaves; the one hook that matters is the main
+    module's own frame, which a caught SystemExit never leaves. Before 3.12, `sys.exit` is wrapped (a `raise SystemExit`
+    there goes unnoticed) and the exception's traceback tells at exit whether it reached the main module."""
+    monitoring = getattr(sys, "monitoring", None)
+    if monitoring is not None:
+        for tool in (3, 4):  # 0 debugger, 1 coverage, 2 profiler, 5 optimizer
+            try:
+                monitoring.use_tool_id(tool, "cairn")
+            except ValueError:
+                continue
+
+            def unwind(code, offset, exception):
+                if isinstance(exception, SystemExit) and code.co_name == "<module>" and \
+                        sys._getframe(1).f_globals.get("__name__") == "__main__":
+                    _EXIT["code"] = _exit_code(exception)
+
+            monitoring.register_callback(tool, monitoring.events.PY_UNWIND, unwind)
+            monitoring.set_events(tool, monitoring.events.PY_UNWIND)
+            _HOOKS["tool"] = tool
+            return
+        return
+    original = sys.exit
+
+    def exit(status=None):
+        try:
+            original(status)
+        except SystemExit as error:
+            _EXIT["error"] = error
+            raise
+
+    sys.exit = exit
+
+
+def _exit_status() -> int:
+    """The exit code recorded for the process (0 when it did not exit through a SystemExit)."""
+    error = _EXIT["error"]
+    if error is not None and _EXIT["code"] is None:  # Python before 3.12: did the exception reach the main module?
+        trace = error.__traceback__
+        if trace is not None and trace.tb_frame.f_code.co_name == "<module>" and trace.tb_frame.f_globals.get("__name__") == "__main__":
+            return _exit_code(error)
+    return _EXIT["code"] or 0
 
 
 def _excepthook(kind, value, trace) -> None:
@@ -405,6 +464,13 @@ def _at_exit() -> None:
     if run is None:
         return
     try:
+        code = _exit_status()
+        if code:
+            run.fail_with(f"the process exited with code {code}")
+            try:
+                run.set_metadata(exit_code=code)
+            except Exception:  # noqa: BLE001  (the failure itself matters more than its metadata)
+                pass
         run.finish()
     except BaseException as error:  # noqa: BLE001  (never a traceback at interpreter exit)
         print(f"cairn: could not finish the run {run.name}@{run.uid} ({error}); its folder is {run.folder}",

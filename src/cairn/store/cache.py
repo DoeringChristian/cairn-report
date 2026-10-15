@@ -12,9 +12,7 @@ prune` trims it. `<data>` is durable (the data root): `--data-dir`, else `$CAIRN
 `<base>/pending`, else `$XDG_DATA_HOME/cairn` (`~/.local/share/cairn`) outside a project. It holds what only
 this machine has (pending versions and their blobs; real data, not a cache) and must sit on persistent
 storage with room for it. A version's folder is named by its uid, never by project, name, and number, so
-two stores never collide. Pending versions an earlier release kept in the global `~/.local/share/cairn`
-move into the project's pending root when their source folder lies inside the project; the rest stay, and
-`data_roots()` lists both so `cairn sync` and `cairn status` see them.
+two stores never collide.
 
 Either root may sit on NFS and be filled by many jobs at once, so nothing locks: a folder, a blob, or a
 record is written under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place in
@@ -29,7 +27,6 @@ import os
 import secrets
 import shutil
 import socket
-import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -44,13 +41,11 @@ from .inputs import record_input
 
 CACHE_ENV = "CAIRN_CACHE_DIR"
 DATA_ENV = "CAIRN_DATA_DIR"
-LEGACY_STATE_ENV = "CAIRN_STATE_DIR"  # read for one release, with a warning
 RECORD = "manifest.json"  # a version folder's record; the folder counts only once it exists
 FILES = "files"
 ACCESS_EVERY = 60.0  # seconds: how stale `accessed` may get before a pull rewrites it
 
 _override: dict[str, Path | None] = {"data": None}
-_warned: set[str] = set()
 
 
 def use_data_dir(path: Path | str | None) -> None:
@@ -69,14 +64,6 @@ def data_root_at(path: Path | str):
         _override["data"] = before
 
 
-def _pending_default() -> Path | None:
-    """`<base>/pending` when nothing overrides the data root and a base exists, else None."""
-    if _override["data"] is not None or os.environ.get(DATA_ENV) or os.environ.get(LEGACY_STATE_ENV):
-        return None
-    base = cairn_base()
-    return base / "pending" if base else None
-
-
 def cache_root() -> Path:
     """`$CAIRN_CACHE_DIR`, else `<base>/cache`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`."""
     if os.environ.get(CACHE_ENV):
@@ -89,23 +76,16 @@ def cache_root() -> Path:
 
 
 def global_data_root() -> Path:
-    """`$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`: the data root outside a project (and the earlier default)."""
+    """`$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`: the data root outside a project."""
     return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "cairn"
 
 
 def data_root() -> Path:
-    """`--data-dir`, else `$CAIRN_DATA_DIR`, else `<base>/pending`, else `$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`.
-
-    The deprecated `$CAIRN_STATE_DIR` is read (with a warning) when `$CAIRN_DATA_DIR` is not set."""
+    """`--data-dir`, else `$CAIRN_DATA_DIR`, else `<base>/pending`, else `$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`."""
     if _override["data"] is not None:
         return _override["data"]
     if os.environ.get(DATA_ENV):
         return Path(os.environ[DATA_ENV]).expanduser()
-    if os.environ.get(LEGACY_STATE_ENV):
-        if LEGACY_STATE_ENV not in _warned:
-            _warned.add(LEGACY_STATE_ENV)
-            print(f"warning: {LEGACY_STATE_ENV} is deprecated: rename it to {DATA_ENV}", file=sys.stderr)
-        return Path(os.environ[LEGACY_STATE_ENV]).expanduser()
     base = cairn_base()
     if base:
         protect(base)
@@ -113,32 +93,19 @@ def data_root() -> Path:
     return global_data_root()
 
 
-def project_pending_default() -> Path | None:
-    """`<base>/pending` while it is the data root (nothing overrides it), else None."""
-    return _pending_default()
-
-
-def data_roots() -> list[Path]:
-    """The data root, then (when it is the project's pending folder) the global one if it still holds versions."""
-    first = data_root()
-    other = global_data_root()
-    if _pending_default() is not None and (other / "versions").is_dir() and os.path.realpath(other) != os.path.realpath(first):
-        return [first, other]
-    return [first]
-
-
-def old_state_root() -> Path:
-    """Where earlier releases kept pending versions: `$XDG_STATE_HOME/cairn`, else `~/.local/state/cairn`."""
-    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "cairn"
-
-
-def default_root() -> Path:
-    """The cache root (kept for callers of the earlier name)."""
-    return cache_root()
-
-
 def hostname() -> str:
     return socket.gethostname()
+
+
+def pid_alive(pid: int) -> bool:
+    """Whether a process with this pid exists on this host."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OverflowError):
+        return True
+    return True
 
 
 def scratch(target: Path) -> Path:

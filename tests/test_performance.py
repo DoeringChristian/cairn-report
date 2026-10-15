@@ -57,16 +57,19 @@ def publish_small(port, token, connection, artifact, index):
 @pytest.mark.parametrize("same", [True, False], ids=["one-artifact", "distinct-artifacts"])
 def test_concurrent_small_publishes(server, same):
     request(server.port, server.token, "POST", "/api/v2/projects", {"name": "perf"})
-    local = threading.local()
+    local, opened = threading.local(), []
 
     def one(index):
         if not hasattr(local, "connection"):
             local.connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=120)
+            opened.append(local.connection)
         return publish_small(server.port, server.token, local.connection, "shared" if same else f"a/n{index:03d}", index)
 
     started = time.perf_counter()
     with ThreadPoolExecutor(16) as pool:
         numbers = list(pool.map(one, range(100)))
+    for connection in opened:
+        connection.close()
     elapsed = time.perf_counter() - started
     assert elapsed < 60, f"100 small publishes took {elapsed:.1f} s"
     if same:
@@ -106,6 +109,7 @@ def test_listing_two_thousand_artifacts(server):
     status, again, _ = request(server.port, server.token, "GET", "/api/v2/projects/big/artifacts",
                                headers={"If-None-Match": headers["ETag"]}, connection=connection)
     assert status == 304 and again["ETag"] == headers["ETag"]
+    connection.close()
     status, _, data = request(server.port, server.token, "GET", "/api/v2/projects")
     assert status == 200 and next(item for item in json.loads(data) if item["name"] == "big")["artifacts"] == 2000
 
@@ -165,12 +169,14 @@ def test_a_large_download_streams_without_loading_into_memory(tmp_path, sendfile
             time.sleep(0.0005)  # a slowish client: a server that buffered the file would hold it all now
         done.set()
         watcher.join()
+        connection.close()
         assert response.status == 200 and received == size and check.hexdigest() == sha
         growth = (peak[0] - before) / 1024
         assert growth < 25, f"the server grew by {growth:.0f} MB while sending a 50 MB file"
     finally:
         process.terminate()
         process.wait(10)
+        process.stdout.close()
 
 
 def test_writes_of_a_second_process_are_seen_at_once(tmp_path):
@@ -237,6 +243,7 @@ def test_caching_headers(server):
     publish_small(server.port, server.token, connection, "c", 1)
     assert request(server.port, server.token, "GET", "/api/v2/projects/perf/artifacts/c",
                    headers={"If-None-Match": headers["ETag"]})[0] == 200  # changed: a new ETag
+    connection.close()
 
 
 @pytest.mark.skipif(not hasattr(os, "sendfile"), reason="no os.sendfile here")

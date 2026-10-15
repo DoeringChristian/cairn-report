@@ -51,3 +51,7 @@ dev = [
     "starlette>=0.40",
     "uvicorn[standard]>=0.30",
 ]
+
+[tool.pytest.ini_options]
+# Any warning is an error, so a warning from Cairn's own code (a deprecation, a resource leak) fails the suite.
+filterwarnings = ["error"]

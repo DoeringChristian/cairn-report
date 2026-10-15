@@ -79,10 +79,10 @@ Cairn is the next version of cairn-report (0.13.0 is the first release under the
 | `cairn-report store serve` | `cairn server` |
 | `cairn-report store token ...` | `cairn token ...` |
 | `cairn-report store migrate` | `cairn migrate` |
-| `cairn-report.toml` | `cairn.toml` (the old name is still read, with a warning, when `cairn.toml` is absent) |
+| `cairn-report.toml` | `cairn.toml` (a `cairn-report.toml` is not read: Cairn stops and asks you to rename it) |
 | `~/.cache/cairn-report/` | `~/.cache/cairn/` |
 
-The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep their names. Everything Cairn writes for a project now lives in `.cairn/` (see Where Cairn keeps things); an old `.store/` is moved there on first use.
+The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep their names. Everything Cairn writes for a project lives in `.cairn/` (see Where Cairn keeps things).
 The old Cairn tracker (cairn-track) cannot be installed in the same environment.
 
 ## Install
@@ -253,17 +253,11 @@ metadata are unchanged creates no new version. Lineage follows: the report
 version lists its inputs, and each input lists the report as a consumer
 (`cairn.lineage`).
 
-### Comments
+### Copy location
 
-Readers select text or click a figure's comment icon; comments are kept in that
-browser only, per report. **Copy** puts them on the clipboard as JSON (with the
-report's source path and URL, after an optional `[page] copy_preamble`), and
-**Clear** removes them from the browser.
-
-Next to each comment button (on a text selection, a figure, the lightbox), a
-copy button puts a one-line location marker on the clipboard, to paste into a
-chat with an LLM: `reports/a/report.md:42 "the selected text"`, or for a figure
-`reports/a/report.md:42 figure #fig-psnr "PSNR per method" (source: <file>)`.
+Next to a text selection, a figure, and the lightbox, a copy button puts a one-line location marker on
+the clipboard, to paste into a chat with an LLM: `reports/a/report.md:42 "the selected text"`, or for a
+figure `reports/a/report.md:42 figure #fig-psnr "PSNR per method" (source: <file>)`.
 
 ### Loading and caching
 
@@ -286,8 +280,8 @@ single file, such as claude.ai artifacts: every report's text, its figures as
 data URIs, and its Plotly data, with the styles and script inline. The sidebar
 and `report:` links switch reports inside the page, and a plain `#anchor` in
 the page's address opens the report that has it. Only Plotly's runtime is
-fetched, from jsdelivr at the version the build bundles. The page keeps the
-comments (Copy and Clear) and leaves out the build manifest. A page above
+fetched, from jsdelivr at the version the build bundles. The page leaves out the
+build manifest. A page above
 16 MB fails with its largest figures listed.
 
 Publish the file exactly as written; it says so in its first lines. On
@@ -306,7 +300,7 @@ run.add_figure("samples", fig, {"loss": loss, "step": step})    # every add_* ta
 with cairn.draft("models/student") as model:      # an output of the run
     model.add({"val_loss": v, "step": step})
     model.add_file("model.pt")
-# the run completes when the process exits (failed on an unhandled exception / crash)
+# the run completes when the process exits (failed on an unhandled exception, a non-zero exit, or a crash)
 ```
 
 - **A run** is a version of the artifact `runs/<name>`, with `metadata.kind = "run"` and
@@ -314,16 +308,27 @@ with cairn.draft("models/student") as model:      # an output of the run
   the module's name; an interactive session: `interactive`). There is one run per process:
   `cairn.init()` again returns it (another name raises), `cairn.run()` returns it or None. If
   `cairn.init` was not called, the first `cairn.use`, `cairn.pull`, or `cairn.draft` starts one; call
-  `init` first to give it a name and a config. `run.finish()` ends it early (a Hydra job does).
+  `init` first to give it a name and a config, or later: `cairn.init(config=..., metadata=...)` on a
+  running run adds them to its metadata (on the store too), whoever started it. `run.finish()` ends it
+  early (a Hydra job does).
 - **Its version exists from the start** (running), so the outputs published while it runs can name it
   by its uid. With a store server it is synced every `[store] interval` seconds with a heartbeat
   (`watch`, the default there), so the UI shows it live; with a local store it is synced when it ends
   (`watch=True` to follow it).
 - **It ends with the process:** its open drafts are published, then the run completes. An unhandled
-  exception (also Ctrl-C) or SIGTERM (when no other handler is installed) fails it: the traceback goes
-  to `logs/error.txt`, the version is marked failed (its outputs keep their edge to it, and the UI
-  shows it failed), and its folder is kept (`cairn drafts`). A run killed outright (SIGKILL, a node
-  failure) stays running until a store server's heartbeat timeout fails it.
+  exception (also Ctrl-C), a non-zero exit (`sys.exit(2)`, `raise SystemExit(2)`; a message such as
+  `sys.exit("bad input")` counts as 1, while `sys.exit(0)` and `sys.exit()` complete the run), or
+  SIGTERM (when no other handler is installed) fails it: the traceback or "the process exited with
+  code N" goes to `logs/error.txt`, a non-zero exit code is also in `metadata.exit_code`, the version
+  is marked failed (its outputs keep their edge to it, and the UI shows it failed), and its folder is
+  kept (`cairn drafts`). A `SystemExit` that the script catches does not count. (Before Python 3.12
+  only `sys.exit` is noticed, not a bare `raise SystemExit`.)
+- **A run killed outright** (SIGKILL, the OOM killer, a node failure) leaves no trace of its own, so
+  its running version carries a heartbeat, in a local store too (`<store>/heartbeats/<uid>`). Opening
+  the store (any `cairn` command, `cairn.connect()`, the UI) and `cairn status` fail every running
+  version whose process is gone on this host, or whose heartbeat is older than `[store] heartbeat_timeout`
+  (600 s by default), with the error "the process died (no heartbeat since ...)". With a store server a
+  flusher does the same (see "Working offline").
 - **`cairn.use(ref)`** resolves once, records the exact version as an input of the run, and returns the
   `Version` (its files are listed lazily; `.path` materializes it read-only; `.open(path)` streams one
   file). `cairn.pull(ref)` does the same and returns the folder. A subprocess sees the run's inputs file
@@ -405,12 +410,10 @@ w.add_dir("checkpoints/", "ckpt")                   # files/ckpt/...
 Both index files are append-only, and every entry records the code location that wrote it. Reports and
 scripts read them with `read_scalars(folder)` (the latest value of every key), `read_series(folder,
 key)` (every value with its step and time), `read_jsonl`, and `read_artifacts(folder)`; they also read
-the one-scalar lines (`{name, value, step}`) of earlier releases.
+the one-scalar lines (`{name, value, step}`) that cairn-report 0.11 wrote.
 
-For a plain folder, `cairn.runs.logger.RunLogger(folder)` is the same writer without any store. It
-keeps the method names of earlier releases (`scalar`, `scalars`, `table`, `json`, `figure`, `plotly`,
-`image`, `video`, `artifact`, `text`) for one release, with a DeprecationWarning; they write where they
-did. A plain folder is followed with `cairn publish runs/x/latest x --watch -- python run.py`, which
+A job that is not a Cairn run writes its folder with a draft (`cairn.draft(name)` is a managed folder
+and the same writer). A folder that already exists is followed with `cairn publish runs/x/latest x --watch -- python run.py`, which
 adds new and changed files to one running version of `x` every `[store] interval` seconds, then
 completes it (or marks it failed when the command fails); the command's pulls become the version's
 inputs.
@@ -488,9 +491,7 @@ derived from the store and the version (the same in every process), and the root
 A store folder holds a SQLite database with the metadata (`metadata.sqlite3`: projects, versions,
 aliases and every alias move, who consumed which version) and the file contents, named by their
 SHA-256 (`blobs/`). Every change is one transaction, so a publish is stored whole or not at all,
-even if the process is killed halfway. A folder written by an earlier cairn (JSON Lines files) is
-imported the first time it is opened; the old files stay beside it as `*.migrated`.
-`cairn export-metadata <folder> <dir>` writes the metadata as readable JSON Lines, for backups and
+even if the process is killed halfway. `cairn export-metadata <folder> <dir>` writes the metadata as readable JSON Lines, for backups and
 inspection.
 
 A project works offline against a store folder (`.cairn/store` by default, `[store] path`). To share
@@ -730,9 +731,7 @@ two roots:
 
 `<data>` (the data root) is durable: `--data-dir`, else `$CAIRN_DATA_DIR`, else `.cairn/pending`
 in the project (`~/.local/share/cairn` outside a project; see "Where Cairn keeps things"). It holds what only this machine has: pending versions are real data, not
-cache, so the root belongs on persistent storage with room for them (`CAIRN_STATE_DIR`, its old name,
-is still read for one release, with a warning; pending versions in the old `~/.local/state/cairn` or
-`$XDG_STATE_HOME/cairn` are moved into the data root on first use). It is the counterpart of
+cache, so the root belongs on persistent storage with room for them. It is the counterpart of
 W&B's offline runs: the work is kept locally until `cairn sync` sends it. `<cache>` is throwaway:
 `$CAIRN_CACHE_DIR`, else `.cairn/cache` in the project (`~/.cache/cairn` outside one); deleting it loses nothing
 the server does not have, and `cairn prune` trims it by last pull (recorded in the manifest, not the
@@ -998,21 +997,14 @@ Each place is resolved separately; the first match wins:
 | What | Resolution |
 | --- | --- |
 | base folder | `$CAIRN_DIR`, else `[cairn] dir` in `cairn.toml` (relative to the project root), else `<project root>/.cairn`; none outside a project |
-| pending (data root) | `cairn sync --data-dir`, else `$CAIRN_DATA_DIR` (`$CAIRN_STATE_DIR`, deprecated), else `<base>/pending`, else `$XDG_DATA_HOME/cairn` (`~/.local/share/cairn`) |
+| pending (data root) | `cairn sync --data-dir`, else `$CAIRN_DATA_DIR`, else `<base>/pending`, else `$XDG_DATA_HOME/cairn` (`~/.local/share/cairn`) |
 | cache root | `$CAIRN_CACHE_DIR`, else `<base>/cache`, else `$XDG_CACHE_HOME/cairn` (`~/.cache/cairn`) |
 | local store | `[store] path`, else `<base>/store` |
 | built pages | `output_dir` in `cairn.toml`, else `<base>/build` |
 | drafts | `<base>/drafts`, else `<data root>/drafts` outside a project |
 
 The project root is the nearest folder above the working directory with a `cairn.toml`,
-`pixi.toml`, or `pyproject.toml`. Source snapshots (a run's `code/`, a Hydra job's `provenance/`) skip `.cairn`.
-
-Earlier layouts move on first use (once, announced on stderr, never overwriting anything): a
-project's `.store/` becomes `.cairn/store/`; pending versions in the global `~/.local/share/cairn`
-whose source folder lies inside the project move to `.cairn/pending/` (running versions and other
-projects' versions stay there, and `cairn sync` and `cairn status` still cover the global root).
-`generated/reports/` is left alone: the next build writes to `.cairn/build/`, and the old folder can
-be deleted. `outputs_dir` in `cairn.toml` is no longer used (one warning, then ignored).
+`pixi.toml`, or `pyproject.toml` (a `cairn-report.toml` alone is an error that asks you to rename it). Source snapshots (a run's `code/`, a Hydra job's `provenance/`) skip `.cairn`.
 
 On a cluster the project sits on persistent storage, so the default is the right one: pending
 versions survive the job. Set `CAIRN_CACHE_DIR` to node-local scratch for fast pulls, and end every
@@ -1032,9 +1024,6 @@ dir = ".cairn"                     # where Cairn keeps its files for this projec
 [style]
 css = ["style.css"]                # extra stylesheets, loaded after the default style
 template_dir = "template"          # replaces index.html, report.css, report-extra.css, report.js by name
-
-[page]
-copy_preamble = "..."              # text put before copied comments
 ```
 
 ## Development

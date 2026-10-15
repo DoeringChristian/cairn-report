@@ -191,6 +191,10 @@ class RemoteStore:
         for start in range(0, len(entries), BATCH):
             self._call("POST", f"{self._artifact(project, name)}/versions/{version}/files", {"entries": entries[start:start + BATCH]})
 
+    def set_metadata(self, project: str, name: str, version: int, metadata: dict) -> None:
+        """Replace the metadata of a running version."""
+        self._call("POST", f"{self._artifact(project, name)}/versions/{version}/metadata", {"metadata": metadata})
+
     def complete_version(self, project: str, name: str, version: int, inputs=None, digest: str | None = None) -> None:
         """Complete the version; a `digest` (store.digest) of its files makes the server check them (409 on a mismatch)."""
         body = {"inputs": [str(item) for item in inputs or []]}

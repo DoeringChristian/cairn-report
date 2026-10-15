@@ -1,4 +1,4 @@
-"""Cairn: an artifact store for run outputs and reports, with a server and a UI, plus static reports and a run logger.
+"""Cairn: an artifact store for run outputs and reports, with a server and a UI, plus static reports and run tracking.
 
 This is the light API (no server, UI, reports, matplotlib, plotly, or hydra is imported):
 

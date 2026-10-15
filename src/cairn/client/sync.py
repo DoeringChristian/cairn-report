@@ -213,6 +213,11 @@ class Replica:
             return self._done(record)
         if record["number"] is None:
             record["number"] = remote.start_version(project, name, uid=record["uid"], **manifest)
+            record["pushed_metadata"] = record.get("metadata")
+            self.save(record)
+        if record.get("pushed_metadata", record.get("metadata")) != record.get("metadata") and record["status"] == "running":
+            remote.set_metadata(project, name, record["number"], record.get("metadata") or {})  # changed while it ran
+            record["pushed_metadata"] = record.get("metadata")
             self.save(record)
         fresh = [item for item in record["files"] if record["pushed"].get(item["path"]) != (item.get("sha256") or item.get("link"))]
         try:
@@ -316,17 +321,7 @@ class Replica:
             replica.release(claimed)
 
     def flush(self, report=None) -> dict:
-        """Flush the data root, then the global one an earlier release used, if it still holds versions."""
-        result = self._flush_root(report)
-        for root in replica.data_roots()[1:]:
-            with replica.data_root_at(root):
-                more = self._flush_root(report)
-            for key in result:
-                result[key] += more[key]
-        return result
-
-    def _flush_root(self, report=None) -> dict:
-        """Send every pending record of the current data root in uid order; stops at the first one the server does not answer.
+        """Send every pending record of the data root in uid order; stops at the first one the server does not answer.
 
         A running record whose owner is gone (`replica.dead`) is failed first. Returns {"sent": [records],
         "rejected": [records], "waiting": [records still pending or running]}; `report(line)` hears about each."""
@@ -432,7 +427,7 @@ def start_uploader(remote: RemoteStore, first_delay: float = 1.0, max_delay: flo
 def has_pending(url: str) -> bool:
     """Whether anything is pending or running for this server (a look at the data root only, no network)."""
     uid = replica.known_uid(url)
-    return any(record["sync"] in ("pending", "running") and replica.belongs(record, url, uid) for record in replica.records(all_roots=True))
+    return any(record["sync"] in ("pending", "running") and replica.belongs(record, url, uid) for record in replica.records())
 
 
 def quick(remote: RemoteStore, timeout: float = 10) -> RemoteStore:

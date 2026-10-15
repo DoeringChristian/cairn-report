@@ -43,13 +43,11 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
   `cairn prune` trims the cache by last access and never touches pending or running versions.
 - **One `.cairn/` folder per project.** The local store, pending versions, cache, built report pages
   and shared pages all go to `<project>/.cairn/` (with a `*` `.gitignore`), configurable with
-  `CAIRN_DIR` or `[cairn] dir`. Earlier layouts (`.store/`, `generated/reports/`, the global pending
-  folder) move on first use and are announced; `outputs_dir` is ignored.
+  `CAIRN_DIR` or `[cairn] dir`.
 - **SQLite metadata, an asynchronous server.** A store folder keeps its metadata in one SQLite
   database (`metadata.sqlite3`) and its files as content-addressed blobs; every change is one
-  transaction, so a publish is stored whole or not at all. An older JSON Lines store is imported the
-  first time it is opened, and `cairn export-metadata` writes the metadata back out as readable JSON
-  Lines. The server is asynchronous (uvicorn), streams uploads and downloads, and answers listings
+  transaction, so a publish is stored whole or not at all. `cairn export-metadata` writes the
+  metadata out as readable JSON Lines. The server is asynchronous (uvicorn), streams uploads and downloads, and answers listings
   from summary rows; publishes clone files into the store where the filesystem can. Measured
   numbers (against the first server) are in `bench/RESULTS.md`.
 - **Network filesystems are refused for a store folder.** `cairn server` stops on NFS, Lustre, GPFS,
@@ -98,15 +96,25 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
     artifact.
 - **Reports, other additions.**
   - Videos: cards that play on screen and a lightbox player with frame steps, scrubbing and speed;
-    `log.video`.
+    `add_video`.
   - One reading column for text and figures; figures keep their own shape; small images stay
     pixel-sharp.
   - Copy-location buttons give LLM-ready markers.
 - **Runs as artifacts.** Every process that uses or publishes artifacts is a run: `cairn.init(name=...,
   config=...)` (or, implicitly, the first `cairn.use`, `cairn.pull`, or `cairn.draft`) makes it a version of
   `runs/<name>` (`metadata.kind = "run"`, `metadata.config`), running from the start and completed when the
-  process exits (failed on an unhandled exception or SIGTERM, with `logs/error.txt`). One run per process;
-  `cairn.run()`; `run.finish()`.
+  process exits. One run per process; `cairn.run()`; `run.finish()`.
+  - It fails, with `logs/error.txt` and its folder kept, on an unhandled exception, on SIGTERM, and on a
+    non-zero exit: `sys.exit(n)` and `raise SystemExit(n)` that leave the script record "the process exited
+    with code n" and `metadata.exit_code` (a message counts as 1; `sys.exit(0)` and `sys.exit()` complete
+    the run). The exit code is read from the main module's frame with `sys.monitoring` (Python 3.12+);
+    on 3.11 only `sys.exit` is noticed.
+  - A run killed without a chance to clean up (SIGKILL, the OOM killer) does not stay `running`: a running
+    version in a local store has a heartbeat too, and opening the store, any `cairn` command, and
+    `cairn status` fail the versions whose process is gone on this host or whose heartbeat is older than
+    `[store] heartbeat_timeout`, with the error "the process died (no heartbeat since ...)".
+  - `cairn.init(config=..., metadata=...)` after the run started (for example by the first `cairn.use`)
+    adds them to the running run's metadata, in the store too; only a different name is refused.
   - Its folder records `code/` (the source snapshot), `environment/` (installed packages, pixi.lock),
     `logs/stdout.txt` and `stderr.txt` (a tee; still printed), and `system/info.json` and
     `system/metrics.jsonl` (CPU, memory, disk, network, GPUs every 10 s; psutil and pynvml when installed).
@@ -133,8 +141,7 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
   `add_video`, `add_plotly`, `add_table`, `add_json`, `add_text` (text/), `add_file` and `add_dir`
   (files/) each take an optional `metadata` dict for the item, kept in `artifacts.jsonl`. The readers
   (`read_scalars`, `read_jsonl`, the new `read_series`) take entries with several keys and the one-scalar
-  lines of earlier logs. `cairn.runs.logger.RunLogger` keeps the old names (`scalar`, `figure`, ...) for
-  one release with a DeprecationWarning; drafts have only the new ones.
+  lines of cairn-report 0.11 logs.
 - **Hydra jobs are runs** (`cairn.runs.hydra`, `cairn.runs.snapshot`): `run_experiment` calls
   `cairn.init(name=cfg.run.name, config=<resolved config>, metadata={"overrides": ...})`;
   `hydra.run.dir: ${cairn.run:}` makes the job folder the run's folder (`.hydra/` and `provenance/`
@@ -158,16 +165,15 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
 ### Migrating
 
 - Install `cairn` instead of `cairn-report`. Commands become `cairn ...`, imports `import cairn` /
-  `cairn.runs...` / `cairn.reports...`, and the config file `cairn.toml`. `cairn-report.toml` is
-  read for this release, with a warning.
+  `cairn.runs...` / `cairn.reports...`, and the config file `cairn.toml` (a `cairn-report.toml` is
+  not read; Cairn asks you to rename it).
 - Old hub data: `cairn migrate <old-hub-root> <new-root>`.
 - `cairn.reports.build()` is `cairn.reports.build_all()` (a package function must not shadow the
   `cairn.reports.build` module).
 - Reports: move each report to `reports/<slug>/report.md`, publish the runs it reads, declare them
   under `inputs:`, and replace `run:` with `input:`.
-- Logging: `run.scalar(name, v, step=s)` is `run.add({name: v, "step": s})`; `figure(name, f, *args)` is
-  `add_figure(name, f, None, *args)`; `table`, `json`, `plotly`, `image`, `video` gain the `add_` prefix;
-  `text` writes `text/<name>.txt` (was `logs/`) and `artifact` is `add_file` (`files/`, was `artifacts/`).
-- Drafts no longer record pulls themselves and `Draft.use()` is gone: what a process pulls is its run's
-  input, and its drafts' one input is the run. Code that read `version.inputs` of an output for the data
-  reads `version.upstream()` (or `cairn.lineage(ref)`, which now looks through runs and also returns `runs`).
+- Logging: cairn-report's `RunLogger` methods become the writer's: `scalar(name, v, step=s)` is
+  `add({name: v, "step": s})`; `figure(name, f, *args)` is `add_figure(name, f, None, *args)`; `table`,
+  `json`, `plotly`, `image`, `video` gain the `add_` prefix; `text` writes `text/<name>.txt` (was `logs/`)
+  and `artifact` is `add_file` (`files/`, was `artifacts/`). The writer lives on runs and drafts
+  (`cairn.init()`, `cairn.draft(name)`), not on a bare folder.

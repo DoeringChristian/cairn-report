@@ -1,4 +1,4 @@
-"""The metadata database: importing a JSON Lines root, exporting it again, whole-or-nothing publishes, and one
+"""The metadata database: exporting it as JSON Lines, whole-or-nothing publishes, and one
 writer per served root."""
 
 import hashlib
@@ -11,13 +11,12 @@ import threading
 
 import pytest
 
-import cairn.store.db as db_module
 from cairn import LocalStore, StoreError
 from cairn.cli import main
 from cairn.server import make_server
 from cairn.store.errors import Conflict
 from cairn.store.tokens import create_token, init_root
-from cairn.store.uids import legacy, new_uid
+from cairn.store.uids import new_uid
 
 
 def blob(root, text: str) -> dict:
@@ -28,103 +27,24 @@ def blob(root, text: str) -> dict:
     return {"path": f"{text}.txt", "sha256": sha, "size": len(data), "mtime": None}
 
 
-def lines(path, rows, torn: str = "") -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(row) + "\n" for row in rows) + torn)
-
-
-def legacy_store(root):
-    """Two projects as the JSON Lines layout wrote them: versions (one with a uid, one without, a running and a
-    failed one, a label), alias moves, and a consumer across projects."""
-    one, two = blob(root, "one"), blob(root, "two")
-    uid = new_uid()
-    base = {"label": None, "metadata": {}, "inputs": [], "source": None}
-    for project in ("data", "models"):
-        lines(root / "projects" / project / "project.json", [])
-        (root / "projects" / project / "project.json").write_text(json.dumps(
-            {"name": project, "title": project.title(), "description": "", "created": "2026-01-01T00:00:00+00:00"}))
-    lines(root / "projects/data/artifacts/sets/crops/versions.jsonl", [
-        {**base, "version": 1, "uid": uid, "status": "running", "created": "2026-01-02T00:00:00+00:00", "files": []},
-        {**base, "version": 1, "uid": uid, "status": "completed", "created": "2026-01-02T00:00:00+00:00",
-         "completed": "2026-01-02T00:01:00+00:00", "files": [one], "metadata": {"n": 1}},
-        {**base, "version": 2, "status": "completed", "created": "2026-01-03T00:00:00+00:00", "label": "big",
-         "completed": "2026-01-03T00:01:00+00:00", "files": [two], "metadata": {"n": 2}},
-        {**base, "version": 3, "status": "failed", "created": "2026-01-04T00:00:00+00:00", "completed": "2026-01-04T00:00:01+00:00",
-         "files": []},
-        {**base, "version": 4, "status": "running", "created": "2026-01-05T00:00:00+00:00", "files": []},
-    ], torn='{"version": 5, "stat')  # a writer died mid-line
-    lines(root / "projects/data/artifacts/sets/crops/aliases.jsonl", [
-        {"alias": "latest", "version": 1, "time": "a"}, {"alias": "best", "version": 1, "time": "b"},
-        {"alias": "latest", "version": 2, "time": "c"}])
-    lines(root / "projects/models/artifacts/fit/versions.jsonl", [
-        {**base, "version": 1, "status": "completed", "created": "2026-02-01T00:00:00+00:00", "completed": "2026-02-01T00:00:01+00:00",
-         "files": [one], "inputs": ["data:sets/crops@v2"]}])
-    lines(root / "projects/models/artifacts/fit/aliases.jsonl", [{"alias": "latest", "version": 1, "time": "d"}])
-    lines(root / "projects/data/consumers.jsonl", [{"consumer": "models:fit@v1", "input": "data:sets/crops@v2", "time": "e"}] * 2)
-    return uid
-
-
-def test_a_json_lines_root_is_imported_once(tmp_path):
-    root = tmp_path / "root"
-    uid = legacy_store(root)
-    store = LocalStore(root)
-    assert [p["name"] for p in store.projects()] == ["data", "models"]
-    versions = store.versions("data", "sets/crops")
-    assert [(v["version"], v["status"]) for v in versions] == [(1, "completed"), (2, "completed"), (3, "failed"), (4, "running")]
-    assert versions[0]["uid"] == uid and versions[1]["uid"] == legacy(f"{store.uid}/data/sets/crops/2", "2026-01-03T00:00:00+00:00")
-    assert store.aliases("data", "sets/crops") == {"latest": 2, "best": 1}
-    assert [(row["alias"], row["version"]) for row in store.alias_log("data", "sets/crops")] == [("latest", 1), ("best", 1), ("latest", 2)]
-    assert store.resolve("data:sets/crops@big")[2]["version"] == 2
-    assert store.lineage("data:sets/crops@v2") == {"inputs": [], "consumers": ["models:fit@v1"]}
-    assert store.lineage("models:fit") == {"inputs": ["data:sets/crops@v2"], "consumers": []}
-    summary = {item["name"]: item for item in store.summaries("data")}["sets/crops"]
-    assert (summary["latest"], summary["versions"], summary["metadata"]) == (2, 4, {"n": 2})
-    assert summary["updated"] == "2026-01-05T00:00:00+00:00"
-    assert {item["name"]: item["artifacts"] for item in store.overviews()} == {"data": 1, "models": 1}
-
-    left = sorted(path.relative_to(root).as_posix() for path in (root / "projects").rglob("*") if path.is_file())
-    assert left and all(path.endswith(".migrated") for path in left)  # kept, renamed, not deleted
-    again = LocalStore(root)  # opened again: nothing imported twice
-    assert len(again.alias_log("data", "sets/crops")) == 3 and len(again.versions("data", "sets/crops")) == 4
-    store.complete_version("data", "sets/crops", 4)
-    entry = blob(root, "three")
-    assert store.publish("data", "sets/crops", [entry]) == 5  # numbering continues after the imported versions
-
-
-def test_an_import_that_fails_leaves_nothing_half_done(tmp_path, monkeypatch):
-    root = tmp_path / "root"
-    legacy_store(root)
-    original, calls = db_module._import_project, []
-
-    def failing(connection, store_uid, folder):
-        calls.append(folder.name)
-        if len(calls) == 2:
-            raise RuntimeError("disk on fire")
-        original(connection, store_uid, folder)
-
-    monkeypatch.setattr(db_module, "_import_project", failing)
-    with pytest.raises(RuntimeError):
-        LocalStore(root)
-    with sqlite3.connect(root / "metadata.sqlite3") as connection:
-        assert connection.execute("SELECT count(*) FROM projects").fetchone()[0] == 0  # rolled back whole
-    assert (root / "projects/data/artifacts/sets/crops/versions.jsonl").is_file()  # nothing renamed
-    monkeypatch.setattr(db_module, "_import_project", original)
-    assert len(LocalStore(root).versions("data", "sets/crops")) == 4
-
-
 def test_export_metadata(tmp_path, capsys):
     root = tmp_path / "root"
-    legacy_store(root)
-    LocalStore(root)
+    store = LocalStore(root)
+    for project in ("data", "models"):
+        store.create_project(project)
+    one, two = blob(root, "one"), blob(root, "two")
+    store.publish("data", "sets/crops", [one], metadata={"n": 1})
+    store.publish("data", "sets/crops", [two], metadata={"n": 2}, label="big")
+    store.publish("models", "fit", [one], inputs=["data:sets/crops@v2"])
     main(["export-metadata", str(root), str(tmp_path / "out")])
     out = capsys.readouterr().out
-    assert "versions.jsonl  5 rows" in out and "aliases.jsonl  4 rows" in out
+    assert "versions.jsonl  3 rows" in out and "aliases.jsonl  3 rows" in out
     versions = [json.loads(line) for line in (tmp_path / "out" / "versions.jsonl").read_text().splitlines()]
     assert [(v["project"], v["name"], v["version"]) for v in versions][:2] == [("data", "sets/crops", 1), ("data", "sets/crops", 2)]
     projects = [json.loads(line) for line in (tmp_path / "out" / "projects.jsonl").read_text().splitlines()]
     assert [p["name"] for p in projects] == ["data", "models"]
     consumers = [json.loads(line) for line in (tmp_path / "out" / "consumers.jsonl").read_text().splitlines()]
-    assert consumers == [{"input": "data:sets/crops@v2", "consumer": "models:fit@v1", "time": "e"}]
+    assert [(c["input"], c["consumer"]) for c in consumers] == [("data:sets/crops@v2", "models:fit@v1")]
     with pytest.raises(SystemExit):
         main(["export-metadata", str(tmp_path / "nothing"), str(tmp_path / "out2")])
 

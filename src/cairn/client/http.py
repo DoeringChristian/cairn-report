@@ -30,6 +30,29 @@ BATCH = 5_000
 BLOCK = 1 << 20  # uploads are sent in 1 MB blocks (http.client's default is 8 KB)
 
 
+class _Body:
+    """The chunks of a streamed response. Closing it (also before the first chunk, which a generator's `finally`
+    would miss) closes the connection."""
+
+    def __init__(self, response, connection):
+        self.response, self.connection, self.closed = response, connection, False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> bytes:
+        chunk = b"" if self.closed else self.response.read(1 << 20)
+        if not chunk:
+            self.close()
+            raise StopIteration
+        return chunk
+
+    def close(self) -> None:
+        self.closed = True
+        self.response.close()
+        self.connection.close()
+
+
 class ClientError(Exception):
     """An HTTP answer the client did not expect; `status` None means there was no answer at all."""
 
@@ -142,14 +165,7 @@ class Client:
             connection.close()
             raise
 
-        def chunks():
-            try:
-                while chunk := response.read(1 << 20):
-                    yield chunk
-            finally:
-                connection.close()
-
-        return response.status, found, chunks()
+        return response.status, found, _Body(response, connection)
 
     def json(self, method: str, path: str, value=None, expect=(200,)):
         body = None if value is None else json.dumps(value).encode()

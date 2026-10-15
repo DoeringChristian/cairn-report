@@ -13,9 +13,6 @@ something, add a `cairn.toml` at the project root:
     css = ["reports/style.css"]        # extra stylesheets, applied after the default style
     template_dir = "reports/template"  # files here replace the packaged page files by name
 
-    [page]
-    copy_preamble = "..."              # text put before the comments the Copy button copies
-
     [store]                            # the artifact store `cairn` reads and writes
     path = ".cairn/store"              # a local store folder (default: <cairn dir>/store), or:
     url = "https://store.example.org"  # a store server (`cairn server`)
@@ -28,7 +25,7 @@ something, add a `cairn.toml` at the project root:
     publish = [{ folder = "runs/descent/latest", name = "descent" }]  # folders `cairn publish` syncs
 
 The project root is the nearest folder, starting at the working directory, that
-contains `cairn.toml` (or the deprecated `cairn-report.toml`), `pixi.toml`, or `pyproject.toml`.
+contains `cairn.toml`, `pixi.toml`, or `pyproject.toml`. (A `cairn-report.toml` is an error: rename it to `cairn.toml`.)
 
 Where Cairn keeps things. Everything Cairn writes for a project goes into one folder, the base:
 
@@ -42,7 +39,7 @@ Resolution, first match wins:
 
     base          $CAIRN_DIR, else `[cairn] dir` in cairn.toml (relative to the project root), else
                   `<project root>/.cairn` when a project root is found, else none
-    data root     `--data-dir`, else $CAIRN_DATA_DIR (or the deprecated $CAIRN_STATE_DIR), else
+    data root     `--data-dir`, else $CAIRN_DATA_DIR, else
                   `<base>/pending`, else `$XDG_DATA_HOME/cairn` (~/.local/share/cairn)
     cache root    $CAIRN_CACHE_DIR, else `<base>/cache`, else `$XDG_CACHE_HOME/cairn` (~/.cache/cairn)
     local store   `[store] path` if set, else `<base>/store`
@@ -55,35 +52,25 @@ resolves the store and build folders for that project.
 from __future__ import annotations
 
 import os
-import shutil
-import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 CONFIG_FILE = "cairn.toml"
-LEGACY_CONFIG_FILE = "cairn-report.toml"  # read when cairn.toml is absent (deprecated)
-ROOT_MARKERS = (CONFIG_FILE, LEGACY_CONFIG_FILE, "pixi.toml", "pyproject.toml")
+OLD_CONFIG_FILE = "cairn-report.toml"  # the name before Cairn: never read, only recognized to say what to do
+ROOT_MARKERS = (CONFIG_FILE, OLD_CONFIG_FILE, "pixi.toml", "pyproject.toml")
 BASE_ENV = "CAIRN_DIR"
 BASE_NAME = ".cairn"
-_WARNED: set[Path] = set()
-_NOTED: set[str] = set()
 _DIR_CACHE: dict[tuple, str | None] = {}
 
 
 def config_path(root: Path) -> Path | None:
-    """The config file of a project root: cairn.toml, else the deprecated cairn-report.toml (with a
-    warning on stderr, once per root); both present is an error."""
-    new, old = root / CONFIG_FILE, root / LEGACY_CONFIG_FILE
-    if new.is_file() and old.is_file():
-        raise ValueError(f"{root} has both {CONFIG_FILE} and {LEGACY_CONFIG_FILE}: keep {CONFIG_FILE} and delete {LEGACY_CONFIG_FILE}")
-    if new.is_file():
-        return new
-    if old.is_file():
-        if root not in _WARNED:
-            _WARNED.add(root)
-            print(f"warning: {old} is deprecated: rename it to {CONFIG_FILE}", file=sys.stderr)
-        return old
+    """The config file of a project root (`cairn.toml`), or None. A `cairn-report.toml` without it is an error."""
+    file = root / CONFIG_FILE
+    if file.is_file():
+        return file
+    if (root / OLD_CONFIG_FILE).is_file():
+        raise ValueError(f"{root / OLD_CONFIG_FILE} is the config file of cairn-report: rename it to {CONFIG_FILE}")
     return None
 
 
@@ -97,7 +84,6 @@ class Config:
     extra_css: tuple[Path, ...] = field(default_factory=tuple)
     template_dir: Path | None = None
     store: dict = field(default_factory=dict)
-    page: dict = field(default_factory=dict)
 
     @property
     def source(self) -> Path | None:
@@ -119,21 +105,19 @@ def find_project(start: Path | None = None) -> Path:
 
 def _configured_dir(root: Path) -> str | None:
     """`[cairn] dir` of the project's config file (None if absent or the file cannot be read; load_config reports errors)."""
-    for name in (CONFIG_FILE, LEGACY_CONFIG_FILE):
-        file = root / name
+    file = root / CONFIG_FILE
+    try:
+        info = file.stat()
+    except OSError:
+        return None
+    key = (str(file), info.st_mtime_ns, info.st_size)
+    if key not in _DIR_CACHE:
         try:
-            info = file.stat()
-        except OSError:
-            continue
-        key = (str(file), info.st_mtime_ns, info.st_size)
-        if key not in _DIR_CACHE:
-            try:
-                value = (tomllib.loads(file.read_text()).get("cairn") or {}).get("dir")
-            except (OSError, ValueError, AttributeError):
-                value = None
-            _DIR_CACHE[key] = value if isinstance(value, str) and value else None
-        return _DIR_CACHE[key]
-    return None
+            value = (tomllib.loads(file.read_text()).get("cairn") or {}).get("dir")
+        except (OSError, ValueError, AttributeError):
+            value = None
+        _DIR_CACHE[key] = value if isinstance(value, str) and value else None
+    return _DIR_CACHE[key]
 
 
 def base_for(root: Path) -> Path:
@@ -172,55 +156,14 @@ def protect(base: Path | None, *paths: Path) -> None:
         pass
 
 
-def _note(key: str, text: str) -> None:
-    if key not in _NOTED:
-        _NOTED.add(key)
-        print(text, file=sys.stderr)
-
-
-def migrate_store(config: "Config") -> None:
-    """Move the earlier default store `<project>/.store` to `<base>/store` (once; never overwrites; skipped
-    when `[store] path` names the folder)."""
-    if "path" in config.store or "url" in config.store:
-        return
-    old, new = config.project / ".store", config.store_path
-    if not old.is_dir() or old.is_symlink() or os.path.realpath(old) == os.path.realpath(new):
-        return
-    if new.exists():
-        _note(f"store:{old}", f"cairn: {old} was not moved: {new} exists already (delete or merge {old} yourself)")
-        return
-    protect(config.cairn_dir, new)
-    try:
-        new.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(old), str(new))
-    except OSError as error:
-        _note(f"store:{old}", f"cairn: could not move {old} to {new}: {error}")
-        return
-    _note(f"store:{old}", f"cairn: moved the local store {old} to {new}")
-    legacy = config.project / "generated" / "reports"
-    if legacy.is_dir():
-        _note(f"build:{legacy}", f"cairn: reports now build into {config.output_dir}; {legacy} is no longer used and can be deleted")
-
-
 def load_config(project: Path | str | None = None) -> Config:
-    """Read cairn.toml (or the deprecated cairn-report.toml, if any) and resolve every path against the project root."""
+    """Read cairn.toml (if any) and resolve every path against the project root."""
     root = Path(project).resolve() if project else find_project()
     data: dict = {}
     source = config_path(root) or root / CONFIG_FILE
     if source.is_file():
         data = tomllib.loads(source.read_text())
-    if "logger" in data:
-        raise ValueError(f"{source}: [logger] was removed: the logger only writes files into the run folder "
-                         "(sync a running job with `cairn publish <folder> <name> --watch`)")
-    if "hub" in data:
-        raise ValueError(f"{source}: [hub] was removed: point [store] url at a store server "
-                         "(`cairn server`) and publish with `cairn publish`")
-    if "outputs_dir" in data:
-        data = {key: value for key, value in data.items() if key != "outputs_dir"}
-        if source not in _WARNED:
-            _WARNED.add(source)
-            print(f"warning: {source}: outputs_dir is no longer used: delete it", file=sys.stderr)
-    unknown = set(data) - {"reports_dir", "output_dir", "cairn", "style", "store", "page"}
+    unknown = set(data) - {"reports_dir", "output_dir", "cairn", "style", "store"}
     if unknown:
         raise ValueError(f"{source}: unknown keys {sorted(unknown)}")
     section = data.get("cairn", {})
@@ -255,10 +198,6 @@ def load_config(project: Path | str | None = None) -> Config:
                                                  and all(isinstance(value, str) for value in item.values()) for item in mappings):
         raise ValueError(f"{source}: [store] publish must be a list of {{ folder = ..., name = ... }} tables")
 
-    page = data.get("page", {})
-    if set(page) - {"copy_preamble"} or not isinstance(page.get("copy_preamble", ""), str):
-        raise ValueError(f"{source}: [page] takes copy_preamble (text)")
-
     def path(value: str | None, default: str | None) -> Path | None:
         if value is None and default is None:
             return None
@@ -286,5 +225,4 @@ def load_config(project: Path | str | None = None) -> Config:
         extra_css=css,
         template_dir=template_dir,
         store=dict(store),
-        page=dict(page),
     )
