@@ -21,8 +21,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..logger import read_jsonl
-from ..ranges import byte_range
+from .logger import read_jsonl
+from .ranges import byte_range
 from . import refs
 from .blobs import CHUNK, BlobStore, append_lines, clean_entries, now, resolve_entry
 from .refs import Ref

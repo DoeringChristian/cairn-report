@@ -8,7 +8,7 @@ const el = (tag, className, text) => { const node = document.createElement(tag);
 /* The builder tells each page where the site root is (relative) and which report (slug) it shows,
    so the same build works at any address: a project server, the store UI's /p/<project>/r/, or plain static hosting. */
 const siteRoot = new URL(PAGE.root || "./", location.href).pathname;
-/* `cairn-report share` writes one page that carries the shared reports (#cairn-bundle); links between
+/* `cairn share` writes one page that carries the shared reports (#cairn-bundle); links between
    reports then switch the report inside the page, so it works on hosts that serve a single file. */
 const BUNDLE = (() => { const node = document.getElementById("cairn-bundle"); return node ? JSON.parse(node.textContent) : null; })();
 const VIRTUAL_SITE = "https://site.invalid/";  // bundle mode: report links resolve against this stand-in address
@@ -140,7 +140,7 @@ function showHeader(data) {
   bundleLinks($(".hero"));
 }
 /* The Data panel: each input the report was built from, pinned to an exact version. The version carries its exact
-   reference in data-artifact. Served by the store UI (`cairn-report ui`, under /p/<project>/r/), it links to that version's artifact page
+   reference in data-artifact. Served by the store UI (`cairn ui`, under /p/<project>/r/), it links to that version's artifact page
    (/p/<project>/a/<name>@v<n>); in local and bundle modes it stays plain text. */
 const STORE_SERVED = !BUNDLE && /^\/p\/[^/]+\/r\//.test(location.pathname);
 function artifactPage(exact) {

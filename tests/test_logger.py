@@ -8,9 +8,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pytest
 
-from cairn_report.build import build_all
-from cairn_report.config import load_config
-from cairn_report.logger import RunLogger, read_artifacts, read_jsonl, read_scalars
+from cairn.build import build_all
+from cairn.config import load_config
+from cairn.logger import RunLogger, read_artifacts, read_jsonl, read_scalars
 
 
 def histogram(values):
@@ -48,7 +48,7 @@ def test_rejects_bad_names_and_values(tmp_path):
 
 
 def test_report_reads_logged_run(tmp_path, monkeypatch):
-    from cairn_report import store
+    import cairn as store
 
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     (tmp_path / "pyproject.toml").write_text("")

@@ -1,21 +1,41 @@
-# cairn-report
+# Cairn
 
-Small pieces for research projects that keep their evidence in plain run
-folders:
+An artifact store for research projects that keep their evidence in plain run folders, with
+reports on top of it. Three parts live in this package:
 
-- a **builder** that turns single-page Markdown reports into a static site, reading
-  numbers and figures from the artifacts each report declares as inputs;
-- a **run logger** that writes evidence to fixed places in a run folder (files only;
-  `cairn-report publish --watch` syncs a running job's folder to the store);
-- an **artifact store**: named, versioned folders (datasets, run outputs, reports) in a local
-  folder or on a token-protected server, with `publish`, `pull`, and lineage, and a **UI**
-  (`cairn-report ui`) to explore it in a browser;
-- **run bookkeeping** for Hydra projects: each run's `run.json`, the `latest`
-  link, study completion, and a source snapshot per run.
+- the **client**: a light Python API (`cairn.pull`, `cairn.publish`, lineage) and the `cairn`
+  command, the **report builder** that turns single-page Markdown reports into a static site
+  (reading numbers and figures from the artifacts each report declares as inputs), a **run
+  logger** that writes evidence to fixed places in a run folder (files only; `cairn publish
+  --watch` syncs a running job's folder to the store), and **run bookkeeping** for Hydra projects
+  (each run's `run.json`, the `latest` link, study completion, a source snapshot per run);
+- the **server** (`cairn server`): the artifact store, API only: named, versioned folders
+  (datasets, run outputs, reports) in a local folder or on a token-protected server, with
+  `publish`, `pull`, and lineage;
+- the **UI** (`cairn ui`): explores a store, local or remote, in a browser.
 
-cairn-report provides mechanisms only. How reports are organised, which sections
-they have, and what counts as evidence is up to the project (for agents, the
-`standalone-research-project` skill decides that).
+Cairn provides mechanisms only. How reports are organised, which sections they have, and what
+counts as evidence is up to the project (for agents, the `standalone-research-project` skill
+decides that).
+
+### Coming from cairn-report
+
+Cairn is the next version of cairn-report (0.13.0 is the first release under the new names):
+
+| cairn-report | Cairn |
+| --- | --- |
+| distribution `cairn-report` | `cairn` |
+| `import cairn_report` / `cairn_report.store` | `import cairn` (`cairn.pull`, `cairn.publish`, ...) |
+| `cairn_report.store.server` | `cairn.server` |
+| command `cairn-report` | `cairn` (also `python -m cairn`) |
+| `cairn-report store serve` | `cairn server` |
+| `cairn-report store token ...` | `cairn token ...` |
+| `cairn-report store migrate` | `cairn migrate` |
+| `cairn-report.toml` | `cairn.toml` (the old name is still read, with a warning, when `cairn.toml` is absent) |
+| `~/.cache/cairn-report/` | `~/.cache/cairn/` |
+
+The environment variables (`CAIRN_STORE_TOKEN`, `CAIRN_INPUTS`) and the store layout are unchanged.
+The old Cairn tracker (cairn-track) cannot be installed in the same environment.
 
 ## Install
 
@@ -26,16 +46,18 @@ In a pixi project:
 graphviz = "*"   # only needed for Graphviz diagram fences
 
 [pypi-dependencies]
-cairn-report = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.13.0" }
+cairn = { git = "https://github.com/DoeringChristian/cairn-report.git", tag = "v0.13.0" }
 
 [tasks]
-report-build = "cairn-report build"
-report-serve = "cairn-report serve --host 127.0.0.1 --port 8000"
+report-build = "cairn build"
+report-serve = "cairn serve --host 127.0.0.1 --port 8000"
 ```
 
 With uv or pip: `uv add git+https://github.com/DoeringChristian/cairn-report.git`.
-Optional extras: `cairn-report[video]` (`log.video` from frames),
-`cairn-report[hydra]` (run bookkeeping for Hydra projects).
+The base install is light (`import cairn` loads neither the server, the UI, matplotlib, plotly, nor
+hydra). Extras: `cairn[video]` (`log.video` from frames), `cairn[hydra]` (run bookkeeping for Hydra
+projects), and `cairn[server]` and `cairn[ui]`, which add nothing yet (the server and the UI use the
+standard library, and the UI's built files ship with the package).
 
 ## Reports
 
@@ -57,9 +79,9 @@ reports/                       ->  generated/reports/
 ```
 
 ```bash
-cairn-report build             # build every report into generated/reports/
-cairn-report build --report beta
-cairn-report serve             # build, then serve at http://127.0.0.1:8000/
+cairn build             # build every report into generated/reports/
+cairn build --report beta
+cairn serve             # build, then serve at http://127.0.0.1:8000/
 ```
 
 The build also writes `generated/reports/index.html`, a project index with one
@@ -102,7 +124,7 @@ A report declares the artifacts it reads in its front matter, by local name:
 ---
 title: Descent
 inputs:
-  descent: descent@latest          # [project:]name[@vN|@alias|@label], as in `store.pull`
+  descent: descent@latest          # [project:]name[@vN|@alias|@label], as in `cairn.pull`
   crops: datasets/crops@v3
 ---
 ```
@@ -120,7 +142,7 @@ table = read_csv(inputs["crops"] / "tables" / "cases.csv")
 
 Images use `input:descent/figures/trajectory.png`. The lightbox of such a figure
 shows the input reference (`descent@v3//figures/trajectory.png`) and the exact
-artifact version. The store comes from `[store]` in `cairn-report.toml`; the
+artifact version. The store comes from `[store]` in `cairn.toml`; the
 build does not touch `.cairn-inputs.jsonl`: a report records its inputs in its
 own manifest instead.
 
@@ -162,7 +184,7 @@ store server and the store UI answer range requests, so browsers can seek.
 ### Publishing a report
 
 ```bash
-cairn-report publish reports/alpha
+cairn publish reports/alpha
 ```
 
 builds the report and stores it as the next version of the artifact
@@ -172,7 +194,7 @@ version can be viewed on its own), with metadata `{title, status, summary}` and
 the exact input versions as its inputs. A report whose source, inputs, and
 metadata are unchanged creates no new version. Lineage follows: the report
 version lists its inputs, and each input lists the report as a consumer
-(`store.lineage`).
+(`cairn.lineage`).
 
 ### Comments
 
@@ -198,8 +220,8 @@ report remembers the reader's position in the browser.
 ### Sharing as one page
 
 ```bash
-cairn-report share                 # build, then write generated/share/index.html
-cairn-report share --report alpha  # only alpha
+cairn share                 # build, then write generated/share/index.html
+cairn share --report alpha  # only alpha
 ```
 
 `share` writes the reports as one self-contained page for hosts that take a
@@ -218,7 +240,7 @@ change the page, edit the report and run `share` again.
 ## Logging runs
 
 ```python
-from cairn_report.logger import RunLogger
+from cairn.logger import RunLogger
 
 log = RunLogger(output_dir)                  # one logger per run folder
 log.scalar("rmse", rmse)                     # metrics.jsonl; step=... for a series
@@ -237,24 +259,24 @@ code location that logged it. `read_scalars(run)` and `read_artifacts(run)` fold
 them to the latest value per name and the latest entry per file.
 
 The logger only writes these files into the run folder. To follow a running job
-from another machine, sync its folder: `cairn-report publish runs/x/latest x --watch -- python run.py`
+from another machine, sync its folder: `cairn publish runs/x/latest x --watch -- python run.py`
 adds new and changed files to one running version of the artifact `x` every
 `[store] interval` seconds, then completes it (or marks it failed when the command fails).
 
 **Watching a job.** `--watch` follows the folder as it exists when it starts. A Hydra run
 creates a new timestamped folder (`outputs/<name>/<timestamp>`), so either publish it after it
-finishes (`cairn-report publish outputs/x/latest x`) or have the job write to a fixed folder.
+finishes (`cairn publish outputs/x/latest x`) or have the job write to a fixed folder.
 
 ## Hydra runs
 
-`cairn_report.runs` and `cairn_report.snapshot` keep the record of each Hydra
+`cairn.runs` and `cairn.snapshot` keep the record of each Hydra
 run, so a project's entry point stays a few lines (needs the `hydra` extra):
 
 ```python
 # experiments/run.py
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
-    run_experiment(cfg, Experiment)   # from cairn_report.runs; Experiment is the project's base class
+    run_experiment(cfg, Experiment)   # from cairn.runs; Experiment is the project's base class
 ```
 
 ```yaml
@@ -266,8 +288,8 @@ hydra:
   run: {dir: "outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}"}
   sweep: {dir: "outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S}", subdir: "${hydra.job.num}"}
   callbacks:
-    source_snapshot: {_target_: cairn_report.snapshot.SourceSnapshotCallback}
-    study_completion: {_target_: cairn_report.runs.StudyCompletion}   # multiruns
+    source_snapshot: {_target_: cairn.snapshot.SourceSnapshotCallback}
+    study_completion: {_target_: cairn.runs.StudyCompletion}   # multiruns
 ```
 
 - `run_experiment` writes `run.json` (`running`, then `completed` or `failed`
@@ -282,7 +304,7 @@ hydra:
   secrets and data files excluded) in each run's `provenance/`: in `git` mode
   (default) the commit, the diff, and untracked sources; in `tree` mode a full
   copy. It also records the runtime environment.
-- `cairn-report finalize-study outputs/<name>/<timestamp>` completes a study
+- `cairn finalize-study outputs/<name>/<timestamp>` completes a study
   whose launcher died, by the same rule, once every trial job has ended.
 
 ## Store
@@ -297,32 +319,32 @@ the exact versions it consumed (`inputs`), and where it was published from. Alia
 A project works offline against a store folder (`.store` by default, `[store] path`). To share
 it, serve a folder over HTTP and point projects at the server. The two halves are separate:
 
-- the **store server** (`cairn-report store serve`) is only an artifact store: a JSON API and file
+- the **store server** (`cairn server`) is only an artifact store: a JSON API and file
   downloads, bearer tokens, no pages;
-- the **UI** (`cairn-report ui`) is a separate process that explores a store in a browser, either a
+- the **UI** (`cairn ui`) is a separate process that explores a store in a browser, either a
   folder or a store server, so it can run on a laptop against a store on a cluster.
 
 ```bash
-cairn-report store serve /srv/store      # store on 127.0.0.1:8800, UI on 127.0.0.1:8801; HTTPS reverse proxy in front
-cairn-report store serve /srv/store --no-ui [--port 8800] [--max-blob-gb 50]     # the store alone
+cairn server /srv/store      # store on 127.0.0.1:8800, UI on 127.0.0.1:8801; HTTPS reverse proxy in front
+cairn server /srv/store --no-ui [--port 8800] [--max-blob-gb 50]     # the store alone
 ```
 
-The first `serve` of a new folder creates it with a random owner token (owner-only, in
+The first `cairn server` run on a new folder creates it with a random owner token (owner-only, in
 `<folder>/token`); every launch prints `Store: <url>`, `UI: <url>` and `Token: <owner token>` to
 the terminal (never into a URL). Binding to a non-local `--host` warns: the server speaks plain
-HTTP. By default `serve` also starts `cairn-report ui` as a child process (own port: `--ui-port`,
+HTTP. By default `cairn server` also starts `cairn ui` as a child process (own port: `--ui-port`,
 default `--port` + 1; same `--host`) pointed at this store. The child gets the owner token only in
 its environment, never on its command line, and stops with the server; if the UI dies, the store
 keeps running and prints a warning. `--no-ui` starts the store alone.
 
-For local testing, `store serve <folder> --no-auth` needs no token: every request acts as the owner,
+For local testing, `cairn server <folder> --no-auth` needs no token: every request acts as the owner,
 clients connect without `CAIRN_STORE_TOKEN`, and the UI child runs `--no-auth` too. It is refused on
 any `--host` but loopback.
 
 ```bash
-cairn-report store token create /srv/store --project my-study --write --name cluster   # printed once
-cairn-report store token list /srv/store       # names, projects, access: never token values
-cairn-report store token revoke /srv/store cluster
+cairn token create /srv/store --project my-study --write --name cluster   # printed once
+cairn token list /srv/store       # names, projects, access: never token values
+cairn token revoke /srv/store cluster
 ```
 
 The owner token can do everything. A scoped token reads one project, and publishes to it only
@@ -336,42 +358,42 @@ In a project:
 [store]
 url = "https://store.example.org"                 # omit for a local store
 project = "my-study"                              # default: the folder name
-token_file = "~/.config/cairn-report/store-token" # chmod 600; or CAIRN_STORE_TOKEN
+token_file = "~/.config/cairn/store-token" # chmod 600; or CAIRN_STORE_TOKEN
 allow_http = false                                # plain HTTP to a non-local server (default: refused)
 exclude = [".submitit/**/*.pkl"]                  # never published: gitignore-style globs on project paths
 interval = 30                                     # seconds between syncs with --watch
 ```
 
 ```bash
-cairn-report publish data/crops datasets/crops --alias paper      # a folder becomes the next version (none if unchanged)
-cairn-report publish runs/x/latest x --watch -- python run.py     # sync a running job; complete (or fail) with it
-cairn-report publish reports/alpha                                # build a report and publish reports/alpha
-cairn-report pull datasets/crops@paper                            # print the local, read-only copy's path
-cairn-report pull x@latest --into DIR [--no-record]               # copy it into DIR instead
+cairn publish data/crops datasets/crops --alias paper      # a folder becomes the next version (none if unchanged)
+cairn publish runs/x/latest x --watch -- python run.py     # sync a running job; complete (or fail) with it
+cairn publish reports/alpha                                # build a report and publish reports/alpha
+cairn pull datasets/crops@paper                            # print the local, read-only copy's path
+cairn pull x@latest --into DIR [--no-record]               # copy it into DIR instead
 ```
 
 ```python
-from cairn_report import store
-crops = store.pull("datasets/crops@v3")      # works with a local and a remote store alike
+import cairn
+crops = cairn.pull("datasets/crops@v3")      # works with a local and a remote store alike
 ```
 
 `exclude` takes gitignore-style globs on project paths: `*` and `?` stay within a folder, `**`
 spans folders, a leading `/` anchors to the project root. Pulled copies live in
-`~/.cache/cairn-report/artifacts/`, with a blob cache beside them, so a file is downloaded once.
+`~/.cache/cairn/artifacts/`, with a blob cache beside them, so a file is downloaded once.
 
 The server's API lives under `/api/v2/` and its files under `/files/<project>/<name>@vN//<path>`
 (ETag, Range, `Content-Security-Policy: sandbox`); the routes are listed in
-`cairn_report/store/server.py`. Besides publishing and resolving it answers what a viewer needs:
+`cairn/server/__init__.py`. Besides publishing and resolving it answers what a viewer needs:
 projects with their artifact count and last update, an artifact's summary with its latest version and
 aliases, a version's file list, and lineage. Tokens are bearer tokens only: the server has no
 cookies, no login page and no HTML. It never runs pushed code.
 
-### Exploring a store: `cairn-report ui`
+### Exploring a store: `cairn ui`
 
 ```bash
-cairn-report ui                                   # the store in cairn-report.toml ([store] url or path), on 127.0.0.1:8801
-cairn-report ui --store https://store.example.org # a remote store, e.g. from a laptop against a cluster-side store
-cairn-report ui --store /srv/store                # a store folder
+cairn ui                                   # the store in cairn.toml ([store] url or path), on 127.0.0.1:8801
+cairn ui --store https://store.example.org # a remote store, e.g. from a laptop against a cluster-side store
+cairn ui --store /srv/store                # a store folder
 ```
 
 The UI opens the store only through its interface (a store server's API, or a folder's store
@@ -406,7 +428,7 @@ Before 0.13 the store was the "hub" (`[hub]`, `hub init`, `push`, MLflow, `run:`
 which is gone without aliases. Convert an old hub folder once:
 
 ```bash
-cairn-report store migrate /srv/hub /srv/store      # the old folder is only read; blobs are hard-linked
+cairn migrate /srv/hub /srv/store      # the old folder is only read; blobs are hard-linked
 ```
 
 Each old project becomes a project. Each `<run>/<timestamp>` becomes a version of the artifact
@@ -414,11 +436,11 @@ Each old project becomes a project. Each `<run>/<timestamp>` becomes a version o
 old report version is migrated, split into one `reports/<slug>` artifact per report folder
 (`a/b` becomes `a-b`, the root report `overview`), stored as it was and not rebuilt. Reports that
 read runs with `run:` must be rewritten by hand to declare `inputs:`. Running it again adds
-nothing. `store serve /srv/store` then gives the new folder an owner token if it has none.
+nothing. `cairn server /srv/store` then gives the new folder an owner token if it has none.
 
 ## Configuration
 
-Everything has a default; `cairn-report.toml` at the project root changes it:
+Everything has a default; `cairn.toml` at the project root changes it:
 
 ```toml
 reports_dir = "reports"            # holds one folder per report

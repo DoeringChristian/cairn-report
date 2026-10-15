@@ -3,10 +3,10 @@ import json
 
 import pytest
 
-from cairn_report.cli import main
-from cairn_report.store import LocalStore
-from cairn_report.store.server import make_server
-from cairn_report.store.tokens import init_root
+from cairn.cli import main
+from cairn import LocalStore
+from cairn.server import make_server
+from cairn.tokens import init_root
 
 from test_server import call
 
@@ -59,7 +59,7 @@ def old_hub(tmp_path):
 def test_migrate(old_hub, tmp_path, capsys):
     new = tmp_path / "new"
     before = sorted(str(p) for p in old_hub.rglob("*"))
-    main(["store", "migrate", str(old_hub), str(new)])
+    main(["migrate", str(old_hub), str(new)])
     out = capsys.readouterr().out
     assert "2 runs migrated" not in out and "3 runs migrated" in out
     assert "1 older report versions" in out and "Bad Name" in out and "inputs:" in out
@@ -88,7 +88,7 @@ def test_migrate(old_hub, tmp_path, capsys):
     assert store.resolve("demo:reports/overview")[2]["metadata"]["title"] == "Overview"
     assert store.resolve("demo:reports/overview")[2]["inputs"] == []
 
-    main(["store", "migrate", str(old_hub), str(new)])  # idempotent
+    main(["migrate", str(old_hub), str(new)])  # idempotent
     assert "0 runs migrated (3 already there)" in capsys.readouterr().out
     assert len(store.versions("demo", "descent")) == 3
     assert len(store.versions("demo", "reports/overview")) == 1
@@ -99,12 +99,12 @@ def test_migrated_store_is_served(old_hub, tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     new = tmp_path / "new"
-    main(["store", "migrate", str(old_hub), str(new)])
+    main(["migrate", str(old_hub), str(new)])
     token = init_root(new).read_text().strip()
     httpd = make_server(new, port=0)
     httpd.RequestHandlerClass.log_message = lambda *a: None
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    from cairn_report.ui.server import RemoteBackend, make_ui_server
+    from cairn.ui.server import RemoteBackend, make_ui_server
 
     ui_httpd = make_ui_server(RemoteBackend(f"http://127.0.0.1:{httpd.server_address[1]}", False), port=0, secure_cookie=False)
     ui_httpd.RequestHandlerClass.log_message = lambda *a: None

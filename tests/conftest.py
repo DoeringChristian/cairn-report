@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pytest
 
-from cairn_report.logger import RunLogger
+from cairn.logger import RunLogger
 
 RUN = "demo/2026-01-01_00-00-00"
 
@@ -37,8 +37,8 @@ def make_data(base: Path) -> Path:
 
 def make_tree(project: Path) -> Path:
     """Two flat reports: alpha reads the artifact `descent` (declared as an input) and links to beta."""
-    from cairn_report import store
-    from cairn_report.config import load_config
+    import cairn as store
+    from cairn.config import load_config
 
     config = load_config(project)
     store.publish("descent", make_data(project.parent), config=config, store=store.open_store(config))

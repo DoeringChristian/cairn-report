@@ -1,31 +1,37 @@
-"""The artifact store, light API.
+"""Cairn: an artifact store for run outputs and reports, with a server and a UI, plus static reports and a run logger.
 
-    from cairn_report import store
+This is the light API (no server, UI, matplotlib, plotly, or hydra is imported):
 
-    crops = store.pull("datasets/crops@v3")        # read-only local copy; the exact version is recorded as an input
-    store.publish("models/denoiser", "checkpoints/best", metadata={"psnr": 31.2}, aliases=["best"])
-    store.alias("models/denoiser@v4", "paper")
-    store.versions("descent")
-    store.lineage("reports/boundary@v2")
+    import cairn
 
-`store=None` means the configured store (`[store]` in cairn-report.toml): a store server when `url`
+    crops = cairn.pull("datasets/crops@v3")        # read-only local copy; the exact version is recorded as an input
+    cairn.publish("models/denoiser", "checkpoints/best", metadata={"psnr": 31.2}, aliases=["best"])
+    cairn.alias("models/denoiser@v4", "paper")
+    cairn.versions("descent")
+    cairn.lineage("reports/boundary@v2")
+
+`store=None` means the configured store (`[store]` in cairn.toml): a store server when `url`
 is set (`RemoteStore`; the token comes from CAIRN_STORE_TOKEN or `token_file`), else a local folder,
 `path` (default `.store` in the project root). `project` names the default project (default: the
 project folder's slug). Every `pull` appends the exact version to `$CAIRN_INPUTS`, else to
 `.cairn-inputs.jsonl` in the working directory; `publish` carries a folder's `.cairn-inputs.jsonl`
 along as the version's `inputs`, which is how lineage is recorded without any framework hook.
+
+The store server is `cairn.server` and the UI is `cairn.ui`; both are imported only when used.
 """
 
 from __future__ import annotations
+
+__version__ = "0.13.0"  # before the imports below: submodules read it
 
 import json
 import os
 import socket
 from pathlib import Path
 
-from ..config import Config, load_config
-from ..logger import read_jsonl
-from ..push import HashCache, Limited, connect, entries_for, project_name, scan
+from .config import Config, load_config
+from .logger import read_jsonl
+from .push import HashCache, Limited, connect, entries_for, project_name, scan
 from . import refs
 from .blobs import now
 from .cache import default_root, materialize
@@ -33,14 +39,14 @@ from .local import BadRange, FileRead, Forbidden, LocalStore, NotFound, StoreErr
 from .refs import Ref
 from .remote import RemoteStore
 
-__all__ = ["BadRange", "FileRead", "Forbidden", "LocalStore", "NotFound", "Ref", "RemoteStore", "StoreError", "Unauthorized", "alias", "lineage", "Publication", "open_store", "publish", "pull", "versions"]
+__all__ = ["__version__", "BadRange", "FileRead", "Forbidden", "LocalStore", "NotFound", "Ref", "RemoteStore", "StoreError", "Unauthorized", "alias", "lineage", "Publication", "open_store", "publish", "pull", "versions"]
 
 INPUTS_FILE = ".cairn-inputs.jsonl"
 INPUTS_ENV = "CAIRN_INPUTS"
 
 
 def open_store(config: Config | None = None) -> LocalStore | RemoteStore:
-    """The store `[store]` in cairn-report.toml names, with the project as the default for references."""
+    """The store `[store]` in cairn.toml names, with the project as the default for references."""
     config = config or load_config()
     settings = config.store
     project = project_name(config)
@@ -135,7 +141,7 @@ def publish(name: str, folder: Path | str, *, metadata: dict | None = None, alia
 class Publication:
     """One running version that follows a folder while a job writes it.
 
-        with store.Publication("sweep", "runs/sweep/latest") as pub:
+        with cairn.Publication("sweep", "runs/sweep/latest") as pub:
             ...                    # the job runs and writes into the folder
             pub.sync()             # add new and changed files now (call it as often as you like)
 

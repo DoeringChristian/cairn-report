@@ -150,7 +150,7 @@ def connect(config: Config | None, url: str | None = None, allow_http: bool = Fa
     settings = config.store if config else {}
     url = url or settings.get("url")
     if not url:
-        raise SystemExit("no store URL: set [store] url in cairn-report.toml")
+        raise SystemExit("no store URL: set [store] url in cairn.toml")
     token = os.environ.get(TOKEN_ENV, "").strip()
     if not token and settings.get("token_file"):
         token_file = Path(settings["token_file"]).expanduser()
@@ -168,7 +168,7 @@ def connect(config: Config | None, url: str | None = None, allow_http: bool = Fa
 def project_name(config: Config) -> str:
     name = config.store.get("project") or re.sub(r"[^a-z0-9_.-]+", "-", config.project.name.lower()).strip("-.")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,62}", name or ""):
-        raise SystemExit(f"store project name {name!r} is not a valid slug; set [store] project in cairn-report.toml")
+        raise SystemExit(f"store project name {name!r} is not a valid slug; set [store] project in cairn.toml")
     return name
 
 
@@ -256,7 +256,7 @@ class HashCache:
     """SHA-256 per file, reused while size and modification time are unchanged."""
 
     def __init__(self, project: Path):
-        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cairn-report"
+        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cairn"
         self.path = base / f"push-{hashlib.sha256(str(project.resolve()).encode()).hexdigest()[:16]}.json"
         try:
             self.entries = json.loads(self.path.read_text())

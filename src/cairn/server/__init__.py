@@ -1,11 +1,11 @@
 """The store server: a LocalStore root shared over HTTP, behind tokens. Only an artifact store: a JSON API and
-file downloads, no pages (`cairn-report ui` explores a store in a browser, locally or against this server).
+file downloads, no pages (`cairn ui` explores a store in a browser, locally or against this server).
 
-    cairn-report store serve <root> [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth]
+    cairn server <root> [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth]
 
 A new root gets a fresh owner token on first launch; every launch prints `Store: <url>` and
 `Token: <owner token>` to the terminal (never into a URL). Scoped tokens (one project, read or
-write) are made with `cairn-report store token create` (see tokens.py). Bind localhost, and put an
+write) are made with `cairn token create` (see tokens.py). Bind localhost, and put an
 HTTPS reverse proxy in front of anything else: the server speaks plain HTTP.
 
 Artifact names are slash paths (`datasets/crops`), so every route says where the name ends:
@@ -51,11 +51,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .. import __version__
-from . import refs
-from .blobs import SHA256, clean_entries
-from .local import BadRange, LocalStore, NotFound, StoreError
-from .refs import Ref
-from .tokens import OWNER, Principal, Tokens, init_root, read_token
+from .. import refs
+from ..blobs import SHA256, clean_entries
+from ..local import BadRange, LocalStore, NotFound, StoreError
+from ..refs import Ref
+from ..tokens import OWNER, Principal, Tokens, init_root, read_token
 
 MAX_JSON = 64 * 1024 * 1024
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -395,7 +395,7 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         raise SystemExit("--no-auth serves every project to anyone who can connect: only with a loopback --host")
     root = root.resolve()
     if not (root / "token").is_file():
-        raise SystemExit(f"{root} is not a store root; `cairn-report store serve {root}` creates it")
+        raise SystemExit(f"{root} is not a store root; `cairn server {root}` creates it")
     handler = type("Handler", (StoreHandler,), {
         "store": LocalStore(root),
         "owner_token": read_token(root / "token"),
@@ -409,14 +409,14 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
 
 
 def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool):
-    """`cairn-report ui` as a child process beside this store (so page work never loads the store server).
+    """`cairn ui` as a child process beside this store (so page work never loads the store server).
 
     The child reaches the store at `host:port`; the owner token goes through its environment only (never its
     command line). Returns (process, the line it printed with its address), or (None, None) if it did not start.
     """
     where = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
     url = f"http://[{where}]:{port}" if ":" in where else f"http://{where}:{port}"
-    command = [sys.executable, "-m", "cairn_report", "ui", "--store", url, "--host", host, "--port", str(ui_port), "--allow-http"]
+    command = [sys.executable, "-m", "cairn", "ui", "--store", url, "--host", host, "--port", str(ui_port), "--allow-http"]
     if no_auth:
         command.append("--no-auth")
     if host in LOCAL_HOSTS:
@@ -437,8 +437,8 @@ def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool
 def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
                 no_auth: bool = False, ui_port: int | None = None) -> None:
     """Serve a store; a new root (no token yet) is initialized first. Prints the owner token, which clients
-    and `cairn-report ui` log in with, to the terminal only: never into a URL. With `ui_port` (0: any free
-    port), `cairn-report ui` runs as a child process beside the store and stops with it."""
+    and `cairn ui` log in with, to the terminal only: never into a URL. With `ui_port` (0: any free
+    port), `cairn ui` runs as a child process beside the store and stops with it."""
     created = None if (root / "token").exists() else init_root(root)
     server = make_server(root, host, port, max_blob=max_blob, no_auth=no_auth)
     if host not in LOCAL_HOSTS:
@@ -459,8 +459,8 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         print("Authentication is off (--no-auth): every request acts as the owner; for local testing only", flush=True)
     else:
         print(f"Token: {server.RequestHandlerClass.owner_token}", flush=True)
-        print("  clients read it from CAIRN_STORE_TOKEN or a token_file, and `cairn-report ui` logs in with it;"
-              " `cairn-report store token create` makes project-scoped tokens", flush=True)
+        print("  clients read it from CAIRN_STORE_TOKEN or a token_file, and `cairn ui` logs in with it;"
+              " `cairn token create` makes project-scoped tokens", flush=True)
     previous = None
     if threading.current_thread() is threading.main_thread():  # SIGTERM stops the UI child too
         previous = signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))

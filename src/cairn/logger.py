@@ -1,6 +1,6 @@
 """Standard run logger: write run evidence to fixed locations with its code origin.
 
-Import it as `from cairn_report.logger import RunLogger`; one `RunLogger` per
+Import it as `from cairn.logger import RunLogger`; one `RunLogger` per
 Hydra run directory. This module defines the run file format for both sides: the
 report builder reads runs with the same `read_*` functions. Every call writes one well-defined file. The two indexes are
 append-only JSON Lines, so nothing already written is ever rewritten:
@@ -17,7 +17,7 @@ append-only JSON Lines, so nothing already written is ever rewritten:
       logs/<name>.txt      human-readable logs
 
 The logger only writes these files. To follow a running job from elsewhere, sync its run folder with
-`cairn-report publish <folder> <name> --watch`.
+`cairn publish <folder> <name> --watch`.
 
 Read them back with `read_scalars(run_dir)` (latest value per name) and
 `read_artifacts(run_dir)` (latest entry per path); a truncated last line from a
@@ -258,7 +258,7 @@ class RunLogger:
             import imageio.v3 as iio
         except ImportError as error:
             raise ImportError("log.video with frames needs imageio and imageio-ffmpeg "
-                              "(`pip install 'cairn-report[video]'`)") from error
+                              "(`pip install 'cairn[video]'`)") from error
         import numpy as np
 
         frames = np.asarray(video)

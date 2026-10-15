@@ -10,12 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from cairn_report import store
-from cairn_report.cli import main
-from cairn_report.push import Client
-from cairn_report.store import BadRange, LocalStore, RemoteStore, StoreError
-from cairn_report.store.server import make_server, serve_store
-from cairn_report.store.tokens import create_token, init_root, list_tokens, revoke_token
+import cairn as store
+from cairn.cli import main
+from cairn.push import Client
+from cairn import BadRange, LocalStore, RemoteStore, StoreError
+from cairn.server import make_server, serve_store
+from cairn.tokens import create_token, init_root, list_tokens, revoke_token
 
 from test_store import env, folder  # noqa: F401  (the project fixture and folder helper)
 
@@ -62,7 +62,7 @@ def remote(server, token=None, project="study") -> RemoteStore:
 
 
 def use_remote(env, server, project="study"):
-    (env / "cairn-report.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "{project}"\ninterval = 1\n')
+    (env / "cairn.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "{project}"\ninterval = 1\n')
     return remote(server, project=project)
 
 
@@ -100,7 +100,7 @@ def test_the_server_has_no_pages_and_no_cookies(server, project):
 
 
 def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
-    import cairn_report.store.server as module
+    import cairn.server as module
 
     original = module.ThreadingHTTPServer.serve_forever
     module.ThreadingHTTPServer.serve_forever = lambda self: self.server_close()
@@ -187,14 +187,14 @@ def test_tokens_are_stored_hashed(server):
 
 
 def test_token_commands(server, capsys):
-    main(["store", "token", "create", str(server.root), "--project", "alpha", "--write", "--name", "ci"])
+    main(["token", "create", str(server.root), "--project", "alpha", "--write", "--name", "ci"])
     out = capsys.readouterr().out
     token = re.search(r"Token: (\S+)", out).group(1)
     assert api(server, "GET", "/api/v2/projects/alpha", token=token)["name"] == "alpha"  # the project was created
-    main(["store", "token", "list", str(server.root)])
+    main(["token", "list", str(server.root)])
     listing = capsys.readouterr().out
     assert "ci\talpha\twrite" in listing and token not in listing
-    main(["store", "token", "revoke", str(server.root), "ci"])
+    main(["token", "revoke", str(server.root), "ci"])
     assert call(server, "GET", "/api/v2/projects/alpha", token=token)[0] == 401
 
 
@@ -306,7 +306,7 @@ def test_cli_pull_prints_the_path_and_copies_into_a_folder(server, env, capsys):
     store.publish("data", folder(env, "d", {"a.txt": "1", "sub/b.txt": "2"}), store=r)
     main(["pull", "data@v1", "--no-record"])
     path = capsys.readouterr().out.strip()
-    assert (env / "cairn-report.toml").is_file() and not (env / ".cairn-inputs.jsonl").exists()
+    assert (env / "cairn.toml").is_file() and not (env / ".cairn-inputs.jsonl").exists()
     assert open(os.path.join(path, "a.txt")).read() == "1"
     main(["pull", "data@v1", "--into", str(env / "copy")])
     assert capsys.readouterr().out.strip() == str(env / "copy")
@@ -435,9 +435,9 @@ def alive(pid: int) -> bool:
 
 
 def launch(tmp_path, *flags):
-    """`cairn-report store serve` as its own process; returns it with its startup output (up to the last line)."""
+    """`cairn server` as its own process; returns it with its startup output (up to the last line)."""
     root, port = tmp_path / "launch-store", free_port()
-    process = subprocess.Popen([sys.executable, "-m", "cairn_report", "store", "serve", str(root), "--port", str(port), *flags],
+    process = subprocess.Popen([sys.executable, "-m", "cairn", "server", str(root), "--port", str(port), *flags],
                                stdout=subprocess.PIPE, text=True, cwd=tmp_path)
     lines = []
     while line := process.stdout.readline():
@@ -465,7 +465,7 @@ def test_store_serve_starts_its_ui_as_a_child_with_the_token_in_its_environment_
         raise
     try:
         [(child, command)] = children_of(process.pid)
-        assert "cairn_report" in command and "ui" in command and token not in command  # never on the command line
+        assert "cairn" in command and "ui" in command and token not in command  # never on the command line
         form = {"Content-Type": "application/x-www-form-urlencoded"}
         ui = SimpleNamespace(port=ui_port, token="")
         assert call(ui, "GET", "/", token=None)[0] == 303  # the UI asks for a login
@@ -533,7 +533,7 @@ def test_the_spawned_ui_exits_when_the_server_is_killed(tmp_path):
     import signal
     import time
     root = tmp_path / "killed-store"
-    server = subprocess.Popen([sys.executable, "-m", "cairn_report", "store", "serve", str(root), "--port", "0"],
+    server = subprocess.Popen([sys.executable, "-m", "cairn", "server", str(root), "--port", "0"],
                               stdout=subprocess.PIPE, text=True)
     try:
         lines = [server.stdout.readline() for _ in range(4)]

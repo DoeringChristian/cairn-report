@@ -1,3 +1,8 @@
+> **Names changed (see [cairn-plan.md](cairn-plan.md)).** This plan was written as cairn-report. Read
+> `cairn_report` as `cairn`, `cairn_report.store` as `cairn` (the light API) and `cairn.server`,
+> `cairn-report store serve|token|migrate` as `cairn server|token|migrate`, and `cairn-report.toml` as
+> `cairn.toml`. The store modules now sit at the top level of `src/cairn/`.
+
 # cairn-report as an artifact store
 
 ## Context

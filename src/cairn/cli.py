@@ -1,4 +1,4 @@
-"""Command line: `cairn-report build | serve | share | publish | pull | store | ui`."""
+"""Command line: `cairn build | serve | share | publish | pull | server | ui | token | migrate | finalize-study`."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def cmd_share(args) -> None:
 
 
 def cmd_publish(args) -> None:
-    from .publish import is_report_folder, parse_meta, publish_folder, publish_mappings, publish_report, watch_folder
+    from .publishing import is_report_folder, parse_meta, publish_folder, publish_mappings, publish_report, watch_folder
 
     config = with_options(load_config(args.project), args)
     meta, command = parse_meta(args.meta), args.command or None
@@ -58,8 +58,8 @@ def with_options(config, args):
 def cmd_pull(args) -> None:
     import shutil
 
-    from . import store
-    from .store.cache import MARKER
+    import cairn as store
+    from .cache import MARKER
 
     config = with_options(load_config(args.project), args)
     path = store.pull(args.ref, store=store.open_store(config), record=not args.no_record)
@@ -76,8 +76,8 @@ def cmd_pull(args) -> None:
     print(target)
 
 
-def cmd_store_serve(args) -> None:
-    from .store.server import serve_store
+def cmd_server(args) -> None:
+    from .server import serve_store
 
     serve_store(args.root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3), no_auth=args.no_auth,
                 ui_port=None if args.no_ui else args.ui_port if args.ui_port is not None else args.port + 1 if args.port else 0)
@@ -96,15 +96,15 @@ def cmd_ui(args) -> None:
     serve_ui(backend, host=args.host, port=args.port, no_auth=args.no_auth, secure_cookie=not args.insecure_cookies)
 
 
-def cmd_store_migrate(args) -> None:
-    from .store.migrate import migrate
+def cmd_migrate(args) -> None:
+    from .migrate import migrate
 
     for line in migrate(args.old_root, args.new_root):
         print(line)
 
 
 def cmd_token_create(args) -> None:
-    from .store.tokens import create_token
+    from .tokens import create_token
 
     token = create_token(args.root, args.project, write=args.write, name=args.name)
     print(f"Token: {token}")
@@ -112,7 +112,7 @@ def cmd_token_create(args) -> None:
 
 
 def cmd_token_list(args) -> None:
-    from .store.tokens import list_tokens
+    from .tokens import list_tokens
 
     rows = list_tokens(args.root)
     for row in rows:
@@ -122,7 +122,7 @@ def cmd_token_list(args) -> None:
 
 
 def cmd_token_revoke(args) -> None:
-    from .store.tokens import revoke_token
+    from .tokens import revoke_token
 
     revoke_token(args.root, args.name)
     print(f"revoked {args.name}")
@@ -136,9 +136,9 @@ def cmd_finalize_study(args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="cairn-report", description="Static reports from Markdown and run outputs, a run logger, and an artifact store.")
-    parser.add_argument("--version", action="version", version=f"cairn-report {__version__}")
-    parser.add_argument("--project", type=Path, help="project root (default: nearest folder with cairn-report.toml, pixi.toml, or pyproject.toml)")
+    parser = argparse.ArgumentParser(prog="cairn", description="Cairn: an artifact store with a server and a UI, static reports from Markdown and run outputs, and a run logger.")
+    parser.add_argument("--version", action="version", version=f"cairn {__version__}")
+    parser.add_argument("--project", type=Path, help="project root (default: nearest folder with cairn.toml, pixi.toml, or pyproject.toml)")
     commands = parser.add_subparsers(dest="command", required=True)
 
     build = commands.add_parser("build", help="build every report (or one)")
@@ -179,22 +179,20 @@ def main(argv: list[str] | None = None) -> None:
     pull.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
     pull.set_defaults(run=cmd_pull)
 
-    store = commands.add_parser("store", help="run a store server and manage its tokens")
-    store_commands = store.add_subparsers(dest="store_command", required=True)
-    store_serve = store_commands.add_parser("serve", help="serve a store folder (a new one gets an owner token); put an HTTPS reverse proxy in front")
+    store_serve = commands.add_parser("server", help="serve a store folder (a new one gets an owner token); put an HTTPS reverse proxy in front")
     store_serve.add_argument("root", type=Path)
     store_serve.add_argument("--host", default="127.0.0.1")
     store_serve.add_argument("--port", type=int, default=8800)
     store_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
     store_serve.add_argument("--no-auth", action="store_true", help="no token, everyone acts as the owner (local testing; loopback hosts only)")
     store_serve.add_argument("--ui-port", type=int, help="port of the UI started beside the store (default: --port + 1)")
-    store_serve.add_argument("--no-ui", action="store_true", help="do not start `cairn-report ui` beside the store")
-    store_serve.set_defaults(run=cmd_store_serve)
-    migrate = store_commands.add_parser("migrate", help="copy an old hub root into a store (the old root is not modified)")
+    store_serve.add_argument("--no-ui", action="store_true", help="do not start `cairn ui` beside the store")
+    store_serve.set_defaults(run=cmd_server)
+    migrate = commands.add_parser("migrate", help="copy an old hub root into a store (the old root is not modified)")
     migrate.add_argument("old_root", type=Path)
     migrate.add_argument("new_root", type=Path, help="a new folder or an existing store")
-    migrate.set_defaults(run=cmd_store_migrate)
-    token = store_commands.add_parser("token", help="project-scoped tokens").add_subparsers(dest="token_command", required=True)
+    migrate.set_defaults(run=cmd_migrate)
+    token = commands.add_parser("token", help="project-scoped tokens").add_subparsers(dest="token_command", required=True)
     token_create = token.add_parser("create", help="print a new token for one project (shown once, stored hashed)")
     token_create.add_argument("root", type=Path)
     token_create.add_argument("--project", required=True)
@@ -210,7 +208,7 @@ def main(argv: list[str] | None = None) -> None:
     token_revoke.set_defaults(run=cmd_token_revoke)
 
     ui = commands.add_parser("ui", help="explore a store in a browser: its projects, reports, artifacts, versions, and lineage")
-    ui.add_argument("--store", help="a store server URL or a store folder (default: [store] url or path in cairn-report.toml)")
+    ui.add_argument("--store", help="a store server URL or a store folder (default: [store] url or path in cairn.toml)")
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8801)
     ui.add_argument("--no-auth", action="store_true", help="no login: use CAIRN_STORE_TOKEN / [store] token_file (loopback hosts only)")

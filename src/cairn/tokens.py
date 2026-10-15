@@ -18,7 +18,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..logger import read_jsonl
+from .logger import read_jsonl
 from . import refs
 from .blobs import append_lines, now
 
@@ -113,7 +113,7 @@ def create_token(root: Path, project: str, write: bool = False, name: str | None
 
     root = Path(root)
     if not (root / "token").is_file():
-        raise SystemExit(f"{root} is not a store root (no token file); `cairn-report store serve {root}` creates one")
+        raise SystemExit(f"{root} is not a store root (no token file); `cairn server {root}` creates one")
     refs.valid_project(project)
     LocalStore(root).create_project(project)
     tokens = Tokens(root)
@@ -137,5 +137,5 @@ def revoke_token(root: Path, name: str) -> None:
     tokens = Tokens(root)
     row = next((row for row in tokens.active() if row["name"] == name), None)
     if row is None:
-        raise SystemExit(f"no active token named {name!r} (see `cairn-report store token list {root}`)")
+        raise SystemExit(f"no active token named {name!r} (see `cairn token list {root}`)")
     append_lines(tokens.path, [{"revoked": row["id"], "name": name, "time": now()}])

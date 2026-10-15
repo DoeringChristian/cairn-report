@@ -7,11 +7,12 @@ import numpy as np
 import pytest
 
 from conftest import make_data
-from cairn_report import serve as server, store
-from cairn_report.build import build_all, mp4_size
-from cairn_report.config import load_config
-from cairn_report.logger import RunLogger
-from cairn_report.ranges import byte_range
+from cairn import serve as server
+import cairn as store
+from cairn.build import build_all, mp4_size
+from cairn.config import load_config
+from cairn.logger import RunLogger
+from cairn.ranges import byte_range
 
 pytest.importorskip("imageio_ffmpeg")
 

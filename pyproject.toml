@@ -1,7 +1,7 @@
 [project]
-name = "cairn-report"
+name = "cairn"
 version = "0.13.0"
-description = "Static reports from Markdown and run outputs, a run logger, and an artifact store (with a server) for reports and run outputs."
+description = "Cairn: an artifact store (with a server and a UI) for run outputs and reports, static reports from Markdown, and a run logger."
 readme = "README.md"
 authors = [
     { name = "Christian Döring", email = "christian.doering@tum.de" }
@@ -17,12 +17,16 @@ dependencies = [
 ]
 
 [project.scripts]
-cairn-report = "cairn_report.cli:main"
+cairn = "cairn.cli:main"
 
 [project.urls]
 Repository = "https://github.com/DoeringChristian/cairn-report"
 
 [project.optional-dependencies]
+# Placeholders for the parts that need nothing extra yet: the server and the UI use only the standard
+# library, and the UI's built files ship with the package.
+server = []
+ui = []
 hydra = [
     "hydra-core>=1.3",
 ]

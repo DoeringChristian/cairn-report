@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("hydra")
 
-from cairn_report.runs import finalize_study
+from cairn.runs import finalize_study
 
 CONFIG = """\
 defaults:
@@ -26,9 +26,9 @@ hydra:
     subdir: ${hydra.job.num}
   callbacks:
     source_snapshot:
-      _target_: cairn_report.snapshot.SourceSnapshotCallback
+      _target_: cairn.snapshot.SourceSnapshotCallback
     study_completion:
-      _target_: cairn_report.runs.StudyCompletion
+      _target_: cairn.runs.StudyCompletion
 """
 
 RUN = """\
@@ -40,7 +40,7 @@ from omegaconf import DictConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # flat imports from the project root
 
-from cairn_report.runs import run_experiment  # noqa: E402
+from cairn.runs import run_experiment  # noqa: E402
 from experiments.base import Experiment  # noqa: E402
 
 
@@ -129,7 +129,7 @@ def test_finalize_study_after_a_dead_launcher(tmp_path):
     (study / ".submitit" / "123_1").mkdir()
     assert finalize_study(study) is True
     record = json.loads((study / "run.json").read_text())
-    assert record["name"] == "sweep" and record["finalized_by"] == "cairn-report finalize-study"
+    assert record["name"] == "sweep" and record["finalized_by"] == "cairn finalize-study"
     assert (tmp_path / "outputs" / "sweep" / "latest").resolve() == study.resolve()
     with pytest.raises(SystemExit):
         finalize_study(study)  # already finalized

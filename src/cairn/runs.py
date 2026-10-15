@@ -16,11 +16,11 @@ with the callbacks in configs/config.yaml:
     hydra:
       callbacks:
         source_snapshot:
-          _target_: cairn_report.snapshot.SourceSnapshotCallback
+          _target_: cairn.snapshot.SourceSnapshotCallback
         study_completion:            # multirun only: completes the study, moves latest
-          _target_: cairn_report.runs.StudyCompletion
+          _target_: cairn.runs.StudyCompletion
 
-`cairn-report finalize-study outputs/<run-name>/<timestamp>` completes a study whose launcher
+`cairn finalize-study outputs/<run-name>/<timestamp>` completes a study whose launcher
 died (for example a killed Slurm launcher) by the same rule, once every trial job has ended.
 """
 
@@ -88,7 +88,7 @@ def run_experiment(cfg: Any, base: type | None = None, require_source_snapshot: 
     instantiate `cfg.experiment` (an instance of `base`, when given), call `run(output_dir)`, and
     record how it ended. A completed single run becomes `latest`.
 
-    Without a snapshot from `cairn_report.snapshot.SourceSnapshotCallback` the run fails, unless
+    Without a snapshot from `cairn.snapshot.SourceSnapshotCallback` the run fails, unless
     `require_source_snapshot=False`."""
     from hydra.core.hydra_config import HydraConfig
     from hydra.types import RunMode
@@ -196,4 +196,4 @@ def finalize_study(study: Path) -> bool:
     name = str(((config or {}).get("run") or {}).get("name") or study.parent.name)
     started = min((r["started"] for r in records if r.get("started")), default=None)
     revision = next((r["code_revision"] for r in records if r.get("code_revision")), "unversioned")
-    return complete_study(study, name, trials, started, revision, finalized_by="cairn-report finalize-study")
+    return complete_study(study, name, trials, started, revision, finalized_by="cairn finalize-study")

@@ -6,8 +6,8 @@ import html
 import json
 from urllib.parse import quote
 
-from ..store import LocalStore, NotFound, RemoteStore, refs
-from ..store.tokens import Principal
+from .. import LocalStore, NotFound, RemoteStore, refs
+from ..tokens import Principal
 
 Store = LocalStore | RemoteStore
 
@@ -114,7 +114,7 @@ def index_page(store: Store, principal: Principal | None, logout: bool = True) -
                     f'<td>{item["artifacts"]}</td><td class="muted">{stamp_text(item["updated"])}</td></tr>')
     table = ('<div class="wrap"><table><thead><tr><th>Project</th><th>Artifacts</th><th>Last update</th></tr></thead>'
              f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else
-             '<p class="muted">No projects yet. Run <code>cairn-report publish</code> in a project with <code>[store] url</code> set.</p>')
+             '<p class="muted">No projects yet. Run <code>cairn publish</code> in a project with <code>[store] url</code> set.</p>')
     leave = ' <a href="/logout">Log out</a>' if logout else ""
     body = f'<h1>Store</h1><p class="muted">Projects, most recently updated first.{leave}</p>{table}'
     return page("Store", body)

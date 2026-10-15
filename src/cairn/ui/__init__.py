@@ -1,4 +1,4 @@
-"""The store UI: `cairn-report ui` explores an artifact store in a browser (see server.py)."""
+"""The store UI: `cairn ui` explores an artifact store in a browser (see server.py)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ __all__ = ["LocalBackend", "RemoteBackend", "make_ui_server", "open_backend", "s
 
 def open_backend(store: str | None = None, config: Config | None = None, no_auth: bool = False,
                  allow_http: bool = False) -> LocalBackend | RemoteBackend:
-    """The store `--store` names (a URL or a folder), else the one `[store]` in cairn-report.toml names."""
+    """The store `--store` names (a URL or a folder), else the one `[store]` in cairn.toml names."""
     if store is None or not store.startswith(("http://", "https://")):
         if store is None:
             config = config or load_config()

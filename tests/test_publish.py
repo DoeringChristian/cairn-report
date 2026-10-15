@@ -3,8 +3,8 @@ import textwrap
 
 import pytest
 
-from cairn_report import store
-from cairn_report.cli import main
+import cairn as store
+from cairn.cli import main
 
 from test_store import env, folder  # noqa: F401  (the project fixture and folder helper)
 
@@ -44,7 +44,7 @@ def test_symlinked_folder_is_followed_and_labelled_by_target(env, capsys):
 
 def test_mappings_from_config(env, capsys):
     folder(env, "runs/a", {"a.txt": "1"})
-    (env / "cairn-report.toml").write_text(
+    (env / "cairn.toml").write_text(
         '[store]\npublish = [{ folder = "runs/a", name = "alpha" }, { folder = "runs/missing", name = "beta" }]\n')
     out = run(capsys, "publish")
     assert "published alpha@v1" in out and "skipping beta" in out
@@ -58,7 +58,7 @@ def test_no_arguments_and_no_mappings_is_an_error(env):
 
 
 def test_old_logger_table_is_refused(env):
-    (env / "cairn-report.toml").write_text('[logger]\nbackends = ["mlflow"]\n')
+    (env / "cairn.toml").write_text('[logger]\nbackends = ["mlflow"]\n')
     with pytest.raises(ValueError, match=r"\[logger\] was removed"):
         main(["publish"])
 
@@ -112,7 +112,7 @@ def test_inputs_pulled_by_the_command_are_recorded(env, capsys, monkeypatch):
     capsys.readouterr()
     out = env / "out"
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)  # publish --watch points the command at the folder itself
-    script = (f"from cairn_report import store; import pathlib; pathlib.Path({str(out)!r}).mkdir(exist_ok=True); "
+    script = (f"import cairn as store; import pathlib; pathlib.Path({str(out)!r}).mkdir(exist_ok=True); "
               "store.pull('datasets/toy@v1'); (pathlib.Path(" + repr(str(out)) + ") / 'r.txt').write_text('r')")
     with pytest.raises(SystemExit) as exit:
         main(["publish", str(out), "fit", "--interval", "0.5", "--", sys.executable, "-c", script])

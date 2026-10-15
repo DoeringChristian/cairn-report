@@ -1,6 +1,6 @@
-"""RemoteStore: the LocalStore interface over HTTP, against `cairn-report store serve`.
+"""RemoteStore: the LocalStore interface over HTTP, against `cairn server`.
 
-It offers what `cairn_report.store` and `Publication` use: projects, blob upload, versions, aliases,
+It offers what `cairn` and `Publication` use: projects, blob upload, versions, aliases,
 `resolve`, `lineage`, and `blob_file` for the pull cache. HTTP, the token, and the HTTPS rule are
 `push.Client`'s. Artifact names travel percent-encoded in API paths (`datasets%2Fcrops`).
 """
@@ -14,7 +14,7 @@ import secrets
 from pathlib import Path
 from urllib.parse import quote
 
-from ..push import BATCH, Client, ClientError, upload_missing
+from .push import BATCH, Client, ClientError, upload_missing
 from . import refs
 from .local import BadRange, FileRead, Forbidden, NotFound, StoreError, Unauthorized
 from .refs import Ref

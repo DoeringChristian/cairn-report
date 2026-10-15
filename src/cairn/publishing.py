@@ -1,4 +1,4 @@
-"""`cairn-report publish`: store folders as artifact versions, or follow a running job's folder.
+"""`cairn publish`: store folders as artifact versions, or follow a running job's folder.
 
 A report folder (`reports/<slug>`) is built and published as the artifact `reports/<slug>`.
 
@@ -22,10 +22,10 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import store as artifacts
+import cairn as artifacts
 from .config import Config
 from .push import HashCache, entries_for, scan
-from .store import Publication, StoreError
+from . import Publication, StoreError
 
 SETTLE = 2.0  # seconds without new changes before a changed folder is synced
 
@@ -89,7 +89,7 @@ def publish_report(config: Config, folder: Path) -> None:
     inputs = list(dict.fromkeys(item["resolved"] for item in build.inputs.values()))
     name = f"reports/{slug}"
     store = artifacts.open_store(config)
-    with tempfile.TemporaryDirectory(prefix="cairn-report-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="cairn-") as temporary:
         stage = Path(temporary) / slug
         shutil.copytree(folder, stage / "source", symlinks=True)
         shutil.copytree(build.generated, stage / "site" / slug, symlinks=True)
@@ -135,7 +135,7 @@ def _same_source(store, name: str, source: Path, config: Config, inputs: list[st
 def publish_mappings(config: Config, label: str | None, aliases: list[str], meta: dict) -> None:
     mappings = config.store.get("publish", [])
     if not mappings:
-        raise SystemExit("nothing to publish: give FOLDER NAME or add [store] publish = [{ folder = ..., name = ... }] to cairn-report.toml")
+        raise SystemExit("nothing to publish: give FOLDER NAME or add [store] publish = [{ folder = ..., name = ... }] to cairn.toml")
     for mapping in mappings:
         folder = config.project / mapping["folder"]
         if not folder.is_dir():

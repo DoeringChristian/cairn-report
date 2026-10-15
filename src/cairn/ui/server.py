@@ -1,6 +1,6 @@
 """The store UI: a browser view of an artifact store, as a process of its own.
 
-    cairn-report ui [--store URL|PATH] [--host 127.0.0.1] [--port 8801] [--no-auth] [--allow-http] [--insecure-cookies]
+    cairn ui [--store URL|PATH] [--host 127.0.0.1] [--port 8801] [--no-auth] [--allow-http] [--insecure-cookies]
 
 It reaches the store only through the store interface (`RemoteStore` for a store server, `LocalStore` for
 a folder), so it runs next to the store or on a laptop against a remote one. Pages (see pages.py):
@@ -41,11 +41,11 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .. import __version__
 from ..push import Client
-from ..store import BadRange, LocalStore, NotFound, RemoteStore, StoreError, refs
-from ..store.blobs import resolve_entry, valid_path
-from ..store.local import FileRead, Forbidden, Unauthorized
-from ..store.refs import Ref
-from ..store.tokens import OWNER, Principal, Tokens, read_token
+from .. import BadRange, LocalStore, NotFound, RemoteStore, StoreError, refs
+from ..blobs import resolve_entry, valid_path
+from ..local import FileRead, Forbidden, Unauthorized
+from ..refs import Ref
+from ..tokens import OWNER, Principal, Tokens, read_token
 from . import pages
 
 COOKIE = "cairn_ui"
@@ -435,7 +435,7 @@ def make_ui_server(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1
 
 
 def follow_parent() -> None:
-    """A UI spawned by `store serve` exits as soon as that server is gone (stopped, crashed, or
+    """A UI spawned by `cairn server` exits as soon as that server is gone (stopped, crashed, or
     killed with SIGKILL, which no handler in the server can catch)."""
     parent = os.environ.get("CAIRN_UI_PARENT")
     if not parent or not parent.isdigit():

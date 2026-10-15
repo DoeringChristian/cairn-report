@@ -14,7 +14,7 @@ MARKER = ".cairn-complete"
 
 
 def default_root() -> Path:
-    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cairn-report" / "artifacts"
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "cairn" / "artifacts"
 
 
 def materialize(store, ref, cache_root: Path | str) -> Path:

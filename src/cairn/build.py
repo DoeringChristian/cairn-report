@@ -47,11 +47,11 @@ from mdit_py_plugins.front_matter import front_matter_plugin
 from plotly.offline import get_plotlyjs, get_plotlyjs_version
 
 from . import __version__
-from . import store as artifacts
+import cairn as artifacts
 from .config import Config, load_config
 from .logger import METRICS, fold_scalars, read_jsonl
-from .store import refs
-from .store.cache import default_root
+from . import refs
+from .cache import default_root
 
 PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
@@ -80,12 +80,12 @@ def page_file(name: str) -> Path:
 
 
 def tooling_info() -> dict:
-    """Which cairn-report produced the build: version, install source, and style overrides."""
+    """Which cairn produced the build: version, install source, and style overrides."""
     from importlib import metadata
 
-    info = {"package": "cairn-report", "version": __version__}
+    info = {"package": "cairn", "version": __version__}
     try:
-        direct = metadata.distribution("cairn-report").read_text("direct_url.json")
+        direct = metadata.distribution("cairn").read_text("direct_url.json")
         if direct:
             url = json.loads(direct)
             info["source"] = url.get("url")
@@ -321,7 +321,7 @@ def front_matter_title(folder: Path) -> str:
 # ------------------------------------------------------------------ strict data access
 
 AUDITED = ("open", "os.listdir", "os.scandir")
-_GUARD: contextvars.ContextVar = contextvars.ContextVar("cairn_report_guard", default=None)
+_GUARD: contextvars.ContextVar = contextvars.ContextVar("cairn_guard", default=None)
 _HOOKED = False
 
 
@@ -1246,7 +1246,7 @@ def build_report(key: str, folder: Path) -> Build:
         "typed_numbers": build.typed,
         "sources": dict(sorted(build.sources.items())),
         "builder": {
-            (str(file.relative_to(PROJECT)) if PROJECT in file.parents else f"cairn_report/{file.relative_to(PACKAGE_TEMPLATE.parent)}"): digest(file)
+            (str(file.relative_to(PROJECT)) if PROJECT in file.parents else f"cairn/{file.relative_to(PACKAGE_TEMPLATE.parent)}"): digest(file)
             for file in builder if file.is_file()
         },
         "tooling": tooling_info(),

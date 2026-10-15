@@ -1,12 +1,14 @@
 import json
 import os
 import stat
+import subprocess
+import sys
 
 import pytest
 
-from cairn_report import store
-from cairn_report.store import LocalStore, NotFound, StoreError, refs
-from cairn_report.store.cache import materialize
+import cairn as store
+from cairn import LocalStore, NotFound, StoreError, refs
+from cairn.cache import materialize
 
 
 @pytest.fixture
@@ -234,7 +236,7 @@ def test_pull_records_inputs_in_cwd_and_env(env, tmp_path, monkeypatch):
 
 
 def test_configured_store_pull_publish_lineage(env, tmp_path):
-    (env / "cairn-report.toml").write_text('[store]\nexclude = ["*.pkl"]\n')
+    (env / "cairn.toml").write_text('[store]\nexclude = ["*.pkl"]\n')
     data = folder(tmp_path, "crops", {"a.txt": "1", "skip.pkl": "x"})
     assert store.publish("datasets/crops", data, aliases=["paper"]) == 1
     assert (env / ".store").is_dir()
@@ -269,28 +271,58 @@ def test_publish_follows_symlinked_folder_and_labels_by_target(env, tmp_path):
 
 def test_remote_store_without_a_token_and_plain_http(env, monkeypatch):
     monkeypatch.delenv("CAIRN_STORE_TOKEN", raising=False)
-    (env / "cairn-report.toml").write_text('[store]\nurl = "https://store.example.org"\n')
+    (env / "cairn.toml").write_text('[store]\nurl = "https://store.example.org"\n')
     assert store.open_store().client.token == ""  # only a --no-auth server answers; others say a token is needed
     monkeypatch.setenv("CAIRN_STORE_TOKEN", "t" * 40)
-    (env / "cairn-report.toml").write_text('[store]\nurl = "http://store.example.org"\n')
+    (env / "cairn.toml").write_text('[store]\nurl = "http://store.example.org"\n')
     with pytest.raises(SystemExit, match="plain HTTP"):
         store.open_store()
-    (env / "cairn-report.toml").write_text('[store]\nurl = "http://store.example.org"\nallow_http = true\n')
+    (env / "cairn.toml").write_text('[store]\nurl = "http://store.example.org"\nallow_http = true\n')
     assert isinstance(store.open_store(), store.RemoteStore)
 
 
 def test_old_hub_table_points_to_the_store(env):
-    (env / "cairn-report.toml").write_text('[hub]\nurl = "https://hub.example.org"\n')
+    (env / "cairn.toml").write_text('[hub]\nurl = "https://hub.example.org"\n')
     with pytest.raises(ValueError, match=r"\[hub\] was removed.*\[store\] url"):
         store.open_store()
 
 
 def test_store_config_validation(env):
-    from cairn_report.config import load_config
+    from cairn.config import load_config
 
-    (env / "cairn-report.toml").write_text('[store]\npath = "s"\nproject = "p"\npublish = [{ folder = "r", name = "n" }]\n')
+    (env / "cairn.toml").write_text('[store]\npath = "s"\nproject = "p"\npublish = [{ folder = "r", name = "n" }]\n')
     assert load_config().store["publish"] == [{"folder": "r", "name": "n"}]
     for bad in ('token = "x"', 'oops = 1', 'exclude = "a"', 'publish = [{ folder = "r" }]'):
-        (env / "cairn-report.toml").write_text(f"[store]\n{bad}\n")
+        (env / "cairn.toml").write_text(f"[store]\n{bad}\n")
         with pytest.raises(ValueError):
             load_config()
+
+
+# ------------------------------------------------------------ light import, config rename
+
+
+def test_import_cairn_stays_light():
+    script = ("import sys, cairn; heavy = ['cairn.server', 'cairn.ui', 'matplotlib', 'plotly', 'hydra']; "
+              "print([name for name in heavy if name in sys.modules])")
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == "[]"
+    assert subprocess.run([sys.executable, "-c", "import cairn; import cairn.publishing; assert callable(cairn.publish) and callable(cairn.pull) and cairn.Publication and cairn.__version__"]).returncode == 0
+
+
+def test_config_file_cairn_toml_and_deprecated_name(tmp_path, capsys):
+    from cairn import config
+    from cairn.config import load_config
+
+    (tmp_path / "cairn-report.toml").write_text('[store]\nproject = "old"\n')
+    config._WARNED.clear()
+    assert load_config(tmp_path).store["project"] == "old"
+    err = capsys.readouterr().err
+    assert "cairn-report.toml is deprecated" in err and err.count("\n") == 1
+    (tmp_path / "cairn.toml").write_text('[store]\nproject = "new"\n')
+    with pytest.raises(ValueError, match="both cairn.toml and cairn-report.toml"):
+        load_config(tmp_path)
+    (tmp_path / "cairn-report.toml").unlink()
+    assert load_config(tmp_path).store["project"] == "new" and capsys.readouterr().err == ""
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+    assert config.find_project(nested) == tmp_path.resolve()

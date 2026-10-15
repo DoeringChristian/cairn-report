@@ -21,7 +21,7 @@ from pathlib import Path
 
 import yaml
 
-from ..logger import read_jsonl
+from .logger import read_jsonl
 from . import refs
 from .blobs import clean_entries
 from .local import LocalStore

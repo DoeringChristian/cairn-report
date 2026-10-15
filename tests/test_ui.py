@@ -10,12 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from cairn_report import store
-from cairn_report.cli import main
-from cairn_report.store import LocalStore, RemoteStore
-from cairn_report.store.tokens import create_token, revoke_token
-from cairn_report.ui import server as ui_server
-from cairn_report.ui.server import LocalBackend, RemoteBackend, make_ui_server
+import cairn as store
+from cairn.cli import main
+from cairn import LocalStore, RemoteStore
+from cairn.tokens import create_token, revoke_token
+from cairn.ui import server as ui_server
+from cairn.ui.server import LocalBackend, RemoteBackend, make_ui_server
 
 from conftest import make_data, write
 from test_server import api, call, remote, seed, server, use_remote  # noqa: F401  (the store server in a thread, helpers)
@@ -154,8 +154,8 @@ def test_no_auth_ui_is_loopback_only_and_needs_no_login(server):
 
 
 def test_no_auth_ui_over_a_no_auth_store_uses_no_token(tmp_path, env, monkeypatch):
-    from cairn_report.store.server import make_server
-    from cairn_report.store.tokens import init_root
+    from cairn.server import make_server
+    from cairn.tokens import init_root
 
     root = tmp_path / "open-store"
     init_root(root)
@@ -163,7 +163,7 @@ def test_no_auth_ui_over_a_no_auth_store_uses_no_token(tmp_path, env, monkeypatc
     threading.Thread(target=store_httpd.serve_forever, daemon=True).start()
     monkeypatch.delenv("CAIRN_STORE_TOKEN", raising=False)
     url = f"http://127.0.0.1:{store_httpd.server_address[1]}"
-    (env / "cairn-report.toml").write_text(f'[store]\nurl = "{url}"\nproject = "study"\n')
+    (env / "cairn.toml").write_text(f'[store]\nurl = "{url}"\nproject = "study"\n')
     store.publish("open", folder(env, "o", {"a.txt": "x"}))
     httpd, ui = start(RemoteBackend(url, False), no_auth=True)
     try:
@@ -261,7 +261,7 @@ def test_report_versions_stay_viewable(ui, project, capsys):
 def test_data_panel_links_point_at_the_artifact_pages(ui, project, capsys):
     publish_reports(project, ui.server)
     cookie = login(ui)
-    script = resources.files("cairn_report").joinpath("template", "report.js").read_text()
+    script = resources.files("cairn").joinpath("template", "report.js").read_text()
     assert "STORE_SERVED = !BUNDLE && /^\\/p\\/[^/]+\\/r\\//.test(location.pathname)" in script
     assert "STORE_SERVED && match ?" in script and "version.dataset.artifact = input.resolved" in script
     assert "/p/${encodeURIComponent(match[1])}/a/" in script  # /p/<project>/r/... -> /p/<project>/a/<name>@vN
@@ -316,30 +316,31 @@ def test_files_passthrough_serves_large_ranges_exactly(ui, env):
 
 
 def test_the_ui_uses_only_the_store_interface_and_the_server_has_no_ui_code():
-    source = Path(__file__).parent.parent / "src" / "cairn_report"
+    source = Path(__file__).parent.parent / "src" / "cairn"
     for file in (source / "ui").glob("*.py"):
         text = file.read_text()
         for forbidden in ("blob_path", "versions.jsonl", "aliases.jsonl", "consumers.jsonl", "project.json", "_blobs"):
             assert forbidden not in text, (file.name, forbidden)
-    for file in (source / "store").glob("*.py"):
+    store_files = [source / f"{name}.py" for name in ("refs", "local", "remote", "cache", "blobs", "tokens", "migrate")]
+    for file in [*store_files, source / "server" / "__init__.py"]:
         text = file.read_text()
-        assert "import ui" not in text and "from ..ui" not in text and "from .pages" not in text and "cairn_report.ui" not in text, file.name
-    assert not (source / "store" / "pages.py").exists()
-    server_text = (source / "store" / "server.py").read_text()
+        assert "import ui" not in text and "from ..ui" not in text and "from .pages" not in text and "cairn.ui" not in text, file.name
+    assert not (source / "server" / "pages.py").exists()
+    server_text = (source / "server" / "__init__.py").read_text()
     for gone in ("text/html", "cookie", "Cookie", "is_report", "site.json", "_static", "/login"):
         assert gone not in server_text.replace("there are no cookies", "").replace("--insecure-cookies", ""), gone
 
 
 def test_ui_command_wires_the_configured_store(env, server, monkeypatch, capsys):
-    (env / "cairn-report.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\n')
+    (env / "cairn.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\n')
     seen = {}
-    monkeypatch.setattr("cairn_report.ui.serve_ui", lambda backend, **options: seen.update(backend=backend, **options))
+    monkeypatch.setattr("cairn.ui.serve_ui", lambda backend, **options: seen.update(backend=backend, **options))
     main(["ui"])
     assert isinstance(seen["backend"], RemoteBackend) and seen["backend"].url == server.url and seen["port"] == 8801
     assert seen["no_auth"] is False and seen["secure_cookie"] is True
     main(["ui", "--store", str(server.root), "--port", "9999", "--insecure-cookies"])
     assert isinstance(seen["backend"], LocalBackend) and seen["port"] == 9999 and seen["secure_cookie"] is False
-    (env / "cairn-report.toml").write_text('[store]\npath = "mystore"\n')
+    (env / "cairn.toml").write_text('[store]\npath = "mystore"\n')
     LocalStore(env / "mystore")
     main(["ui", "--no-auth"])
     assert seen["backend"].root == (env / "mystore").resolve() and seen["no_auth"] is True
@@ -364,7 +365,7 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
         root = tmp_path / name
         root.mkdir()
         (root / "pyproject.toml").write_text("")
-        (root / "cairn-report.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\ninterval = 1\n')
+        (root / "cairn.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\ninterval = 1\n')
         monkeypatch.chdir(root)
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / f"cache-{name}"))
         monkeypatch.delenv("CAIRN_INPUTS", raising=False)
@@ -376,7 +377,7 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
     # machine A: a plain script (no Hydra) pulls datasets/toy@v1 and writes outputs; CAIRN_INPUTS points at them
     out = a / "outputs"
     out.mkdir()
-    script = ("import pathlib, sys; from cairn_report import store; src = store.pull('datasets/toy@v1'); "
+    script = ("import pathlib, sys; import cairn as store; src = store.pull('datasets/toy@v1'); "
               "pathlib.Path(sys.argv[1], 'result.txt').write_text('fit of ' + (src / 'x.csv').read_text().strip())")
     subprocess.run([sys.executable, "-c", script, str(out)], check=True, cwd=a,
                    env=os.environ | {"CAIRN_INPUTS": str(out / ".cairn-inputs.jsonl")})
