@@ -413,6 +413,7 @@ function placeCommentPopover(rect) { const width = 360, gap = 8; const left = Ma
 function closeComment() { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; queueSave(); } commentPopover.hidden = true; }
 function openComment(target, line = "", quote = "", anchor = null, existing = null) { clearTimeout(saveTimer); if (!existing && isFigureTarget(target)) existing = commentFor(target); if (existing) { line = existing.line || line; quote = existing.quote || quote; } currentSession = {id: existing?.id || ""}; commentForm.elements.id.value = currentSession.id; commentForm.elements.target.value = target; commentForm.elements.line.value = line; commentForm.elements.quote.value = quote; commentForm.elements.text.value = existing?.text || ""; $("#comment-target").textContent = line ? `report.md line ${line}` : target; $("#comment-quote").textContent = quote; $("#comment-quote").hidden = !quote; $("#comment-message").textContent = existing ? "Saved" : "Autosaves while you type"; placeCommentPopover(anchor); commentPopover.hidden = false; commentForm.elements.text.focus(); }
 const selectionCopy = $("#selection-copy");
+selectionCopy.innerHTML = COPY_ICON;
 selectionCopy.onmousedown = event => event.preventDefault();  // keep the selection while clicking
 selectionCopy.onclick = () => { if (pendingSelection) copyMarker(selectionCopy, pendingSelection); };
 function bindSelectionComments() {
