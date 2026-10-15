@@ -1,0 +1,145 @@
+{
+ "header": "cairn bench: commit a9292bc, macOS-26.6.2-arm64-arm-64bit, arm64, 18 cores, Python 3.12.14, 32 publish clients / 4 procs",
+ "rows": [
+  {
+   "name": "meta/artifacts-cold",
+   "count": 1,
+   "seconds": 0.9627645830623806,
+   "rate": 1.0386755158973342,
+   "unit": "req/s",
+   "p50_ms": 962.7645830623806,
+   "p95_ms": 962.7645830623806,
+   "extra": "first request after start"
+  },
+  {
+   "name": "publish/distinct",
+   "count": 200,
+   "seconds": 0.9950722081121057,
+   "rate": 200.99043905512013,
+   "unit": "pub/s",
+   "p50_ms": 120.54370809346437,
+   "p95_ms": 240.33225001767278,
+   "extra": "32 clients, 4 procs, 3 files x 1 KB, 5 requests each"
+  },
+  {
+   "name": "publish/same",
+   "count": 200,
+   "seconds": 3.4240659158676863,
+   "rate": 58.41009049305009,
+   "unit": "pub/s",
+   "p50_ms": 514.4912919495255,
+   "p95_ms": 711.9397500064224,
+   "extra": "32 clients, 4 procs, 3 files x 1 KB, 5 requests each"
+  },
+  {
+   "name": "upload",
+   "count": 1,
+   "seconds": 1.1476113751996309,
+   "rate": 233.90797773619553,
+   "unit": "MB/s",
+   "p50_ms": 1147.6113751996309,
+   "p95_ms": 1147.6113751996309,
+   "extra": "268 MB"
+  },
+  {
+   "name": "pull/cold",
+   "count": 1,
+   "seconds": 0.22452958300709724,
+   "rate": 1195.5460496780724,
+   "unit": "MB/s",
+   "p50_ms": 224.52958300709724,
+   "p95_ms": 224.52958300709724,
+   "extra": "268 MB, median of 1"
+  },
+  {
+   "name": "pull/warm",
+   "count": 3,
+   "seconds": 0.7834798749536276,
+   "rate": 1024.108898870836,
+   "unit": "MB/s",
+   "p50_ms": 262.1161248534918,
+   "p95_ms": 265.07437508553267,
+   "extra": "268 MB, median of 3"
+  },
+  {
+   "name": "pull/client",
+   "count": 1,
+   "seconds": 0.4616769589483738,
+   "rate": 581.4356787729953,
+   "unit": "MB/s",
+   "p50_ms": 461.6769589483738,
+   "p95_ms": 461.6769589483738,
+   "extra": "RemoteStore.blob_file: download + verify + place"
+  },
+  {
+   "name": "range",
+   "count": 1000,
+   "seconds": 0.4256507079117,
+   "rate": 2349.344148647456,
+   "unit": "req/s",
+   "p50_ms": 1.5984999481588602,
+   "p95_ms": 2.604916924610734,
+   "extra": "64 KB, 4 clients"
+  },
+  {
+   "name": "meta/projects",
+   "count": 500,
+   "seconds": 478.9740415420383,
+   "rate": 1.043897908100133,
+   "unit": "req/s",
+   "p50_ms": 3855.952916201204,
+   "p95_ms": 4272.024333942682,
+   "extra": "4 clients, 0 KB answer"
+  },
+  {
+   "name": "meta/artifacts",
+   "count": 40,
+   "seconds": 38.09407154098153,
+   "rate": 1.050032154136322,
+   "unit": "req/s",
+   "p50_ms": 3732.8497080598027,
+   "p95_ms": 4014.5136250648648,
+   "extra": "4 clients, 383 KB answer"
+  },
+  {
+   "name": "meta/summary",
+   "count": 500,
+   "seconds": 0.42864220798946917,
+   "rate": 1166.4740211777837,
+   "unit": "req/s",
+   "p50_ms": 3.1754588708281517,
+   "p95_ms": 5.359417060390115,
+   "extra": "4 clients, 1 KB answer"
+  },
+  {
+   "name": "meta/versions",
+   "count": 500,
+   "seconds": 0.17089737486094236,
+   "rate": 2925.732477791689,
+   "unit": "req/s",
+   "p50_ms": 1.1917909141629934,
+   "p95_ms": 2.406167099252343,
+   "extra": "4 clients, 1 KB answer"
+  },
+  {
+   "name": "meta/lineage",
+   "count": 500,
+   "seconds": 2.699134208029136,
+   "rate": 185.24458639835174,
+   "unit": "req/s",
+   "p50_ms": 20.9349999204278,
+   "p95_ms": 31.40400000847876,
+   "extra": "4 clients, 0 KB answer"
+  },
+  {
+   "name": "meta/resolve",
+   "count": 500,
+   "seconds": 0.24994879215955734,
+   "rate": 2000.409746652506,
+   "unit": "req/s",
+   "p50_ms": 1.7639999277889729,
+   "p95_ms": 3.3382500987499952,
+   "extra": "4 clients, 0 KB answer"
+  }
+ ]
+}
