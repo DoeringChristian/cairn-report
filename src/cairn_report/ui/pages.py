@@ -1,4 +1,4 @@
-"""Server-rendered HTML pages of the store server (no scripts, no frameworks)."""
+"""Server-rendered HTML pages of the store UI (no scripts, no frameworks), built through the store interface only."""
 
 from __future__ import annotations
 
@@ -6,9 +6,10 @@ import html
 import json
 from urllib.parse import quote
 
-from . import refs
-from .local import LocalStore, StoreError
-from .tokens import Principal
+from ..store import LocalStore, NotFound, RemoteStore, refs
+from ..store.tokens import Principal
+
+Store = LocalStore | RemoteStore
 
 PAGE_STYLE = """
 :root{--paper:#f5f2e9;--ink:#202621;--muted:#697169;--line:#d9d8ce;--card:#fffef9;--accent:#176b5b;--warn:#b56231;color-scheme:light}
@@ -81,14 +82,14 @@ def is_report(name: str) -> bool:
     return name.startswith("reports/") and name.count("/") == 1
 
 
-def ref_link(principal: Principal, text: str) -> str:
+def ref_link(principal: Principal | None, text: str) -> str:
     """An exact reference as a link to its artifact page (plain text if this token cannot read that project)."""
     try:
         ref = refs.parse(text)
     except ValueError:
         return f"<code>{e(text)}</code>"
     label = f"<code>{e(text)}</code>"
-    if ref.project and principal.can(ref.project):
+    if ref.project and can(principal, ref.project):
         return f'<a href="{artifact_href(ref.project, ref.name, ref.version or ref.selector)}">{label}</a>'
     return label
 
@@ -98,48 +99,38 @@ def crumbs(*parts: tuple[str, str | None]) -> str:
     return f'<div class="crumbs">{" / ".join(items)}</div>'
 
 
-def latest_version(store: LocalStore, project: str, name: str) -> dict | None:
-    number = store.aliases(project, name).get("latest")
-    return store.get_version(project, name, number) if number else None
+def can(principal: Principal | None, project: str | None) -> bool:
+    """Whether the viewer may see a project; no principal means the store itself decides (a remote store, or --no-auth)."""
+    return principal is None or principal.can(project)
 
 
-def overview(store: LocalStore, project: dict) -> dict:
-    """A project record with its report and artifact counts and its last update."""
-    name = project["name"]
-    names = store.artifacts(name)
-    summaries = [store.summary(name, item) for item in names]
-    return {**project, "reports": sum(is_report(item) for item in names),
-            "artifacts": sum(not is_report(item) for item in names),
-            "updated": max((item["updated"] for item in summaries), default=project["created"])}
-
-
-def index_page(store: LocalStore, principal: Principal) -> bytes:
+def index_page(store: Store, principal: Principal | None, logout: bool = True) -> bytes:
     rows = []
-    projects = [overview(store, item) for item in store.projects() if principal.can(item["name"])]
+    projects = [item for item in store.overviews() if can(principal, item["name"])]
     for item in sorted(projects, key=lambda item: item["updated"], reverse=True):
         description = f'<br><span class="muted">{e(item["description"])}</span>' if item.get("description") else ""
         rows.append(f'<tr><td><a href="{project_href(item["name"])}"><strong>{e(item["title"])}</strong></a>'
                     f'<span class="muted"> {e(item["name"])}</span>{description}</td>'
-                    f'<td>{item["reports"]}</td><td>{item["artifacts"]}</td><td class="muted">{stamp_text(item["updated"])}</td></tr>')
-    table = ('<div class="wrap"><table><thead><tr><th>Project</th><th>Reports</th><th>Artifacts</th><th>Last update</th></tr></thead>'
+                    f'<td>{item["artifacts"]}</td><td class="muted">{stamp_text(item["updated"])}</td></tr>')
+    table = ('<div class="wrap"><table><thead><tr><th>Project</th><th>Artifacts</th><th>Last update</th></tr></thead>'
              f'<tbody>{"".join(rows)}</tbody></table></div>' if rows else
              '<p class="muted">No projects yet. Run <code>cairn-report publish</code> in a project with <code>[store] url</code> set.</p>')
-    body = f'<h1>Store</h1><p class="muted">Projects, most recently updated first. <a href="/logout">Log out</a></p>{table}'
+    leave = ' <a href="/logout">Log out</a>' if logout else ""
+    body = f'<h1>Store</h1><p class="muted">Projects, most recently updated first.{leave}</p>{table}'
     return page("Store", body)
 
 
-def project_page(store: LocalStore, project: str) -> bytes:
+def project_page(store: Store, project: str) -> bytes:
     record = store.get_project(project)
     reports, others = [], []
-    for name in store.artifacts(project):
-        summary = store.summary(project, name)
+    for summary in store.summaries(project):
+        name = summary["name"]
         (reports if is_report(name) else others).append((name, summary))
     report_rows = []
     for name, summary in sorted(reports, key=lambda item: item[1]["updated"], reverse=True):
-        head = latest_version(store, project, name)
-        meta = head["metadata"] if head else {}
+        meta = summary["metadata"]
         title = meta.get("title") or name.split("/", 1)[1]
-        link = (f'<a href="{report_href(project, name)}"><strong>{e(title)}</strong></a>' if head
+        link = (f'<a href="{report_href(project, name)}"><strong>{e(title)}</strong></a>' if summary["latest"]
                 else f"<strong>{e(title)}</strong>")
         status = f'<span class="badge">{e(meta["status"])}</span>' if meta.get("status") else ""
         report_rows.append(
@@ -163,11 +154,11 @@ def project_page(store: LocalStore, project: str) -> bytes:
     return page(record["title"], body)
 
 
-def artifact_page(store: LocalStore, principal: Principal, project: str, name: str, selected: dict | None) -> bytes:
+def artifact_page(store: Store, principal: Principal | None, project: str, name: str, selected: dict | None) -> bytes:
     """Versions, the selected version's files, metadata, inputs, and consumers: the back-trace view."""
     versions = store.versions(project, name)
     if not versions:
-        raise StoreError(f"no artifact {project}:{name}")
+        raise NotFound(f"no artifact {project}:{name}")
     aliases = store.aliases(project, name)
     by_version: dict[int, list[str]] = {}
     for alias, number in aliases.items():
@@ -197,7 +188,7 @@ def artifact_page(store: LocalStore, principal: Principal, project: str, name: s
     consumers: list[str] = []
     if chosen["status"] == "completed":
         consumers = store.lineage(refs.exact(project, name, number))["consumers"]
-        consumers = [item for item in consumers if principal.can(refs.parse(item).project)]
+        consumers = [item for item in consumers if can(principal, refs.parse(item).project)]
     used_by = "".join(f"<li>{ref_link(principal, item)}</li>" for item in consumers) or '<li class="muted">none</li>'
     metadata = json.dumps(chosen["metadata"], indent=2, sort_keys=True)
     report = (f' · <a href="{report_href(project, name, number)}">open report</a>'

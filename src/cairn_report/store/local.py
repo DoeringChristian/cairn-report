@@ -17,11 +17,14 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..logger import read_jsonl
+from ..ranges import byte_range
 from . import refs
-from .blobs import BlobStore, append_lines, clean_entries, now
+from .blobs import CHUNK, BlobStore, append_lines, clean_entries, now, resolve_entry
 from .refs import Ref
 
 
@@ -31,6 +34,48 @@ class StoreError(ValueError):
 
 class NotFound(StoreError, LookupError):
     pass
+
+
+class Forbidden(StoreError):
+    """The token is valid but may not read or write this (HTTP 403)."""
+
+
+class Unauthorized(StoreError):
+    """The store does not accept the token (HTTP 401)."""
+
+
+class BadRange(StoreError):
+    """A byte range outside the file (HTTP 416); `total` is the file's size."""
+
+    def __init__(self, total: int):
+        super().__init__(f"the range lies outside the file ({total} bytes)")
+        self.total = total
+
+
+@dataclass
+class FileRead:
+    """A file of a version, or a byte range of it: `chunks` yields bytes `first`..`last` of `total`.
+
+    `sha256` identifies the contents (the ETag); `immutable` says a reader may cache it forever (an
+    exact `@v<n>` of a completed version). Call `close()` when not reading `chunks` to the end.
+    """
+    total: int
+    first: int
+    last: int
+    sha256: str
+    immutable: bool
+    chunks: Iterator[bytes]
+
+    @property
+    def partial(self) -> bool:
+        return (self.first, self.last) != (0, self.total - 1)
+
+    @property
+    def size(self) -> int:
+        return max(self.last - self.first + 1, 0)
+
+    def close(self) -> None:
+        self.chunks.close()
 
 
 def _same(version: dict, files: list[dict], inputs: list[str], metadata: dict) -> bool:
@@ -65,6 +110,37 @@ class LocalStore:
     def blob_file(self, project: str, name: str, version: int, entry: dict, cache_root=None) -> Path:
         """A local file with the contents of a version's entry (here: the blob itself)."""
         return self.blob_path(entry["sha256"])
+
+    def read_file(self, project: str, name: str, selector: str | None, path: str, range_header: str | None = None) -> FileRead:
+        """A file of the version `selector` names (`v<n>` of any status, else an alias or label of a completed one),
+        optionally a byte range (the value of an HTTP Range header). Raises NotFound and BadRange."""
+        if selector and refs.VERSION.fullmatch(selector):
+            version = self.get_version(project, name, int(selector[1:]))
+        else:
+            version = self.resolve(Ref(project, name, selector))[2]
+        entry = resolve_entry(version["files"], path)
+        if entry is None:
+            raise NotFound(f"{name} has no file {path}")
+        blob = self.blob_path(entry["sha256"])
+        total = blob.stat().st_size
+        wanted = byte_range(range_header, total)
+        if wanted is False:
+            raise BadRange(total)
+        first, last = wanted or (0, total - 1)
+
+        def chunks():
+            with blob.open("rb") as handle:
+                handle.seek(first)
+                remaining = last - first + 1
+                while remaining > 0:
+                    chunk = handle.read(min(CHUNK, remaining))
+                    if not chunk:
+                        break
+                    yield chunk
+                    remaining -= len(chunk)
+
+        immutable = version["status"] == "completed" and bool(selector) and refs.VERSION.fullmatch(selector) is not None
+        return FileRead(total, first, last, entry["sha256"], immutable, chunks())
 
     def has_blob(self, sha: str) -> bool:
         return self._blobs.has_blob(sha)
@@ -112,6 +188,15 @@ class LocalStore:
     def projects(self) -> list[dict]:
         return [json.loads(file.read_text()) for file in sorted(self._blobs.projects.glob("*/project.json"))]
 
+    def overviews(self) -> list[dict]:
+        """Every project record with its artifact count and last update."""
+        found = []
+        for record in self.projects():
+            summaries = self.summaries(record["name"])
+            found.append({**record, "artifacts": len(summaries),
+                          "updated": max((item["updated"] for item in summaries), default=record["created"])})
+        return found
+
     # --------------------------------------------------------------- artifacts
 
     def _artifact_dir(self, project: str, name: str) -> Path:
@@ -139,11 +224,15 @@ class LocalStore:
         return dict(state)
 
     def summary(self, project: str, name: str) -> dict:
-        """The artifact at a glance: latest completed version, version count, aliases, last change."""
+        """The artifact at a glance: latest completed version (number and metadata), version count, aliases, last change."""
         states, aliases = self._states(project, name), self.aliases(project, name)
         stamps = [state.get("completed") or state["created"] for state in states.values()]
+        head = states.get(aliases.get("latest"))
         return {"name": name, "latest": aliases.get("latest"), "versions": len(states), "aliases": aliases,
-                "updated": max(stamps, default="")}
+                "updated": max(stamps, default=""), "metadata": head["metadata"] if head else {}}
+
+    def summaries(self, project: str) -> list[dict]:
+        return [self.summary(project, name) for name in self.artifacts(project)]
 
     def aliases(self, project: str, name: str) -> dict[str, int]:
         """Where each alias points now (the last move wins)."""

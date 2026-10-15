@@ -164,7 +164,8 @@ cairn-report publish runs/sweep/latest sweep --watch -- python experiments/run.p
 - **Auth:** the owner token works as today, including the automatic token on first launch. Scoped
   tokens are created with `cairn-report store token create --project P [--write]`; they are stored
   hashed and limited to one project.
-- **Pages:**
+- **Pages (served by the separate `cairn-report ui` process, not by the store server, which is only the
+  API and downloads):**
   - `/`: projects;
   - `/p/<project>/`: the project's reports and artifacts;
   - `/p/<project>/r/<slug>[@v]/`: a report;

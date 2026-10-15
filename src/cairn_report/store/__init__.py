@@ -29,11 +29,11 @@ from ..push import HashCache, Limited, connect, entries_for, project_name, scan
 from . import refs
 from .blobs import now
 from .cache import default_root, materialize
-from .local import LocalStore, NotFound, StoreError
+from .local import BadRange, FileRead, Forbidden, LocalStore, NotFound, StoreError, Unauthorized
 from .refs import Ref
 from .remote import RemoteStore
 
-__all__ = ["LocalStore", "NotFound", "Ref", "RemoteStore", "StoreError", "alias", "lineage", "Publication", "open_store", "publish", "pull", "versions"]
+__all__ = ["BadRange", "FileRead", "Forbidden", "LocalStore", "NotFound", "Ref", "RemoteStore", "StoreError", "Unauthorized", "alias", "lineage", "Publication", "open_store", "publish", "pull", "versions"]
 
 INPUTS_FILE = ".cairn-inputs.jsonl"
 INPUTS_ENV = "CAIRN_INPUTS"

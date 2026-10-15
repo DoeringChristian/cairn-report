@@ -1,4 +1,4 @@
-"""Command line: `cairn-report build | serve | share | publish | pull | store`."""
+"""Command line: `cairn-report build | serve | share | publish | pull | store | ui`."""
 
 from __future__ import annotations
 
@@ -79,8 +79,21 @@ def cmd_pull(args) -> None:
 def cmd_store_serve(args) -> None:
     from .store.server import serve_store
 
-    serve_store(args.root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3),
-                secure_cookie=not args.insecure_cookies, no_auth=args.no_auth)
+    serve_store(args.root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3), no_auth=args.no_auth,
+                ui_port=None if args.no_ui else args.ui_port if args.ui_port is not None else args.port + 1 if args.port else 0)
+
+
+def cmd_ui(args) -> None:
+    from .ui import open_backend, serve_ui
+
+    config = None
+    try:
+        config = with_options(load_config(args.project), args)
+    except (SystemExit, ValueError):
+        if args.store is None:
+            raise
+    backend = open_backend(args.store, config, no_auth=args.no_auth, allow_http=args.allow_http)
+    serve_ui(backend, host=args.host, port=args.port, no_auth=args.no_auth, secure_cookie=not args.insecure_cookies)
 
 
 def cmd_store_migrate(args) -> None:
@@ -173,8 +186,9 @@ def main(argv: list[str] | None = None) -> None:
     store_serve.add_argument("--host", default="127.0.0.1")
     store_serve.add_argument("--port", type=int, default=8800)
     store_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
-    store_serve.add_argument("--insecure-cookies", action="store_true", help="browser login over plain HTTP (SSH tunnel)")
-    store_serve.add_argument("--no-auth", action="store_true", help="no login or token, everyone acts as the owner (local testing; loopback hosts only)")
+    store_serve.add_argument("--no-auth", action="store_true", help="no token, everyone acts as the owner (local testing; loopback hosts only)")
+    store_serve.add_argument("--ui-port", type=int, help="port of the UI started beside the store (default: --port + 1)")
+    store_serve.add_argument("--no-ui", action="store_true", help="do not start `cairn-report ui` beside the store")
     store_serve.set_defaults(run=cmd_store_serve)
     migrate = store_commands.add_parser("migrate", help="copy an old hub root into a store (the old root is not modified)")
     migrate.add_argument("old_root", type=Path)
@@ -194,6 +208,15 @@ def main(argv: list[str] | None = None) -> None:
     token_revoke.add_argument("root", type=Path)
     token_revoke.add_argument("name")
     token_revoke.set_defaults(run=cmd_token_revoke)
+
+    ui = commands.add_parser("ui", help="explore a store in a browser: its projects, reports, artifacts, versions, and lineage")
+    ui.add_argument("--store", help="a store server URL or a store folder (default: [store] url or path in cairn-report.toml)")
+    ui.add_argument("--host", default="127.0.0.1")
+    ui.add_argument("--port", type=int, default=8801)
+    ui.add_argument("--no-auth", action="store_true", help="no login: use CAIRN_STORE_TOKEN / [store] token_file (loopback hosts only)")
+    ui.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")
+    ui.add_argument("--insecure-cookies", action="store_true", help="login over plain HTTP (SSH tunnel): the session cookie loses its Secure flag")
+    ui.set_defaults(run=cmd_ui)
 
     argv = list(sys.argv[1:] if argv is None else argv)
     command = []

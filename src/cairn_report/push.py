@@ -29,9 +29,9 @@ BATCH = 5_000
 
 
 class ClientError(Exception):
-    def __init__(self, message: str, status: int | None = None):
+    def __init__(self, message: str, status: int | None = None, headers: dict | None = None):
         super().__init__(message)
-        self.status = status
+        self.status, self.headers = status, headers or {}
 
 
 class Limited:
@@ -95,6 +95,32 @@ class Client:
         if response.status not in expect:
             raise ClientError(_message(method, path, response.status, data), response.status)
         return response.status, data
+
+    def stream(self, path: str, headers: dict | None = None, expect=(200, 206)):
+        """GET as (status, response headers, chunks); the connection closes when the chunks end or are closed."""
+        connection = self._connection()
+        try:
+            connection.request("GET", path, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})
+            response = connection.getresponse()
+            found = {key.lower(): value for key, value in response.getheaders()}
+            if response.status == 401:
+                data = response.read()
+                raise ClientError("the store rejected the token" if self.token else
+                                  "the store needs a token: set CAIRN_STORE_TOKEN or [store] token_file", 401, found)
+            if response.status not in expect:
+                raise ClientError(_message("GET", path, response.status, response.read()), response.status, found)
+        except BaseException:
+            connection.close()
+            raise
+
+        def chunks():
+            try:
+                while chunk := response.read(1 << 20):
+                    yield chunk
+            finally:
+                connection.close()
+
+        return response.status, found, chunks()
 
     def json(self, method: str, path: str, value=None, expect=(200,)):
         body = None if value is None else json.dumps(value).encode()

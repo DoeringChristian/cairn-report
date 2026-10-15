@@ -101,15 +101,25 @@ def test_migrated_store_is_served(old_hub, tmp_path, monkeypatch):
     new = tmp_path / "new"
     main(["store", "migrate", str(old_hub), str(new)])
     token = init_root(new).read_text().strip()
-    httpd = make_server(new, port=0, secure_cookie=False)
+    httpd = make_server(new, port=0)
     httpd.RequestHandlerClass.log_message = lambda *a: None
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    served = SimpleNamespace(port=httpd.server_address[1], token=token)
+    from cairn_report.ui.server import RemoteBackend, make_ui_server
+
+    ui_httpd = make_ui_server(RemoteBackend(f"http://127.0.0.1:{httpd.server_address[1]}", False), port=0, secure_cookie=False)
+    ui_httpd.RequestHandlerClass.log_message = lambda *a: None
+    threading.Thread(target=ui_httpd.serve_forever, daemon=True).start()
+    served = SimpleNamespace(port=ui_httpd.server_address[1], token="")
     try:
-        assert call(served, "GET", "/p/demo/r/overview/")[0] == 200
-        status, _, page = call(served, "GET", "/p/demo/a/descent")
+        _, headers, _ = call(served, "POST", "/login", body=f"token={token}", token=None,
+                             headers={"Content-Type": "application/x-www-form-urlencoded"})
+        cookie = {"Cookie": headers["Set-Cookie"].split(";")[0]}
+        assert call(served, "GET", "/p/demo/r/overview/", token=None, headers=cookie)[0] == 200
+        status, _, page = call(served, "GET", "/p/demo/a/descent", token=None, headers=cookie)
         assert status == 200 and b"3 versions" in page
-        assert call(served, "GET", "/p/demo/")[0] == 200
+        assert call(served, "GET", "/p/demo/", token=None, headers=cookie)[0] == 200
     finally:
+        ui_httpd.shutdown()
+        ui_httpd.server_close()
         httpd.shutdown()
         httpd.server_close()

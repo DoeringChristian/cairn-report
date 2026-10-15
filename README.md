@@ -8,7 +8,8 @@ folders:
 - a **run logger** that writes evidence to fixed places in a run folder (files only;
   `cairn-report publish --watch` syncs a running job's folder to the store);
 - an **artifact store**: named, versioned folders (datasets, run outputs, reports) in a local
-  folder or on a token-protected server, with `publish`, `pull`, and lineage;
+  folder or on a token-protected server, with `publish`, `pull`, and lineage, and a **UI**
+  (`cairn-report ui`) to explore it in a browser;
 - **run bookkeeping** for Hydra projects: each run's `run.json`, the `latest`
   link, study completion, and a source snapshot per run.
 
@@ -65,7 +66,7 @@ The build also writes `generated/reports/index.html`, a project index with one
 card per report (title, status, summary, update time, number of inputs), and
 `site.json`, the flat report list the sidebar uses. `serve` moves to the next
 free port when the requested one is taken (`--strict-port` fails instead). The
-output is a static site: any web server, the project server, or a store server can
+output is a static site: any web server, the project server, or the store UI can
 serve it, at any address prefix.
 
 ### Writing a report
@@ -155,8 +156,8 @@ near the viewport and plays muted and looped while it is on screen (not with
 reduced motion). In the lightbox it has a player: play/pause (click, Space,
 `k`), a scrub bar, frame steps (`,` `.`, or a sideways or Shift mouse wheel),
 ±1 s (Shift+←/→), speed from 0.1× to 2×, and the same zoom and pan as images.
-The frame rate is read from the MP4, so frame steps are exact. `serve` and the
-store server answer range requests, so browsers can seek.
+The frame rate is read from the MP4, so frame steps are exact. `serve`, the
+store server and the store UI answer range requests, so browsers can seek.
 
 ### Publishing a report
 
@@ -294,19 +295,29 @@ the exact versions it consumed (`inputs`), and where it was published from. Alia
 `[project:]name[@v3|@alias|@label][//file]`.
 
 A project works offline against a store folder (`.store` by default, `[store] path`). To share
-it, serve a folder over HTTP and point projects at the server.
+it, serve a folder over HTTP and point projects at the server. The two halves are separate:
+
+- the **store server** (`cairn-report store serve`) is only an artifact store: a JSON API and file
+  downloads, bearer tokens, no pages;
+- the **UI** (`cairn-report ui`) is a separate process that explores a store in a browser, either a
+  folder or a store server, so it can run on a laptop against a store on a cluster.
 
 ```bash
-cairn-report store serve /srv/store      # 127.0.0.1:8800; put an HTTPS reverse proxy in front
+cairn-report store serve /srv/store      # store on 127.0.0.1:8800, UI on 127.0.0.1:8801; HTTPS reverse proxy in front
+cairn-report store serve /srv/store --no-ui [--port 8800] [--max-blob-gb 50]     # the store alone
 ```
 
 The first `serve` of a new folder creates it with a random owner token (owner-only, in
-`<folder>/token`); every launch prints `Store: <url>` and `Token: <owner token>` to the terminal
-(never into a URL). Binding to a non-local `--host` warns: the server speaks plain HTTP.
+`<folder>/token`); every launch prints `Store: <url>`, `UI: <url>` and `Token: <owner token>` to
+the terminal (never into a URL). Binding to a non-local `--host` warns: the server speaks plain
+HTTP. By default `serve` also starts `cairn-report ui` as a child process (own port: `--ui-port`,
+default `--port` + 1; same `--host`) pointed at this store. The child gets the owner token only in
+its environment, never on its command line, and stops with the server; if the UI dies, the store
+keeps running and prints a warning. `--no-ui` starts the store alone.
 
-For local testing, `store serve <folder> --no-auth` needs no login and no token: every request acts
-as the owner, and clients connect without `CAIRN_STORE_TOKEN`. It is refused on any `--host` but
-loopback.
+For local testing, `store serve <folder> --no-auth` needs no token: every request acts as the owner,
+clients connect without `CAIRN_STORE_TOKEN`, and the UI child runs `--no-auth` too. It is refused on
+any `--host` but loopback.
 
 ```bash
 cairn-report store token create /srv/store --project my-study --write --name cluster   # printed once
@@ -317,7 +328,7 @@ cairn-report store token revoke /srv/store cluster
 The owner token can do everything. A scoped token reads one project, and publishes to it only
 with `--write`; everything else is 403 and a scoped token only sees its own project. Scoped
 tokens are stored hashed (`tokens.jsonl`); revoking one takes effect immediately, also for
-browser sessions (the cookie holds a signed token id, never the token).
+UI sessions.
 
 In a project:
 
@@ -348,19 +359,46 @@ crops = store.pull("datasets/crops@v3")      # works with a local and a remote s
 spans folders, a leading `/` anchors to the project root. Pulled copies live in
 `~/.cache/cairn-report/artifacts/`, with a blob cache beside them, so a file is downloaded once.
 
-The server serves the pages for people, with the same login (any valid token, kept as an
-HttpOnly, SameSite=Strict cookie; `--insecure-cookies` for plain-HTTP tunnels):
+The server's API lives under `/api/v2/` and its files under `/files/<project>/<name>@vN//<path>`
+(ETag, Range, `Content-Security-Policy: sandbox`); the routes are listed in
+`cairn_report/store/server.py`. Besides publishing and resolving it answers what a viewer needs:
+projects with their artifact count and last update, an artifact's summary with its latest version and
+aliases, a version's file list, and lineage. Tokens are bearer tokens only: the server has no
+cookies, no login page and no HTML. It never runs pushed code.
 
-- `/` projects (reports, artifacts, last update);
+### Exploring a store: `cairn-report ui`
+
+```bash
+cairn-report ui                                   # the store in cairn-report.toml ([store] url or path), on 127.0.0.1:8801
+cairn-report ui --store https://store.example.org # a remote store, e.g. from a laptop against a cluster-side store
+cairn-report ui --store /srv/store                # a store folder
+```
+
+The UI opens the store only through its interface (a store server's API, or a folder's store
+code), so it needs no access to the store's files and does no work in the store server. It prints
+`UI: <url> (store: <url or folder>)` and serves:
+
+- `/` projects (artifacts, last update);
 - `/p/<project>/` its reports (title, status, summary, latest version), then its other artifacts;
-- `/p/<project>/r/<slug>[@vN]/` a report version's built page; its Data panel links each input
-  to the artifact page of the exact version;
-- `/p/<project>/a/<name>[@vN]` an artifact: versions, the files of one version, its metadata,
-  its inputs and its consumers (the back-trace view).
+- `/p/<project>/r/<slug>[@vN]/` a report version's built page (a report is an artifact
+  `reports/<slug>` with `site/` and `source/`); its Data panel links each input to the artifact page
+  of the exact version;
+- `/p/<project>/a/<name>[@vN]` an artifact: versions, the files of one version, its metadata, its
+  inputs and its consumers (the back-trace view);
+- `/files/<project>/<name>@vN//<path>` the store's files, with Range (videos seek).
 
-The API lives under `/api/v2/` and files under `/files/<project>/<name>@vN//<path>` (ETag, Range);
-the routes are listed in `cairn_report/store/server.py`. The server never runs pushed code, but it
-serves pushed HTML: give write tokens to people whose reports you trust.
+**Login.** By default the UI asks for a store token on `/login` (the owner token or a scoped one) and
+checks it against the store: a store server is asked with it, a store folder's owner token file and
+`tokens.jsonl` are checked. The token stays in the UI process, in an in-memory session table; the
+browser gets only a random session id (HttpOnly, SameSite=Strict cookie, `Secure` unless
+`--insecure-cookies`, for plain-HTTP tunnels), and the token is never in a URL or a page. Each
+session acts with its own token, so a scoped token sees only its project, and a revoked token ends
+its session. Sessions last 30 days and are forgotten when the UI restarts.
+
+`--no-auth` (loopback `--host` only) has no login: the UI uses `CAIRN_STORE_TOKEN` or
+`[store] token_file` against a store server (none against a `--no-auth` store), or the owner's full
+access to a folder. `--allow-http` permits plain HTTP to a non-local store server, as for `publish`.
+A report page runs in the UI's origin: give write tokens to people whose reports you trust.
 
 ### Migrating from the hub
 

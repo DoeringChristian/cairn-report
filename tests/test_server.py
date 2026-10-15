@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -12,11 +13,10 @@ import pytest
 from cairn_report import store
 from cairn_report.cli import main
 from cairn_report.push import Client
-from cairn_report.store import RemoteStore, StoreError
+from cairn_report.store import BadRange, LocalStore, RemoteStore, StoreError
 from cairn_report.store.server import make_server, serve_store
 from cairn_report.store.tokens import create_token, init_root, list_tokens, revoke_token
 
-from conftest import make_data, write
 from test_store import env, folder  # noqa: F401  (the project fixture and folder helper)
 
 
@@ -25,7 +25,7 @@ def server(tmp_path, monkeypatch):
     """A store server on a free port, in a thread, with its owner token."""
     root = tmp_path / "store-root"
     token = init_root(root).read_text().strip()
-    httpd = make_server(root, port=0, secure_cookie=False)
+    httpd = make_server(root, port=0)
     requests = []
     httpd.RequestHandlerClass.log_message = lambda self, format, *args: requests.append(format % args)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -77,25 +77,26 @@ def test_auth_required(server):
     assert call(server, "GET", "/api/v2/projects", token=None)[0] == 401
     assert call(server, "GET", "/api/v2/projects", token="x" * 40)[0] == 401
     assert call(server, "GET", "/api/v2/projects")[0] == 200
-    status, headers, _ = call(server, "GET", "/", token=None)
-    assert status == 303 and headers["Location"].startswith("/login")
     assert call(server, "PUT", "/api/v2/blobs/" + "0" * 64, body=b"x", token=None)[0] == 401
     assert call(server, "POST", "/api/v2/blobs/missing", {"sha256": []}, token=None)[0] == 401
     assert call(server, "GET", "/api/v1/projects")[0] == 404  # the old hub API is gone
+    assert call(server, "GET", "/files/study/data@v1//x.txt", token=None)[0] == 401
 
 
-def test_login_cookie_works_for_pages_and_never_for_the_api(server):
+def test_the_server_has_no_pages_and_no_cookies(server, project):
+    store.publish("data", folder(project, "d", {"a.txt": "1"}), store=use_remote(project, server))
+    for path in ("/", "/login", "/logout", "/p/study/", "/p/study/a/data", "/p/study/r/alpha/", "/p/study/r/site.json", "/favicon.ico"):
+        for token in ("owner", None):
+            status, headers, body = call(server, "GET", path, token=token)
+            assert status == 404 and "Set-Cookie" not in headers and b"<html" not in body, (path, status)
     form = {"Content-Type": "application/x-www-form-urlencoded"}
-    status, headers, _ = call(server, "POST", "/login", body=f"token={'w' * 40}&next=/", token=None, headers=form)
-    assert status == 401 and "Set-Cookie" not in headers
-    status, headers, _ = call(server, "POST", "/login", body=f"token={server.token}&next=//evil.example", token=None, headers=form)
-    assert status == 303 and headers["Location"] == "/"
-    cookie = headers["Set-Cookie"].split(";")[0]
-    assert "HttpOnly" in headers["Set-Cookie"] and "SameSite=Strict" in headers["Set-Cookie"] and server.token not in cookie
-    assert call(server, "GET", "/", token=None, headers={"Cookie": cookie})[0] == 200
-    assert call(server, "GET", "/api/v2/projects", token=None, headers={"Cookie": cookie})[0] == 401
-    forged = cookie.split("=")[0] + "=owner." + "0" * 64
-    assert call(server, "GET", "/", token=None, headers={"Cookie": forged})[0] == 303
+    status, headers, _ = call(server, "POST", "/login", body=f"token={server.token}&next=/", token=None, headers=form)
+    assert status in (401, 404) and "Set-Cookie" not in headers
+    cookie = {"Cookie": "cairn_store=owner.abc"}
+    assert call(server, "GET", "/api/v2/projects", token=None, headers=cookie)[0] == 401  # the API is bearer-only
+    for path in ("/api/v2/projects", "/api/v2/projects/study", "/files/study/data@v1//a.txt"):
+        assert "Set-Cookie" not in call(server, "GET", path)[1]
+    assert call(server, "GET", "/api/v2/nope")[2].startswith(b"{")  # errors are JSON everywhere
 
 
 def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
@@ -149,8 +150,7 @@ def test_scoped_tokens(server, env):
                                ("GET", "/api/v2/projects/beta/artifacts", None),
                                ("GET", "/api/v2/resolve?ref=beta:data@latest", None),
                                ("GET", "/api/v2/lineage?ref=beta:data@latest", None),
-                               ("GET", "/files/beta/data@v1//x.txt", None),
-                               ("GET", "/p/beta/", None)):
+                               ("GET", "/files/beta/data@v1//x.txt", None)):
         assert call(server, method, path, body, token=read)[0] == 403, (method, path)
     assert call(server, "PUT", "/api/v2/blobs/" + "a" * 64, body=b"x", token=read)[0] == 403
     assert call(server, "GET", "/files/alpha/data@v1//x.txt", token=read)[0] == 200
@@ -184,23 +184,6 @@ def test_tokens_are_stored_hashed(server):
         create_token(server.root, "alpha", name="w")
     with pytest.raises(SystemExit, match="no active token"):
         revoke_token(server.root, "nope")
-
-
-def test_browser_login_with_a_scoped_token_is_scoped_and_revocable(server, env):
-    seed(server)
-    token = create_token(server.root, "alpha", name="viewer")
-    form = {"Content-Type": "application/x-www-form-urlencoded"}
-    status, headers, _ = call(server, "POST", "/login", body=f"token={token}&next=/", token=None, headers=form)
-    cookie = headers["Set-Cookie"].split(";")[0]
-    assert status == 303 and token not in cookie
-    cookies = {"Cookie": cookie}
-    index = call(server, "GET", "/", token=None, headers=cookies)[2].decode()
-    assert "/p/alpha/" in index and "/p/beta/" not in index
-    assert call(server, "GET", "/p/alpha/", token=None, headers=cookies)[0] == 200
-    assert call(server, "GET", "/p/beta/", token=None, headers=cookies)[0] == 403
-    assert call(server, "GET", "/files/beta/data@v1//x.txt", token=None, headers=cookies)[0] == 403
-    revoke_token(server.root, "viewer")
-    assert call(server, "GET", "/p/alpha/", token=None, headers=cookies)[0] == 303
 
 
 def test_token_commands(server, capsys):
@@ -382,152 +365,165 @@ def test_publish_watch_failure_keeps_latest(server, env, capsys):
     assert (store.pull("sweep@latest", store=r) / "ok.txt").read_text() == "good"
 
 
-# -------------------------------------------------------------------- pages
+# ------------------------------------------------- the JSON the UI is built from
 
 
-def publish_report_to(env, server):
-    """The conftest project (reports alpha and beta, input `descent`) with its store switched to the server."""
+def test_overview_summary_and_file_list_routes(server, env):
     r = use_remote(env, server)
-    store.publish("descent", make_data(env.parent / "remote-data"), store=r)
-    main(["publish", "reports/alpha"])
-    main(["publish", "reports/beta"])
-    return r
+    store.publish("datasets/crops", folder(env, "d", {"a.txt": "1", "sub/b.txt": "22"}), metadata={"title": "Crops"}, aliases=["paper"], store=r)
+    store.publish("other", folder(env, "o", {"x.txt": "x"}), store=r)
+    [project] = api(server, "GET", "/api/v2/projects")
+    assert project["name"] == "study" and project["artifacts"] == 2 and project["updated"] and "reports" not in project
+    summaries = {item["name"]: item for item in api(server, "GET", "/api/v2/projects/study/artifacts")}
+    assert summaries["datasets/crops"]["latest"] == 1 and summaries["datasets/crops"]["metadata"] == {"title": "Crops"}
+    one = api(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops")
+    assert one["aliases"] == {"latest": 1, "paper": 1} and one["versions"] == 1
+    assert one["latest_version"]["version"] == 1 and [f["path"] for f in one["latest_version"]["files"]] == ["a.txt", "sub/b.txt"]
+    assert call(server, "GET", "/api/v2/projects/study/artifacts/nope")[0] == 404
+    files = api(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops/versions/1/files")["files"]
+    assert [f["path"] for f in files] == ["a.txt", "sub/b.txt"] and files[1]["size"] == 2
+    assert call(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops/versions/9/files")[0] == 404
+    scoped = create_token(server.root, "other-project", name="s")
+    assert call(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops", token=scoped)[0] == 403
 
 
-def test_pages(server, project, capsys):
-    r = publish_report_to(project, server)
-    store.publish("datasets/other", folder(project, "o", {"a.txt": "1"}), aliases=["best"], store=r)
-    capsys.readouterr()
-    index = call(server, "GET", "/")[2].decode()
-    assert "/p/study/" in index and "<td>2</td>" in index  # two reports
-    page = call(server, "GET", "/p/study/")[2].decode()
-    assert "/p/study/r/alpha/" in page and "Alpha" in page and "active" in page and "The first report" in page
-    assert page.index("Alpha") < page.index("datasets/other")  # reports first, then the other artifacts
-    assert "/p/study/a/datasets/other" in page and "best" in page and "/p/study/a/descent" in page
-    # the artifact page: versions, files, metadata, inputs, consumers
-    art = call(server, "GET", "/p/study/a/descent")[2].decode()
-    assert "/files/study/descent@v1//metrics.jsonl" in art and "/p/study/a/reports/alpha@v1" in art  # a consumer
-    assert "completed" in art and "latest" in art
-    rep = call(server, "GET", "/p/study/a/reports/alpha")[2].decode()
-    assert "/p/study/a/descent@v1" in rep and "open report" in rep and "/p/study/r/alpha@v1/" in rep  # an input
-    assert "&quot;title&quot;: &quot;Alpha&quot;" in rep or '"title": "Alpha"' in rep.replace("&quot;", '"')
-    assert call(server, "GET", "/p/study/a/descent@v9")[0] == 404
-    assert call(server, "GET", "/p/nope/")[0] == 404
-    assert call(server, "GET", "/p/study")[0] == 301
+def test_remote_store_read_file_streams_ranges(server, env):
+    r = use_remote(env, server)
+    store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10}), store=r)
+    local = LocalStore(server.root)
+    for reader in (r, local):  # the same answers from both store kinds
+        whole = reader.read_file("study", "data", "v1", "big.txt")
+        assert (whole.total, whole.size, whole.partial, whole.immutable) == (100, 100, False, True)
+        assert b"".join(whole.chunks) == b"0123456789" * 10
+        part = reader.read_file("study", "data", "latest", "big.txt", "bytes=5-14")
+        assert (part.first, part.last, part.total, part.partial, part.immutable) == (5, 14, 100, True, False)
+        assert b"".join(part.chunks) == b"5678901234" and part.sha256 == whole.sha256
+        with pytest.raises(BadRange) as raised:
+            reader.read_file("study", "data", "v1", "big.txt", "bytes=100-")
+        assert raised.value.total == 100
+        with pytest.raises(store.NotFound):
+            reader.read_file("study", "data", "v1", "nope.txt")
 
 
-def test_report_is_served_with_its_static_files_and_data_links(server, project, capsys):
-    publish_report_to(project, server)
-    status, _, body = call(server, "GET", "/p/study/r/alpha/")
-    page = body.decode()
-    assert status == 200 and "<title>" in page
-    script = re.search(r'src="\.\./(_static/report\.[0-9a-f]+\.js)"', page).group(1)  # relative: /p/study/r/_static/...
-    status, headers, js = call(server, "GET", f"/p/study/r/{script}", headers={"Accept-Encoding": "gzip"})
-    assert status == 200 and headers["Content-Encoding"] == "gzip" and "immutable" in headers["Cache-Control"]
-    plain = call(server, "GET", f"/p/study/r/{script}")
-    assert plain[0] == 200 and b"showData" in plain[2] and b"/p/" in plain[2]
-    css = re.search(r'href="\.\./(_static/report\.[0-9a-f]+\.css)"', page).group(1)
-    assert call(server, "GET", f"/p/study/r/{css}")[0] == 200
-    data = json.loads(call(server, "GET", "/p/study/r/alpha/report-data.json")[2])
-    assert data["inputs"]["descent"]["resolved"] == "study:descent@v1"
-    assert b"Result" in call(server, "GET", "/p/study/r/alpha/narrative.html")[2]
-    assert call(server, "GET", "/p/study/r/alpha/assets/inputs/descent/figures/hist.png")[0] == 200
-    assert call(server, "GET", "/p/study/r/alpha")[0] == 301
-    assert call(server, "GET", "/p/study/r/alpha@v1/")[0] == 200 and call(server, "GET", "/p/study/r/alpha@v2/")[0] == 404
-    site = json.loads(call(server, "GET", "/p/study/r/site.json")[2])  # the page's navigation
-    assert [item["key"] for item in site["reports"]] == ["alpha", "beta"] and site["reports"][0]["href"] == "alpha/"
-    assert call(server, "GET", "/p/study/r/", token=server.token)[0] == 303
-    assert call(server, "GET", "/p/study/r/_static/nope.js")[0] == 404
-    assert call(server, "GET", "/p/study/r/_static/..%2Fx")[0] == 404
-    # the Data panel's link target is the artifact page of the exact reference
-    assert call(server, "GET", "/p/study/a/descent@v1")[0] == 200
+# ------------------------------------------------- the UI beside the store server
 
 
-def test_report_versions_stay_viewable(server, project, capsys):
-    publish_report_to(project, server)
-    alpha = project / "reports" / "alpha" / "report.md"
-    alpha.write_text(alpha.read_text().replace("It works", "It still works"))
-    main(["publish", "reports/alpha"])
-    assert b"It still works" in call(server, "GET", "/p/study/r/alpha/narrative.html")[2]
-    assert b"It still works" not in call(server, "GET", "/p/study/r/alpha@v1/narrative.html")[2]
-    assert call(server, "GET", "/p/study/r/alpha@latest/")[0] == 200
-    assert "/p/study/r/alpha@v1/" in call(server, "GET", "/p/study/a/reports/alpha")[2].decode()  # the version picker
+def free_port() -> int:
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
-def test_the_report_script_links_the_data_panel_only_when_store_served():
-    from importlib import resources
-
-    script = (resources.files("cairn_report") / "template" / "report.js").read_text()
-    assert "STORE_SERVED = !BUNDLE && /^\\/p\\/[^/]+\\/r\\//.test(location.pathname)" in script
-    assert "STORE_SERVED && match ?" in script and "version.dataset.artifact = input.resolved" in script
-
-
-# -------------------------------------------------------------- end to end
-
-
-def test_end_to_end_two_machines_lineage(server, tmp_path, monkeypatch):
-    def machine(name):
-        root = tmp_path / name
-        root.mkdir()
-        (root / "pyproject.toml").write_text("")
-        (root / "cairn-report.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\ninterval = 1\n')
-        monkeypatch.chdir(root)
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / f"cache-{name}"))
-        monkeypatch.delenv("CAIRN_INPUTS", raising=False)
-        return root
-
-    # a dataset, published from somewhere
-    a = machine("machine-a")
-    main(["publish", str(folder(a, "toy-data", {"x.csv": "1,2,3\n"})), "datasets/toy"])
-    # machine A: a plain script (no Hydra) pulls datasets/toy@v1 and writes outputs; CAIRN_INPUTS points at them
-    out = a / "outputs"
-    out.mkdir()
-    script = ("import pathlib, sys; from cairn_report import store; src = store.pull('datasets/toy@v1'); "
-              "pathlib.Path(sys.argv[1], 'result.txt').write_text('fit of ' + (src / 'x.csv').read_text().strip())")
-    subprocess.run([sys.executable, "-c", script, str(out)], check=True, cwd=a,
-                   env=os.environ | {"CAIRN_INPUTS": str(out / ".cairn-inputs.jsonl")})
-    main(["publish", str(out), "toy-fit"])
-    # machine B: a report with `inputs: fit: toy-fit@latest`
-    b = machine("machine-b")
-    write(b / "reports" / "summary" / "report.md", (
-        "---\ntitle: Summary\nstatus: active\nsummary: Fit of the toy data.\ninputs:\n  fit: toy-fit@latest\n---\n\n"
-        "```python exec hide\nresult = (inputs.fit / 'result.txt').read_text()\n```\n\n## Result\n\nThe result is {{ result }}.\n"))
-    main(["publish", "reports/summary"])
-
-    chain = "study:datasets/toy@v1", "study:toy-fit@v1", "study:reports/summary@v1"
-    lineage = api(server, "GET", "/api/v2/lineage?ref=study:reports%2Fsummary@latest")
-    assert lineage == {"ref": chain[2], "inputs": [chain[1]], "consumers": []}
-    middle = api(server, "GET", "/api/v2/lineage?ref=study:toy-fit@v1")
-    assert middle["inputs"] == [chain[0]] and middle["consumers"] == [chain[2]]
-    assert api(server, "GET", "/api/v2/lineage?ref=study:datasets%2Ftoy@v1")["consumers"] == [chain[1]]
-    # the same chain on the artifact pages, both ways
-    toy = call(server, "GET", "/p/study/a/datasets/toy")[2].decode()
-    assert "/p/study/a/toy-fit@v1" in toy
-    fit = call(server, "GET", "/p/study/a/toy-fit")[2].decode()
-    assert "/p/study/a/datasets/toy@v1" in fit and "/p/study/a/reports/summary@v1" in fit
-    report = call(server, "GET", "/p/study/a/reports/summary")[2].decode()
-    assert "/p/study/a/toy-fit@v1" in report
-    assert b"fit of 1,2,3" in call(server, "GET", "/p/study/r/summary/narrative.html")[2]
-    # the report data records its exact input for the Data panel
-    assert json.loads(call(server, "GET", "/p/study/r/summary/report-data.json")[2])["inputs"]["fit"]["resolved"] == chain[1]
+def children_of(pid: int) -> list[tuple[int, str]]:
+    rows = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout.splitlines()
+    found = []
+    for row in rows:
+        fields = row.split(None, 2)
+        if len(fields) == 3 and int(fields[1]) == pid:
+            found.append((int(fields[0]), fields[2]))
+    return found
 
 
-def test_no_auth_serves_without_tokens_on_loopback_only(tmp_path, env, monkeypatch):
-    root = tmp_path / "open-store"
-    init_root(root)
-    with pytest.raises(SystemExit, match="loopback"):
-        make_server(root, host="0.0.0.0", port=0, no_auth=True)
-    httpd = make_server(root, port=0, no_auth=True)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+def alive(pid: int) -> bool:
     try:
-        server = SimpleNamespace(url=f"http://127.0.0.1:{httpd.server_address[1]}", port=httpd.server_address[1], token="")
-        monkeypatch.delenv("CAIRN_STORE_TOKEN", raising=False)
-        use_remote(env, server)
-        version = store.publish("open", folder(env, "open-run", {"a.txt": "x"}))  # a client with no token at all
-        assert version == 1
-        assert api(server, "GET", "/api/v2/projects", token="")[0]["name"] == "study"
-        status, _, page = call(server, "GET", "/p/study/a/open", token="")
-        assert status == 200 and b"open" in page  # pages too, without a login
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return not subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip().startswith("Z")
+
+
+def launch(tmp_path, *flags):
+    """`cairn-report store serve` as its own process; returns it with its startup output (up to the last line)."""
+    root, port = tmp_path / "launch-store", free_port()
+    process = subprocess.Popen([sys.executable, "-m", "cairn_report", "store", "serve", str(root), "--port", str(port), *flags],
+                               stdout=subprocess.PIPE, text=True, cwd=tmp_path)
+    lines = []
+    while line := process.stdout.readline():
+        lines.append(line.rstrip())
+        if line.startswith("  clients read it") or line.startswith("Authentication is off"):
+            break
+    return process, port, lines, root
+
+
+def stop_process(process):
+    process.terminate()
+    process.wait(10)
+
+
+def test_store_serve_starts_its_ui_as_a_child_with_the_token_in_its_environment_only(tmp_path):
+    process, port, lines, root = launch(tmp_path)
+    try:
+        token = (root / "token").read_text().strip()
+        text = "\n".join(lines)
+        ui_port = port + 1
+        assert f"Store: http://127.0.0.1:{port}/" in text and f"Token: {token}" in text
+        assert any(line.startswith(f"UI: http://127.0.0.1:{ui_port}/ (store: http://127.0.0.1:{port}") for line in lines), lines
+    except Exception:
+        stop_process(process)
+        raise
+    try:
+        [(child, command)] = children_of(process.pid)
+        assert "cairn_report" in command and "ui" in command and token not in command  # never on the command line
+        form = {"Content-Type": "application/x-www-form-urlencoded"}
+        ui = SimpleNamespace(port=ui_port, token="")
+        assert call(ui, "GET", "/", token=None)[0] == 303  # the UI asks for a login
+        assert call(ui, "POST", "/login", body="token=" + "x" * 40, token=None, headers=form)[0] == 401
+        status, headers, _ = call(ui, "POST", "/login", body=f"token={token}", token=None, headers=form)
+        assert status == 303 and token not in headers["Set-Cookie"]
+        page = call(ui, "GET", "/", token=None, headers={"Cookie": headers["Set-Cookie"].split(";")[0]})
+        assert page[0] == 200 and b"Store" in page[2] and token.encode() not in page[2]
+        # the child stops with the server
+        stop_process(process)
+        for _ in range(50):
+            if not alive(child):
+                break
+            time.sleep(0.1)
+        assert not alive(child)
     finally:
-        httpd.shutdown()
-        httpd.server_close()
+        if process.poll() is None:
+            stop_process(process)
+
+
+def test_store_serve_no_ui_and_ui_port(tmp_path):
+    process, port, lines, root = launch(tmp_path, "--no-ui")
+    try:
+        assert not any(line.startswith("UI:") for line in lines) and children_of(process.pid) == []
+    finally:
+        stop_process(process)
+    tmp = tmp_path / "second"
+    tmp.mkdir()
+    process, port, lines, root = launch(tmp, "--ui-port", str(free_port()))
+    try:
+        [(child, command)] = children_of(process.pid)
+        [shown] = [line for line in lines if line.startswith("UI:")]
+        assert re.fullmatch(r"UI: http://127\.0\.0\.1:(\d+)/ \(store: http://127\.0\.0\.1:\d+\)", shown)
+        assert f"--port {shown.split(':')[2].split('/')[0]}" in command
+    finally:
+        stop_process(process)
+
+
+def test_store_serve_no_auth_runs_the_ui_without_a_login(tmp_path):
+    process, port, lines, root = launch(tmp_path, "--no-auth")
+    try:
+        assert not any("Token:" in line for line in lines)
+        ui = SimpleNamespace(port=port + 1, token="")
+        assert call(ui, "GET", "/", token=None)[0] == 200  # no login in front of the UI either
+        [(child, command)] = children_of(process.pid)
+        assert "--no-auth" in command
+    finally:
+        stop_process(process)
+
+
+def test_the_server_keeps_running_when_its_ui_dies(tmp_path):
+    process, port, lines, root = launch(tmp_path)
+    try:
+        [(child, _)] = children_of(process.pid)
+        os.kill(child, 9)
+        time.sleep(1.0)
+        server = SimpleNamespace(port=port, token=(root / "token").read_text().strip())
+        assert call(server, "GET", "/api/v2/projects")[0] == 200 and process.poll() is None
+    finally:
+        stop_process(process)
+    assert not alive(child)

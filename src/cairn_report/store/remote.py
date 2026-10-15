@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import secrets
 from pathlib import Path
 from urllib.parse import quote
 
 from ..push import BATCH, Client, ClientError, upload_missing
 from . import refs
-from .local import NotFound, StoreError
+from .local import BadRange, FileRead, Forbidden, NotFound, StoreError, Unauthorized
 from .refs import Ref
 
 
@@ -92,6 +93,24 @@ class RemoteStore:
             temporary.unlink(missing_ok=True)
         return target
 
+    def read_file(self, project: str, name: str, selector: str | None, path: str, range_header: str | None = None) -> FileRead:
+        """`LocalStore.read_file` through the server's `/files` route, which gets the Range header as is."""
+        where = f"/files/{q(project)}/{quote(name)}@{selector or 'latest'}//{quote(path)}"
+        try:
+            status, headers, chunks = self.client.stream(where, {"Range": range_header} if range_header else None)
+        except ClientError as error:
+            if error.status == 416:
+                total = re.fullmatch(r"bytes \*/(\d+)", error.headers.get("content-range", ""))
+                raise BadRange(int(total.group(1)) if total else 0) from error
+            raise _translate(error) from error
+        match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", headers.get("content-range", ""))
+        if match:
+            first, last, total = map(int, match.groups())
+        else:
+            total = int(headers.get("content-length", 0))
+            first, last = 0, total - 1
+        return FileRead(total, first, last, headers.get("etag", "").strip('"'), "immutable" in headers.get("cache-control", ""), chunks)
+
     # --------------------------------------------------------------- projects
 
     def create_project(self, name: str, title: str | None = None, description: str = "") -> dict:
@@ -106,6 +125,8 @@ class RemoteStore:
     def projects(self) -> list[dict]:
         return self._call("GET", "/api/v2/projects")
 
+    overviews = projects  # the server's project list already carries the artifact count and last update
+
     # --------------------------------------------------------------- artifacts
 
     def _artifact(self, project: str, name: str) -> str:
@@ -113,6 +134,9 @@ class RemoteStore:
 
     def summaries(self, project: str) -> list[dict]:
         return self._call("GET", f"/api/v2/projects/{q(project)}/artifacts")
+
+    def summary(self, project: str, name: str) -> dict:
+        return {key: value for key, value in self._call("GET", self._artifact(project, name)).items() if key != "latest_version"}
 
     def artifacts(self, project: str) -> list[str]:
         return [item["name"] for item in self.summaries(project)]
@@ -169,4 +193,6 @@ class RemoteStore:
 def _translate(error: ClientError) -> StoreError:
     """404 is a NotFound; every other server answer is a StoreError with the server's message."""
     text = str(error)
-    return NotFound(text) if error.status == 404 else StoreError(text)
+    if error.status == 404:
+        return NotFound(text)
+    return {401: Unauthorized, 403: Forbidden}.get(error.status, StoreError)(text)

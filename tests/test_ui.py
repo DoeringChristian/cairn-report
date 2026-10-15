@@ -1,0 +1,408 @@
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+from importlib import resources
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from cairn_report import store
+from cairn_report.cli import main
+from cairn_report.store import LocalStore, RemoteStore
+from cairn_report.store.tokens import create_token, revoke_token
+from cairn_report.ui import server as ui_server
+from cairn_report.ui.server import LocalBackend, RemoteBackend, make_ui_server
+
+from conftest import make_data, write
+from test_server import api, call, remote, seed, server, use_remote  # noqa: F401  (the store server in a thread, helpers)
+from test_store import env, folder  # noqa: F401
+
+FORM = {"Content-Type": "application/x-www-form-urlencoded"}
+
+
+@pytest.fixture(autouse=True)
+def quick_logins(monkeypatch):
+    monkeypatch.setattr(ui_server, "LOGIN_DELAY", 0)
+
+
+def start(backend, **options):
+    httpd = make_ui_server(backend, port=0, **options)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, SimpleNamespace(port=httpd.server_address[1], token="")
+
+
+@pytest.fixture(params=["folder", "server"])
+def ui(request, server):
+    """A UI (login required) over the store folder itself, and over the store server in its thread."""
+    backend = LocalBackend(server.root, no_auth=False) if request.param == "folder" else RemoteBackend(server.url, allow_http=False)
+    httpd, stack = start(backend, secure_cookie=False)
+    stack.kind, stack.server = request.param, server
+    yield stack
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def login(ui, token=None):
+    """A session cookie header for a token (the owner's by default)."""
+    status, headers, _ = call(ui, "POST", "/login", body=f"token={token or ui.server.token}&next=/", token=None, headers=FORM)
+    assert status == 303, status
+    return {"Cookie": headers["Set-Cookie"].split(";")[0]}
+
+
+def get(ui, path, cookie, **headers):
+    return call(ui, "GET", path, token=None, headers={**cookie, **headers})
+
+
+def publish_reports(project, server):
+    """The conftest project (reports alpha and beta, input `descent`) with its store switched to the server."""
+    r = use_remote(project, server)
+    store.publish("descent", make_data(project.parent / "remote-data"), store=r)
+    main(["publish", "reports/alpha"])
+    main(["publish", "reports/beta"])
+    return r
+
+
+# --------------------------------------------------------------------- login
+
+
+def test_login_is_required_and_the_token_stays_server_side(ui):
+    token = ui.server.token
+    for path in ("/", "/p/study/", "/p/study/a/data", "/p/study/r/site.json"):
+        status, headers, _ = call(ui, "GET", path, token=None)
+        assert status == 303 and headers["Location"].startswith("/login"), path
+    assert call(ui, "GET", "/files/study/data@v1//x", token=None)[0] == 401
+    assert call(ui, "GET", "/", token="owner", headers={})[0] == 303  # a bearer header is not a login
+    status, _, form = call(ui, "GET", "/login?next=/p/study/", token=None)
+    assert status == 200 and b'type="password"' in form and b'value="/p/study/"' in form
+    # a wrong token is rejected and sets nothing
+    status, headers, body = call(ui, "POST", "/login", body="token=" + "w" * 40, token=None, headers=FORM)
+    assert status == 401 and "Set-Cookie" not in headers and b"not valid" in body
+    assert call(ui, "POST", "/login", body="token=", token=None, headers=FORM)[0] == 401
+    # the right one gives an opaque, HttpOnly, SameSite=Strict session id; open redirects are refused
+    status, headers, _ = call(ui, "POST", "/login", body=f"token={token}&next=//evil.example", token=None, headers=FORM)
+    assert status == 303 and headers["Location"] == "/"
+    cookie = headers["Set-Cookie"]
+    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and token not in cookie and "Secure" not in cookie  # secure_cookie=False
+    session = {"Cookie": cookie.split(";")[0]}
+    for path in ("/", "/p/study/"):
+        status, headers, body = get(ui, path, session)
+        assert status in (200, 404) and token.encode() not in body and token not in json.dumps(dict(headers))
+    assert get(ui, "/", session)[0] == 200
+    forged = {"Cookie": "cairn_ui=" + "a" * 43}
+    assert get(ui, "/", forged)[0] == 303
+    status, headers, _ = get(ui, "/logout", session)
+    assert status == 303 and headers["Location"] == "/login" and "Max-Age=0" in headers["Set-Cookie"]
+    assert get(ui, "/", session)[0] == 303  # the session is gone
+
+
+def test_the_cookie_is_secure_by_default(server):
+    httpd, ui = start(RemoteBackend(server.url, allow_http=False))
+    try:
+        status, headers, _ = call(ui, "POST", "/login", body=f"token={server.token}", token=None, headers=FORM)
+        assert status == 303 and "Secure" in headers["Set-Cookie"] and "HttpOnly" in headers["Set-Cookie"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_scoped_token_sees_only_its_project_and_revocation_ends_the_session(ui, env):
+    seed(ui.server)
+    token = create_token(ui.server.root, "alpha", name="viewer")
+    cookie = login(ui, token)
+    index = get(ui, "/", cookie)[2].decode()
+    assert "/p/alpha/" in index and "/p/beta/" not in index
+    assert get(ui, "/p/alpha/", cookie)[0] == 200 and get(ui, "/p/alpha/a/data", cookie)[0] == 200
+    assert get(ui, "/p/beta/", cookie)[0] == 403
+    assert get(ui, "/p/beta/a/data", cookie)[0] == 403
+    assert get(ui, "/p/beta/r/site.json", cookie)[0] == 403
+    assert get(ui, "/files/beta/data@v1//x.txt", cookie)[0] == 403
+    assert get(ui, "/files/alpha/data@v1//x.txt", cookie)[2] == b"alpha"
+    revoke_token(ui.server.root, "viewer")
+    status, headers, _ = get(ui, "/p/alpha/", cookie)
+    assert status == 303 and headers["Location"].startswith("/login")
+    assert call(ui, "POST", "/login", body=f"token={token}", token=None, headers=FORM)[0] == 401  # and cannot log in again
+
+
+def test_a_scoped_token_hides_other_projects_in_inputs_and_consumers(ui, env):
+    seed(ui.server)
+    r = remote(ui.server, project="beta")
+    store.publish("beta:derived", folder(env, "d", {"r.txt": "r"}), inputs=["alpha:data@v1"], store=r)
+    cookie = login(ui, create_token(ui.server.root, "alpha", name="viewer"))
+    page = get(ui, "/p/alpha/a/data", cookie)[2].decode()
+    assert "beta:derived@v1" not in page  # a consumer in a project this token cannot read
+    owner = get(ui, "/p/alpha/a/data", login(ui))[2].decode()
+    assert "/p/beta/a/derived@v1" in owner
+
+
+def test_no_auth_ui_is_loopback_only_and_needs_no_login(server):
+    with pytest.raises(SystemExit, match="loopback"):
+        make_ui_server(RemoteBackend(server.url, allow_http=True), host="0.0.0.0", port=0, no_auth=True)
+    for backend in (LocalBackend(server.root, no_auth=True), RemoteBackend(server.url, False, token=server.token)):
+        httpd, ui = start(backend, no_auth=True)
+        try:
+            status, _, body = call(ui, "GET", "/", token=None)
+            assert status == 200 and b"Log out" not in body
+            assert call(ui, "GET", "/login", token=None)[0] == 404
+            assert call(ui, "POST", "/login", body=f"token={server.token}", token=None, headers=FORM)[0] == 404
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+def test_no_auth_ui_over_a_no_auth_store_uses_no_token(tmp_path, env, monkeypatch):
+    from cairn_report.store.server import make_server
+    from cairn_report.store.tokens import init_root
+
+    root = tmp_path / "open-store"
+    init_root(root)
+    store_httpd = make_server(root, port=0, no_auth=True)
+    threading.Thread(target=store_httpd.serve_forever, daemon=True).start()
+    monkeypatch.delenv("CAIRN_STORE_TOKEN", raising=False)
+    url = f"http://127.0.0.1:{store_httpd.server_address[1]}"
+    (env / "cairn-report.toml").write_text(f'[store]\nurl = "{url}"\nproject = "study"\n')
+    store.publish("open", folder(env, "o", {"a.txt": "x"}))
+    httpd, ui = start(RemoteBackend(url, False), no_auth=True)
+    try:
+        status, _, page = call(ui, "GET", "/p/study/a/open", token=None)
+        assert status == 200 and b"open" in page
+    finally:
+        httpd.shutdown()
+        store_httpd.shutdown()
+        httpd.server_close()
+        store_httpd.server_close()
+
+
+def test_a_remote_ui_refuses_plain_http_to_a_non_local_store():
+    with pytest.raises(SystemExit, match="plain HTTP"):
+        RemoteBackend("http://store.example.org:8800", allow_http=False)
+    RemoteBackend("http://store.example.org:8800", allow_http=True)
+
+
+# --------------------------------------------------------------------- pages
+
+
+def test_pages(ui, project, capsys):
+    r = publish_reports(project, ui.server)
+    store.publish("datasets/other", folder(project, "o", {"a.txt": "1"}), aliases=["best"], store=r)
+    capsys.readouterr()
+    cookie = login(ui)
+    index = get(ui, "/", cookie)[2].decode()
+    assert "/p/study/" in index and "<td>4</td>" in index  # descent, two reports, datasets/other
+    page = get(ui, "/p/study/", cookie)[2].decode()
+    assert "/p/study/r/alpha/" in page and "Alpha" in page and "active" in page and "The first report" in page
+    assert page.index("Alpha") < page.index("datasets/other")  # reports first, then the other artifacts
+    assert "/p/study/a/datasets/other" in page and "best" in page and "/p/study/a/descent" in page
+    # the artifact page: versions, files, metadata, inputs, consumers
+    art = get(ui, "/p/study/a/descent", cookie)[2].decode()
+    assert "/files/study/descent@v1//metrics.jsonl" in art and "/p/study/a/reports/alpha@v1" in art  # a consumer
+    assert "completed" in art and "latest" in art
+    rep = get(ui, "/p/study/a/reports/alpha", cookie)[2].decode()
+    assert "/p/study/a/descent@v1" in rep and "open report" in rep and "/p/study/r/alpha@v1/" in rep  # an input
+    assert '"title": "Alpha"' in rep.replace("&quot;", '"')
+    assert get(ui, "/p/study/a/descent@v9", cookie)[0] == 404
+    assert get(ui, "/p/study/a/nope", cookie)[0] == 404
+    assert get(ui, "/p/nope/", cookie)[0] == 404
+    assert get(ui, "/p/study", cookie)[0] == 301
+    assert get(ui, "/p/study/a/descent@best", cookie)[0] == 404  # no such alias
+
+
+def test_report_is_served_with_its_static_files(ui, project, capsys):
+    publish_reports(project, ui.server)
+    cookie = login(ui)
+    status, _, body = get(ui, "/p/study/r/alpha/", cookie)
+    page = body.decode()
+    assert status == 200 and "<title>" in page
+    script = re.search(r'src="\.\./(_static/report\.[0-9a-f]+\.js)"', page).group(1)  # relative: /p/study/r/_static/...
+    status, headers, js = get(ui, f"/p/study/r/{script}", cookie, **{"Accept-Encoding": "gzip"})
+    assert status == 200 and headers["Content-Encoding"] == "gzip" and "immutable" in headers["Cache-Control"]
+    plain = get(ui, f"/p/study/r/{script}", cookie)
+    assert plain[0] == 200 and b"showData" in plain[2] and b"/p/" in plain[2]
+    css = re.search(r'href="\.\./(_static/report\.[0-9a-f]+\.css)"', page).group(1)
+    assert get(ui, f"/p/study/r/{css}", cookie)[0] == 200
+    data = json.loads(get(ui, "/p/study/r/alpha/report-data.json", cookie)[2])
+    assert data["inputs"]["descent"]["resolved"] == "study:descent@v1"
+    assert b"Result" in get(ui, "/p/study/r/alpha/narrative.html", cookie)[2]
+    assert get(ui, "/p/study/r/alpha/assets/inputs/descent/figures/hist.png", cookie)[0] == 200
+    assert get(ui, "/p/study/r/alpha", cookie)[0] == 301
+    assert get(ui, "/p/study/r/alpha@v1/", cookie)[0] == 200 and get(ui, "/p/study/r/alpha@v2/", cookie)[0] == 404
+    site = json.loads(get(ui, "/p/study/r/site.json", cookie)[2])  # the page's navigation
+    assert [item["key"] for item in site["reports"]] == ["alpha", "beta"] and site["reports"][0]["href"] == "alpha/"
+    assert site["title"] == "study" and site["reports"][0]["title"] == "Alpha" and site["reports"][0]["status"] == "active"
+    assert get(ui, "/p/study/r/", cookie)[0] == 303
+    assert get(ui, "/p/study/r/_static/nope.js", cookie)[0] == 404
+    assert get(ui, "/p/study/r/_static/..%2Fx", cookie)[0] == 404
+    assert get(ui, "/p/study/r/nope/", cookie)[0] == 404
+
+
+def test_static_files_need_the_session_token(ui, project, capsys):
+    publish_reports(project, ui.server)
+    script = re.search(r'src="\.\./(_static/report\.[0-9a-f]+\.js)"', get(ui, "/p/study/r/alpha/", login(ui))[2].decode()).group(1)
+    other = create_token(ui.server.root, "unrelated", name="o")
+    # the UI remembers where a shared file lives, not its bytes: another session still goes through the store's access check
+    assert get(ui, f"/p/study/r/{script}", login(ui, other))[0] == 403
+
+
+def test_report_versions_stay_viewable(ui, project, capsys):
+    publish_reports(project, ui.server)
+    cookie = login(ui)
+    alpha = project / "reports" / "alpha" / "report.md"
+    alpha.write_text(alpha.read_text().replace("It works", "It still works"))
+    main(["publish", "reports/alpha"])
+    assert b"It still works" in get(ui, "/p/study/r/alpha/narrative.html", cookie)[2]
+    assert b"It still works" not in get(ui, "/p/study/r/alpha@v1/narrative.html", cookie)[2]
+    assert get(ui, "/p/study/r/alpha@latest/", cookie)[0] == 200
+    assert "/p/study/r/alpha@v1/" in get(ui, "/p/study/a/reports/alpha", cookie)[2].decode()  # the version picker
+
+
+def test_data_panel_links_point_at_the_artifact_pages(ui, project, capsys):
+    publish_reports(project, ui.server)
+    cookie = login(ui)
+    script = resources.files("cairn_report").joinpath("template", "report.js").read_text()
+    assert "STORE_SERVED = !BUNDLE && /^\\/p\\/[^/]+\\/r\\//.test(location.pathname)" in script
+    assert "STORE_SERVED && match ?" in script and "version.dataset.artifact = input.resolved" in script
+    assert "/p/${encodeURIComponent(match[1])}/a/" in script  # /p/<project>/r/... -> /p/<project>/a/<name>@vN
+    data = json.loads(get(ui, "/p/study/r/alpha/report-data.json", cookie)[2])
+    exact = data["inputs"]["descent"]["resolved"]
+    project_name, name_version = exact.split(":", 1)
+    name, version = name_version.split("@")
+    target = f"/p/{project_name}/a/{name}@{version}"  # what the script builds from the exact reference
+    status, _, body = get(ui, target, cookie)
+    assert status == 200 and b"metrics.jsonl" in body
+
+
+# --------------------------------------------------------------------- files
+
+
+def test_files_passthrough_answers_range_etag_and_download(ui, env):
+    r = use_remote(env, ui.server)
+    store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10, "sub/page.html": "<b>x</b>"}), store=r)
+    cookie = login(ui)
+    path = "/files/study/data@v1//big.txt"
+    status, headers, whole = get(ui, path, cookie)
+    assert status == 200 and len(whole) == 100 and "immutable" in headers["Cache-Control"] and headers["ETag"]
+    assert headers["Accept-Ranges"] == "bytes" and headers["Content-Security-Policy"] == "sandbox"
+    status, headers, data = get(ui, path, cookie, Range="bytes=5-14")
+    assert status == 206 and data == whole[5:15] and headers["Content-Range"] == "bytes 5-14/100" and headers["Content-Length"] == "10"
+    assert get(ui, path, cookie, Range="bytes=90-")[2] == whole[90:]
+    assert get(ui, path, cookie, Range="bytes=-5")[2] == whole[-5:]
+    assert get(ui, path, cookie, Range="bytes=100-")[0] == 416
+    assert get(ui, path, cookie, **{"If-None-Match": headers["ETag"]})[0] == 304
+    assert "attachment" in get(ui, path + "?download=1", cookie)[1]["Content-Disposition"]
+    status, headers, _ = get(ui, "/files/study/data@latest//sub/page.html", cookie)  # alias: not immutable
+    assert status == 200 and headers["Cache-Control"] == "no-cache" and headers["Content-Type"].startswith("text/html")
+    assert get(ui, "/files/study/data@v1//nope.txt", cookie)[0] == 404
+    assert get(ui, "/files/study/data@v9//big.txt", cookie)[0] == 404
+    assert get(ui, "/files/study/data@v1/big.txt", cookie)[0] == 404  # no //
+    assert get(ui, "/files/nope/data@v1//big.txt", cookie)[0] == 404
+
+
+def test_files_passthrough_serves_large_ranges_exactly(ui, env):
+    big = bytes(range(256)) * 9000  # 2.3 MB: more than one read chunk
+    root = env / "big"
+    root.mkdir()
+    (root / "movie.mp4").write_bytes(big)
+    store.publish("video", root, store=use_remote(env, ui.server))
+    cookie = login(ui)
+    status, headers, data = get(ui, "/files/study/video@v1//movie.mp4", cookie, Range="bytes=1048000-1049999")
+    assert status == 206 and data == big[1048000:1050000] and headers["Content-Range"] == f"bytes 1048000-1049999/{len(big)}"
+    assert get(ui, "/files/study/video@v1//movie.mp4", cookie)[2] == big
+
+
+# ------------------------------------------------------------ separation
+
+
+def test_the_ui_uses_only_the_store_interface_and_the_server_has_no_ui_code():
+    source = Path(__file__).parent.parent / "src" / "cairn_report"
+    for file in (source / "ui").glob("*.py"):
+        text = file.read_text()
+        for forbidden in ("blob_path", "versions.jsonl", "aliases.jsonl", "consumers.jsonl", "project.json", "_blobs"):
+            assert forbidden not in text, (file.name, forbidden)
+    for file in (source / "store").glob("*.py"):
+        text = file.read_text()
+        assert "import ui" not in text and "from ..ui" not in text and "from .pages" not in text and "cairn_report.ui" not in text, file.name
+    assert not (source / "store" / "pages.py").exists()
+    server_text = (source / "store" / "server.py").read_text()
+    for gone in ("text/html", "cookie", "Cookie", "is_report", "site.json", "_static", "/login"):
+        assert gone not in server_text.replace("there are no cookies", "").replace("--insecure-cookies", ""), gone
+
+
+def test_ui_command_wires_the_configured_store(env, server, monkeypatch, capsys):
+    (env / "cairn-report.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\n')
+    seen = {}
+    monkeypatch.setattr("cairn_report.ui.serve_ui", lambda backend, **options: seen.update(backend=backend, **options))
+    main(["ui"])
+    assert isinstance(seen["backend"], RemoteBackend) and seen["backend"].url == server.url and seen["port"] == 8801
+    assert seen["no_auth"] is False and seen["secure_cookie"] is True
+    main(["ui", "--store", str(server.root), "--port", "9999", "--insecure-cookies"])
+    assert isinstance(seen["backend"], LocalBackend) and seen["port"] == 9999 and seen["secure_cookie"] is False
+    (env / "cairn-report.toml").write_text('[store]\npath = "mystore"\n')
+    LocalStore(env / "mystore")
+    main(["ui", "--no-auth"])
+    assert seen["backend"].root == (env / "mystore").resolve() and seen["no_auth"] is True
+    with pytest.raises(SystemExit, match="no store folder"):
+        main(["ui", "--store", str(env / "missing")])
+
+
+def test_serve_ui_prints_where_it_runs(server, capsys, monkeypatch):
+    monkeypatch.setattr(ui_server.ThreadingHTTPServer, "serve_forever", lambda self: self.server_close())
+    ui_server.serve_ui(RemoteBackend(server.url, False), port=0)
+    out = capsys.readouterr().out
+    assert re.fullmatch(rf"UI: http://127\.0\.0\.1:\d+/ \(store: {re.escape(server.url)}\)\n", out) and server.token not in out
+
+
+# -------------------------------------------------------------- end to end
+
+
+def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatch):
+    server = ui.server
+
+    def machine(name):
+        root = tmp_path / name
+        root.mkdir()
+        (root / "pyproject.toml").write_text("")
+        (root / "cairn-report.toml").write_text(f'[store]\nurl = "{server.url}"\nproject = "study"\ninterval = 1\n')
+        monkeypatch.chdir(root)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / f"cache-{name}"))
+        monkeypatch.delenv("CAIRN_INPUTS", raising=False)
+        return root
+
+    # a dataset, published from somewhere
+    a = machine("machine-a")
+    main(["publish", str(folder(a, "toy-data", {"x.csv": "1,2,3\n"})), "datasets/toy"])
+    # machine A: a plain script (no Hydra) pulls datasets/toy@v1 and writes outputs; CAIRN_INPUTS points at them
+    out = a / "outputs"
+    out.mkdir()
+    script = ("import pathlib, sys; from cairn_report import store; src = store.pull('datasets/toy@v1'); "
+              "pathlib.Path(sys.argv[1], 'result.txt').write_text('fit of ' + (src / 'x.csv').read_text().strip())")
+    subprocess.run([sys.executable, "-c", script, str(out)], check=True, cwd=a,
+                   env=os.environ | {"CAIRN_INPUTS": str(out / ".cairn-inputs.jsonl")})
+    main(["publish", str(out), "toy-fit"])
+    # machine B: a report with `inputs: fit: toy-fit@latest`
+    b = machine("machine-b")
+    write(b / "reports" / "summary" / "report.md", (
+        "---\ntitle: Summary\nstatus: active\nsummary: Fit of the toy data.\ninputs:\n  fit: toy-fit@latest\n---\n\n"
+        "```python exec hide\nresult = (inputs.fit / 'result.txt').read_text()\n```\n\n## Result\n\nThe result is {{ result }}.\n"))
+    main(["publish", "reports/summary"])
+
+    chain = "study:datasets/toy@v1", "study:toy-fit@v1", "study:reports/summary@v1"
+    lineage = api(server, "GET", "/api/v2/lineage?ref=study:reports%2Fsummary@latest")
+    assert lineage == {"ref": chain[2], "inputs": [chain[1]], "consumers": []}
+    middle = api(server, "GET", "/api/v2/lineage?ref=study:toy-fit@v1")
+    assert middle["inputs"] == [chain[0]] and middle["consumers"] == [chain[2]]
+    assert api(server, "GET", "/api/v2/lineage?ref=study:datasets%2Ftoy@v1")["consumers"] == [chain[1]]
+    # the same chain on the artifact pages of the UI, both ways
+    cookie = login(ui)
+    toy = get(ui, "/p/study/a/datasets/toy", cookie)[2].decode()
+    assert "/p/study/a/toy-fit@v1" in toy
+    fit = get(ui, "/p/study/a/toy-fit", cookie)[2].decode()
+    assert "/p/study/a/datasets/toy@v1" in fit and "/p/study/a/reports/summary@v1" in fit
+    report = get(ui, "/p/study/a/reports/summary", cookie)[2].decode()
+    assert "/p/study/a/toy-fit@v1" in report
+    assert b"fit of 1,2,3" in get(ui, "/p/study/r/summary/narrative.html", cookie)[2]
+    # the report data records its exact input for the Data panel
+    assert json.loads(get(ui, "/p/study/r/summary/report-data.json", cookie)[2])["inputs"]["fit"]["resolved"] == chain[1]
+    assert b"1,2,3" in get(ui, "/files/study/datasets/toy@v1//x.csv", cookie)[2]
