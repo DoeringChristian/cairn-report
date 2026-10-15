@@ -1,6 +1,9 @@
-"""The example project (examples/descent) runs end to end against a local store, as its README says."""
+"""The example project (examples/descent) runs end to end against a local store, as its README says: run_example.py
+in a fresh interpreter (which also checks that `import cairn.reports; cairn.reports.publish(...)` works without
+anything importing `cairn.reports.build` first)."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -21,20 +24,28 @@ def cairn(*args: str) -> None:
 
 def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
     project = tmp_path / "descent"
-    shutil.copytree(EXAMPLE, project)
-    monkeypatch.chdir(project)
+    shutil.copytree(EXAMPLE, project, ignore=shutil.ignore_patterns(".cairn", "__pycache__"))
     monkeypatch.delenv("CAIRN_DIR", raising=False)
+    monkeypatch.delenv("CAIRN_INPUTS", raising=False)
+    monkeypatch.delenv("CAIRN_DATA_DIR", raising=False)  # the project's own .cairn/pending, as for a user
 
-    cairn("publish", "data/quadratic", "datasets/quadratic")
-    subprocess.run([sys.executable, "descent.py"], check=True, capture_output=True, text=True)
-    cairn("publish", "runs/descent/latest", "descent")
-    cairn("publish", "reports/descent-study")
+    result = subprocess.run([sys.executable, str(project / "run_example.py")], cwd=tmp_path, capture_output=True, text=True,
+                            env={**os.environ})
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "published descent-example:datasets/quadratic@v1" in out and "published descent-example:descent@v1" in out
+    assert "inputs     descent-example:datasets/quadratic@v1" in out  # the run's input, recorded by its pull in the draft
+    assert "consumers  descent-example:reports/descent-study@v1" in out  # and its consumer, the report
+    drafts = project / ".cairn" / "drafts"
+    assert not drafts.exists() or not any(drafts.rglob("*"))  # the draft folder is gone after publishing
+    assert not (project / "runs").exists() and not (project / ".cairn-inputs.jsonl").exists()
+
+    monkeypatch.chdir(project)
     capsys.readouterr()
-
     cairn("show", "descent@latest")
     shown = capsys.readouterr().out
-    assert "descent-example:datasets/quadratic@v1" in shown  # the run's input, recorded by its pull
-    assert "descent-example:reports/descent-study@v1" in shown  # and its consumer, the report
+    assert "descent-example:datasets/quadratic@v1" in shown and "descent-example:reports/descent-study@v1" in shown
+    assert "config\n  learning_rate = 0.15\n  steps = 60\n" in shown
 
     built = (project / ".cairn" / "build" / "descent-study" / "narrative.html").read_text()
     assert "Final loss" in built and 'class="report-value"' in built

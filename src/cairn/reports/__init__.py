@@ -11,11 +11,11 @@ def _config(project):
     return load_config(project)
 
 
-def build(slug: str | None = None, *, project: "str | _Path | None" = None):
+def build_all(slug: str | None = None, *, project: "str | _Path | None" = None):
     """Build every report of the project (or one, by slug); returns the builds (see `build.Build`)."""
-    from .build import build_all
+    from .build import build_all as _build_all
 
-    return build_all(_config(project), slug)
+    return _build_all(_config(project), slug)
 
 
 def publish(report: "str | _Path", *, project: "str | _Path | None" = None, quiet: bool = True) -> int | None:

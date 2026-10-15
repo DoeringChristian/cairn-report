@@ -10,6 +10,11 @@ This is the light API (no server, UI, reports, matplotlib, plotly, or hydra is i
     v3.files, v3.metadata, v3.inputs, v3.consumers, v3.open("a.txt"), v3.pull()
     crops.publish("data/crops", metadata={"n": 3}, aliases=["paper"])   # -> Version
 
+    with cairn.draft("descent") as run:            # a fresh folder in .cairn/drafts/ (run.path), and a run logger
+        cairn.pull("datasets/crops@v3")            # recorded as the draft's input
+        run.scalar("loss", 0.1, step=0)
+    run.version                                    # leaving the block published it as descent@v<n>
+
 and the shortcuts, on top of it:
 
     crops = cairn.pull("datasets/crops@v3")        # read-only local copy; the exact version is recorded as an input
@@ -46,17 +51,18 @@ from .store import (BadRange, Conflict, Deleted, FileRead, Forbidden, LocalStore
                     Unauthorized, Unreachable)
 
 if TYPE_CHECKING:
+    from .client.drafts import Draft
     from .client.objects import Artifact, File, Project, Store, Version
     from .client.remote import RemoteStore
 
-__all__ = ["__version__", "Artifact", "BadRange", "Conflict", "Deleted", "File", "FileRead", "Forbidden", "LocalStore", "MissingBlobs",
+__all__ = ["__version__", "Artifact", "BadRange", "Conflict", "Deleted", "Draft", "File", "FileRead", "Forbidden", "LocalStore", "MissingBlobs",
            "NotFound", "Project", "Protected",
            "Ref", "RemoteStore", "Store", "StoreError", "Unauthorized", "Unreachable", "Version", "alias", "connect", "lineage",
-           "Publication", "open_store", "publish", "pull", "versions"]
+           "Publication", "current_draft", "draft", "open_store", "publish", "pull", "versions"]
 
 _CLIENT = {"RemoteStore": "remote", "open_store": "open", "Publication": "publishing", "publish": "publishing",
            "connect": "objects", "Store": "objects", "Project": "objects", "Artifact": "objects", "Version": "objects",
-           "File": "objects"}
+           "File": "objects", "Draft": "drafts", "draft": "drafts", "current_draft": "drafts"}
 
 
 def __getattr__(name: str):

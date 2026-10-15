@@ -50,14 +50,15 @@ def _target(name: str, store: LocalStore | RemoteStore) -> tuple[str, str]:
     return project, target.name
 
 
-def stage_local(store: LocalStore, local: Path, config: Config, cache: HashCache) -> list[dict]:
-    """Entries for a folder's files (its inputs record excluded) with their blobs put in a local store."""
+def stage_local(store: LocalStore, local: Path, config: Config, cache: HashCache, link: bool = False) -> list[dict]:
+    """Entries for a folder's files (its inputs record excluded) with their blobs put in a local store (`link`: hard
+    links where no clone is possible, for a folder deleted right after, see `BlobStore.put_file`)."""
     files = scan(local, "", config, exclude=config.store.get("exclude", []))
     drop_inputs(files)
     entries, sources = entries_for(files, cache)
     cache.save()
     for sha in store.missing(entries):
-        store.put_file(sha, sources[sha][0])  # a copy-on-write clone where the filesystem allows, verified
+        store.put_file(sha, sources[sha][0], link=link)  # a copy-on-write clone where the filesystem allows, verified
     return entries
 
 
@@ -96,7 +97,7 @@ class Publication:
     """
 
     def __init__(self, name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                 inputs=None, store: LocalStore | RemoteStore | Path | str | None = None):
+                 inputs=None, store: LocalStore | RemoteStore | Path | str | None = None, uid: str | None = None):
         self.local = Path(folder).resolve()
         self.store = as_store(store)
         self.project, self.name = _target(name, self.store)
@@ -104,7 +105,7 @@ class Publication:
         self.cache = HashCache(self.config.project)
         self.label, self.metadata, self.aliases, self.inputs = label or self.local.name, metadata, tuple(aliases), inputs
         self.version: int | None = None  # the number; None until the server has the version
-        self.uid: str | None = None
+        self.uid: str | None = uid  # the version's uid (default: a new one, made when it starts)
         self.queued = False  # the server did not answer at the last attempt
         self._sent: dict[str, tuple] = {}
         self._entry: dict | None = None
@@ -173,14 +174,14 @@ class Publication:
         if self._replica is not None:
             if self._entry is None:
                 self._entry = self._replica.add("running", self.project, self.name, label=self.label, metadata=self.metadata,
-                                                source=self.source)
+                                                source=self.source, uid=self.uid)
                 self.uid = self._entry["uid"]
                 self._start_beating()
                 self._push()
             return self.version
         if self.version is None:
             self.store.create_project(self.project)
-            self.version = self.store.start_version(self.project, self.name, self.label, self.metadata, self.source)
+            self.version = self.store.start_version(self.project, self.name, self.label, self.metadata, self.source, uid=self.uid)
             self.uid = self.store.get_version(self.project, self.name, self.version)["uid"]
         return self.version
 

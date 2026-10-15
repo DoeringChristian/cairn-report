@@ -221,15 +221,19 @@ class BlobStore:
         finally:
             writer.abort()
 
-    def put_file(self, sha: str, source: Path) -> bool:
+    def put_file(self, sha: str, source: Path, link: bool = False) -> bool:
         """Store a local file as blob `sha`: a copy-on-write clone where the filesystem allows (no extra space),
-        else a copy; the copy is hashed again, so a file that changed since it was hashed is refused (ValueError)."""
+        else a copy; the copy is hashed again, so a file that changed since it was hashed is refused (ValueError).
+
+        `link`: the source is about to be deleted (a published draft), so where no clone is possible a hard link
+        (same filesystem) replaces the copy; the caller must not let anything write the source in place after it."""
         target = self.blob_path(sha)
         if target.is_file():
             return False
         temporary = self.tmp / f"{sha}.{secrets.token_hex(6)}"
         try:
-            clone_or_copy(source, temporary)
+            if not (link and _hard_link(source, temporary)):
+                clone_or_copy(source, temporary)
             os.utime(temporary)  # a clone keeps the source's times; the blob's age (gc.py's grace period) starts now
             digest = hashlib.sha256()
             with open(temporary, "rb", buffering=0) as handle:
@@ -264,3 +268,16 @@ class BlobStore:
 
     def missing(self, entries: list[dict]) -> list[str]:
         return self.missing_hashes(entry["sha256"] for entry in entries if "sha256" in entry)
+
+
+def _hard_link(source: Path, target: Path) -> bool:
+    """A clone where possible, else a hard link; False (nothing left behind) when neither works."""
+    from .fs import clone
+
+    if clone(source, target):
+        return True
+    try:
+        os.link(source, target)
+        return True
+    except OSError:
+        return False

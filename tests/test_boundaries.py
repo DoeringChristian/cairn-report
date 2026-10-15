@@ -11,7 +11,7 @@ PACKAGE = Path(cairn.__file__).parent
 LEAVES = {"config", "ranges", "formats", "_version"}  # import nothing from cairn
 ALLOWED = {
     "store": {"store"} | LEAVES,
-    "client": {"client", "store", "config", "ranges", "_version"},
+    "client": {"client", "store", "config", "ranges", "formats", "_version"},  # formats: the run logger writes what it reads
     "server": {"server", "store", "config", "ranges", "_version"},
     "ui": {"ui", "store", "client", "config", "ranges", "_version"},
     "reports": {"reports", "store", "client", "config", "ranges", "formats", "_version"},

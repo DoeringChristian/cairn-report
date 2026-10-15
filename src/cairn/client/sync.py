@@ -62,7 +62,7 @@ def _digest(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
-def _stage_one(entry: dict, source: Path, cache: HashCache) -> bool:
+def _stage_one(entry: dict, source: Path, cache: HashCache, link: bool = False) -> bool:
     """Clone one file into the data root's blobs (False if it left meanwhile); fixes the entry if the file changed."""
     target = replica.data_blob(entry["sha256"])
     if target.is_file():
@@ -70,7 +70,8 @@ def _stage_one(entry: dict, source: Path, cache: HashCache) -> bool:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = scratch(target)
     try:
-        clone_or_copy(source, temporary)
+        if not (link and _clone_or_link(source, temporary)):
+            clone_or_copy(source, temporary)
         sha, size = _digest(temporary)
         if sha != entry["sha256"]:  # the file changed after it was hashed: publish what was staged
             cache.forget(source)
@@ -86,8 +87,22 @@ def _stage_one(entry: dict, source: Path, cache: HashCache) -> bool:
         temporary.unlink(missing_ok=True)
 
 
-def stage(local: Path, config, cache: HashCache) -> tuple[list[dict], dict[str, Path]]:
-    """Manifest entries for a folder (its inputs record excluded), each blob kept in the data root.
+def _clone_or_link(source: Path, target: Path) -> bool:
+    """A clone where possible, else a hard link (False, nothing left behind, when neither works)."""
+    from ..store.fs import clone
+
+    if clone(source, target):
+        return True
+    try:
+        os.link(source, target)
+        return True
+    except OSError:
+        return False
+
+
+def stage(local: Path, config, cache: HashCache, link: bool = False) -> tuple[list[dict], dict[str, Path]]:
+    """Manifest entries for a folder (its inputs record excluded), each blob kept in the data root (`link`: hard
+    links where no clone is possible, for a folder deleted right after: a published draft).
 
     Returns (entries, {sha: source file}) — the sources let `restage` put back a blob that a concurrent
     flush dropped before the record naming it was saved."""
@@ -98,7 +113,7 @@ def stage(local: Path, config, cache: HashCache) -> tuple[list[dict], dict[str, 
     for entry in entries:
         if "sha256" in entry:
             source = files[entry["path"]]["file"]
-            if not _stage_one(entry, source, cache):
+            if not _stage_one(entry, source, cache, link):
                 continue
             sources[entry["sha256"]] = source
         kept.append(entry)
@@ -137,10 +152,10 @@ class Replica:
         return [record for record in self.records() if record["sync"] in ("pending", "running")]
 
     def add(self, kind: str, project: str, name: str, *, files=(), label=None, metadata=None, inputs=(), aliases=(),
-            source=None) -> dict:
-        """Commit a new record (durably, before anything is sent)."""
+            source=None, uid: str | None = None) -> dict:
+        """Commit a new record (durably, before anything is sent); `uid` the version's (default: a new one)."""
         running = kind == "running"
-        record = {"uid": new_uid(), "kind": kind, "sync": "running" if running else "pending",
+        record = {"uid": uid or new_uid(), "kind": kind, "sync": "running" if running else "pending",
                   "status": "running" if running else "completed", "url": self.remote.url, "store": self.remote.key,
                   "project": project, "name": name, "label": label, "metadata": metadata or {}, "inputs": list(inputs),
                   "aliases": list(aliases), "source": source, "files": list(files), "created": now(),

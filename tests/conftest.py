@@ -82,6 +82,12 @@ def isolated_roots(tmp_path, monkeypatch):
     monkeypatch.delenv("CAIRN_CACHE_DIR", raising=False)
     monkeypatch.delenv("CAIRN_DIR", raising=False)
     monkeypatch.chdir(tmp_path)  # no project root above it: tests that need one make it (the `project` fixture)
+    from cairn.client import drafts
+    from cairn.store import inputs
+
+    inputs._LOOSE.clear()  # pulls of earlier tests are no inputs of this test's drafts
+    inputs._SINKS.clear()
+    drafts._ACTIVE.clear()
 
 
 @pytest.fixture

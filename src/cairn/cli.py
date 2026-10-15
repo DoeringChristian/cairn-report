@@ -1,5 +1,5 @@
 """Command line: `cairn build | serve | share | publish | pull | project | artifacts | versions | show | alias | delete | retention |
-gc | sync | status | prune | verify | server | ui | token | migrate | export-metadata | finalize-study`.
+gc | sync | status | prune | verify | server | ui | token | migrate | export-metadata | finalize-study | drafts`.
 
 Every command that talks to the store first tries to send this machine's pending versions for it (quietly,
 and only when something is pending); `sync` does that by hand, says what happened, and refreshes what the
@@ -184,7 +184,17 @@ def cmd_show(args) -> None:
         print(f"aliases      {', '.join(aliases)}")
     if version.source:
         print(f"source       {version.source.get('host', '')}:{version.source.get('folder', '')}")
-    print(f"metadata     {json.dumps(version.metadata, sort_keys=True)}")
+    metadata = version.metadata
+    config, overrides = metadata.pop("config", None), metadata.pop("overrides", None)
+    if not isinstance(config, dict):
+        metadata, config = ({**metadata, "config": config} if config is not None else metadata), None
+    print(f"metadata     {json.dumps(metadata, sort_keys=True)}")
+    if overrides is not None:
+        print(f"overrides    {' '.join(map(str, overrides)) if isinstance(overrides, list) else json.dumps(overrides)}")
+    if config is not None:
+        print("config")
+        for key, value in _flatten(config):
+            print(f"  {key} = {value}")
     print(f"inputs       {', '.join(version.inputs) or '-'}")
     try:
         consumers = version.consumers
@@ -194,6 +204,46 @@ def cmd_show(args) -> None:
     print(f"files        {_size(version.files)}")
     for item in version.files:
         print(f"  {item.path}\t{'-> ' + item.link if item.link else item.size}")
+
+
+def _flatten(value, prefix: str = "") -> list[tuple[str, str]]:
+    """A nested config as (`a.b.c`, JSON value) rows; lists of plain values stay one row."""
+    import json
+
+    if isinstance(value, dict) and value:
+        return [row for key, item in value.items() for row in _flatten(item, f"{prefix}.{key}" if prefix else str(key))]
+    if isinstance(value, list) and any(isinstance(item, (dict, list)) for item in value):
+        return [row for index, item in enumerate(value) for row in _flatten(item, f"{prefix}.{index}" if prefix else str(index))]
+    return [(prefix or "(value)", json.dumps(value))]
+
+
+def cmd_drafts(args) -> None:
+    from .client import drafts
+
+    action = getattr(args, "drafts_command", None) or "list"
+    if action == "list":
+        found = drafts.drafts()
+        for item in found:
+            print(drafts.describe(item))
+        if not found:
+            print(f"no drafts in {drafts.drafts_root()}")
+        return
+    draft = drafts.load(args.draft)
+    if draft.trial:
+        raise SystemExit(f"cairn: {args.draft} is inside the draft {draft.folder}: give the draft itself")
+    if action == "discard":
+        draft.discard()
+        print(f"discarded the draft {draft.name}@{draft.uid}")
+        return
+    if draft.state == "open":
+        raise SystemExit(f"cairn: the draft {draft.uid} is still open (its process {draft.record.get('owner')} may write to it)")
+    version = draft.publish(allow_incomplete=args.allow_incomplete)
+    if version is None:
+        print(f"the draft {draft.uid} waits for its inputs")
+    elif version.number is None:
+        print(f"pending {version.ref}: the store does not answer; `cairn status` lists it, `cairn sync` sends it")
+    else:
+        print(f"published {version.ref} ({_size(version.files)})")
 
 
 def _store_errors(action):
@@ -460,8 +510,10 @@ def cmd_token_revoke(args) -> None:
 def cmd_finalize_study(args) -> None:
     from .runs.hydra import finalize_study
 
-    completed = finalize_study(args.study)
-    print(f"{args.study}: {'completed; latest moved' if completed else 'failed (not every trial completed)'}")
+    study = Path(args.study).resolve()
+    completed = finalize_study(study)
+    done = "completed and published (a draft)" if not study.exists() else "completed; latest moved"
+    print(f"{args.study}: {done if completed else 'failed (not every trial completed)'}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -489,6 +541,19 @@ def main(argv: list[str] | None = None) -> None:
     finalize = commands.add_parser("finalize-study", help="complete a multirun study whose launcher died, once every trial ended")
     finalize.add_argument("study", type=Path, help="the study folder, outputs/<run-name>/<timestamp>")
     finalize.set_defaults(run=cmd_finalize_study)
+
+    drafts = commands.add_parser("drafts", help="the open and kept drafts (folders under .cairn/drafts/ that become versions)")
+    drafts.set_defaults(run=cmd_drafts)
+    drafts_commands = drafts.add_subparsers(dest="drafts_command")
+    drafts_commands.add_parser("list", help="every draft: name, uid, state, age, size, path").set_defaults(run=cmd_drafts)
+    drafts_publish = drafts_commands.add_parser("publish", help="publish a kept draft as the next version of its artifact")
+    drafts_publish.add_argument("draft", help="the draft's folder or uid (or a unique start of it)")
+    drafts_publish.add_argument("--allow-incomplete", action="store_true",
+                                help="publish although its run.json says the run did not complete (records metadata.run_status)")
+    drafts_publish.set_defaults(run=cmd_drafts)
+    drafts_discard = drafts_commands.add_parser("discard", help="delete a draft without publishing it")
+    drafts_discard.add_argument("draft", help="the draft's folder or uid (or a unique start of it)")
+    drafts_discard.set_defaults(run=cmd_drafts)
 
     publish = commands.add_parser("publish", help="store a folder as a new artifact version (or follow a running job's folder)")
     publish.add_argument("folder", nargs="?", help="the folder to publish (a symlink such as runs/x/latest is followed); a report folder reports/<slug> is built and published as reports/<slug>")
@@ -655,7 +720,7 @@ def main(argv: list[str] | None = None) -> None:
     from .store import cache
 
     cache.use_data_dir(getattr(args, "data_dir", None))
-    if args.run in (cmd_publish, cmd_pull, cmd_project, cmd_artifacts, cmd_versions, cmd_show, cmd_status, cmd_build):
+    if args.run in (cmd_publish, cmd_pull, cmd_project, cmd_artifacts, cmd_versions, cmd_show, cmd_status, cmd_build, cmd_drafts):
         flush_first(args)
     try:
         args.run(args)

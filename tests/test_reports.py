@@ -457,3 +457,18 @@ def test_lineage_connects_the_report_and_its_input(project):
 def test_publish_refuses_options_on_a_report_folder(project):
     with pytest.raises(SystemExit, match="publishes as reports/<slug> on its own"):
         main(["publish", "reports/alpha", "other"])
+
+
+def test_package_functions_work_in_a_fresh_interpreter(project):
+    """`cairn.reports.publish` and `build_all` work without anything importing `cairn.reports.build` first (a
+    package-level name must never shadow a submodule: `build` once did, and `cairn publish reports/<slug>` broke)."""
+    import subprocess
+    import sys
+
+    code = ("import cairn.reports as r; builds = r.build_all(); number = r.publish('alpha');"
+            " import cairn.reports.build as b; assert callable(b.build_all); print(len(builds), number)")
+    result = subprocess.run([sys.executable, "-c", code], cwd=project, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split()[-2:] == ["2", "1"]
+    result = subprocess.run([sys.executable, "-m", "cairn", "publish", "reports/beta"], cwd=project, capture_output=True, text=True)
+    assert result.returncode == 0 and "reports/beta@v1" in result.stdout, result.stderr

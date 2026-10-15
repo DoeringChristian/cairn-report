@@ -39,13 +39,13 @@ src/cairn/
 ├── migrate.py    the one-off conversion of an old hub (knows the old report layout)
 ├── store/        core, no HTTP: refs, uids (UUIDv7), local (LocalStore), blobs, tokens, cache (the two roots, pull, uid-keyed, NFS-safe), errors, inputs
 ├── client/       http (Client, scan/hash/upload), remote (RemoteStore), objects (connect, Store, Project, Artifact, Version),
-│                 publishing (publish, Publication, --watch), replica (the local replica: data and cache roots,
+│                 publishing (publish, Publication, --watch), drafts (draft, Draft, current_draft), logger (RunLogger), replica (the local replica: data and cache roots,
 │                 records, claims, heartbeats, store files, migration), sync (sending pending versions), prune,
 │                 offline (resolution through the replica), open (open_store)
 ├── server/       app (handler + routes), auth, files (/files, Range, ETag), spawn (UI child); exports make_server, serve_store
 ├── ui/           server (UI HTTP server + /ui-api), sessions, backends (Local/RemoteBackend), static/ (built app)
 ├── reports/      build, serve, share, publishing (report -> artifact), template/
-└── runs/         logger (RunLogger), hydra (run_experiment, StudyCompletion, finalize_study), snapshot
+└── runs/         logger (re-exports client.logger), hydra (run_experiment, StudyCompletion, finalize_study, the cairn.draft resolver), snapshot
 web/              React + TS + Vite source of the UI (builds into src/cairn/ui/static/)
 ```
 
@@ -54,7 +54,7 @@ Allowed imports (besides the leaves `config`, `ranges`, `formats`, `_version`, w
 | part | may import |
 |---|---|
 | `store` | leaves only |
-| `client` | `store`, `config`, `ranges` |
+| `client` | `store`, `config`, `ranges`, `formats` (the run logger, client/logger.py, writes the files formats.py reads) |
 | `server` | `store`, `config`, `ranges` (it starts the UI as `python -m cairn ui`, never by import) |
 | `ui` | `store`, `client`, `config`, `ranges` |
 | `reports` | `store`, `client`, `config`, `ranges`, `formats` |
@@ -117,6 +117,14 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
        created on the server when it can be reached, and completion or failure is queued;
      - a file that changes before upload is re-hashed, so a version is uploaded exactly as
        published or not at all.
+   - **Drafts** (owner request, on `artifact-store`): "a cairn managed artifact folder instead of the run
+     folders, so we can also point hydra at those". `cairn.draft(name)` / `Artifact.draft()` is a fresh folder in
+     `<base>/drafts/<name>/<uid>/` that is published (like `cairn.publish`, the version taking the draft's uid) and
+     removed when it closes, kept on an exception; it is the run logger (RunLogger moved to client/logger.py, so
+     `client` may import the leaf `formats`); pulls go into every open draft (and loose pulls into the next ones),
+     `use()` declares draft-to-draft inputs (published inputs first); `watch=True` reuses `Publication`. Hydra:
+     the `${cairn.draft:name}` resolver (cached, so one folder per job and per sweep), `run_experiment` publishes a
+     single run's draft with the job config as metadata, `StudyCompletion` a sweep's. `cairn drafts [publish|discard]`.
    - *Done (on `artifact-store`):* the ref syntax for uids is a format check, not a prefix: a selector in
      the canonical lowercase UUIDv7 form is a uid, and aliases and labels may not take that form.
    - **Version identity:**

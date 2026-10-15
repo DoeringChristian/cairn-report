@@ -290,7 +290,8 @@ class Artifact:
     # ------------------------------------------------------------ publishing
 
     def publish(self, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                inputs=None, config: Config | None = None, allow_incomplete: bool = False) -> "Version":
+                inputs=None, config: Config | None = None, allow_incomplete: bool = False, _link: bool = False,
+                _uid: str | None = None) -> "Version":
         """Store a folder as the next version; when nothing changed since the latest, that version is returned.
 
         A symlinked folder is followed (the label defaults to the resolved folder's name). The folder's
@@ -320,10 +321,10 @@ class Artifact:
 
             backend.create_project(project)
             for attempt in range(3):
-                entries = stage_local(backend, local, config, cache)
+                entries = stage_local(backend, local, config, cache, link=_link)
                 try:
                     number = backend.publish(project, self.name, entries, label=label, metadata=metadata, inputs=merged,
-                                             aliases=aliases, source=_source(local))
+                                             aliases=aliases, source=_source(local), uid=_uid)
                     break
                 except MissingBlobs:  # garbage collection removed a blob since staging: stage it again
                     if attempt == 2:
@@ -332,9 +333,9 @@ class Artifact:
         from .sync import restage, stage, start_uploader
 
         pending = self.store.replica
-        entries, sources = stage(local, config, cache)
+        entries, sources = stage(local, config, cache, link=_link)
         record = pending.add("publish", project, self.name, files=entries, label=label, metadata=metadata,
-                             inputs=merged, aliases=aliases, source=_source(local))
+                             inputs=merged, aliases=aliases, source=_source(local), uid=_uid)
         restage(entries, sources, cache)
         try:
             sent = pending.send(record)
@@ -347,6 +348,14 @@ class Artifact:
         if not sent and record.get("number") is None:  # another flusher sent it meanwhile
             return Version(self, backend.get_version(project, self.name, record["uid"]))
         return Version(self, backend.get_version(project, self.name, record["number"]))
+
+    def draft(self, *, label: str | None = None, metadata: dict | None = None, aliases=(), watch: bool = False):
+        """A fresh, empty folder managed by Cairn that becomes this artifact's next version when it closes (a `Draft`,
+        a context manager and a run logger; see `cairn.draft`)."""
+        from .drafts import Draft
+
+        return Draft(f"{self.project.name}:{self.name}", label=label, metadata=metadata, aliases=aliases, watch=watch,
+                     store=self.store)
 
     def publishing(self, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
                    inputs=None):

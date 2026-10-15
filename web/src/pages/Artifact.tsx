@@ -10,6 +10,44 @@ interface VersionData { project: string; name: string; version: Manifest; consum
 
 const TEXT_LIMIT = 64 * 1024, MEDIA_LIMIT = 50 * 1024 * 1024, SHOWN = 200;
 
+/** A nested config as `a.b.c` -> value rows (lists of plain values stay one row). */
+function flatten(value: unknown, prefix = ""): [string, string][] {
+  if (value !== null && typeof value === "object" && !(Array.isArray(value) && value.every(item => item === null || typeof item !== "object"))) {
+    const entries = Array.isArray(value) ? value.map((item, index) => [String(index), item] as const) : Object.entries(value as Record<string, unknown>);
+    if (!entries.length) return [[prefix || "(empty)", Array.isArray(value) ? "[]" : "{}"]];
+    return entries.flatMap(([key, item]) => flatten(item, prefix ? `${prefix}.${key}` : key));
+  }
+  return [[prefix || "(value)", typeof value === "string" ? value : JSON.stringify(value)]];
+}
+
+/** The run config (`metadata.config`, e.g. a Hydra job's) as a table, its overrides as chips, then the rest of the metadata. */
+function MetadataSections({ metadata }: { metadata: Record<string, unknown> }) {
+  const { config, overrides, ...rest } = metadata ?? {};
+  const hasConfig = config !== undefined && config !== null && typeof config === "object";
+  const others = hasConfig ? rest : { ...rest, ...(config !== undefined ? { config } : {}) };
+  const list = Array.isArray(overrides) ? overrides.map(String) : [];
+  if (!Array.isArray(overrides) && overrides !== undefined) (others as Record<string, unknown>).overrides = overrides;
+  return (
+    <>
+      {hasConfig && (
+        <section className="app-section">
+          <div className="section-head"><h2>Config</h2></div>
+          {list.length > 0 && <p className="hint">Overrides: {list.map(item => <code key={item} style={{ marginRight: 8 }}>{item}</code>)}</p>}
+          <Table head={["Key", "Value"]}>
+            {flatten(config).map(([key, value]) => (
+              <tr key={key}><td><code>{key}</code></td><td><code>{value}</code></td></tr>
+            ))}
+          </Table>
+        </section>
+      )}
+      <section className="app-section">
+        <div className="section-head"><h2>Metadata</h2></div>
+        <div className="report-prose table-card"><pre>{JSON.stringify(others, null, 2)}</pre></div>
+      </section>
+    </>
+  );
+}
+
 function Preview({ project, name, version, entry }: { project: string; name: string; version: number; entry: Entry }) {
   const kind = previewKind(entry.path), url = fileHref(project, name, version, entry.path);
   const [text, setText] = useState<string | null>(null);
@@ -185,10 +223,7 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
           <RefList title="Inputs" refs={manifest.inputs} project={project} empty="No inputs recorded." deleted={ver.data!.deleted} />
           <RefList title="Consumers" refs={ver.data!.consumers} project={project} empty="No consumers yet." deleted={ver.data!.deleted} />
 
-          <section className="app-section">
-            <div className="section-head"><h2>Metadata</h2></div>
-            <div className="report-prose table-card"><pre>{JSON.stringify(manifest.metadata, null, 2)}</pre></div>
-          </section>
+          <MetadataSections metadata={manifest.metadata as Record<string, unknown>} />
         </>
       )}
     </main>

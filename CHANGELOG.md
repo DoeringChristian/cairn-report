@@ -102,8 +102,26 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
   - One reading column for text and figures; figures keep their own shape; small images stay
     pixel-sharp.
   - Copy-location buttons give LLM-ready markers.
+- **Drafts: writing a version directly.** `with cairn.draft("descent") as run:` (also
+  `Artifact.draft(...)`) gives a fresh, empty folder in `.cairn/drafts/<name>/<uid>/` that becomes the
+  artifact's next version when the block ends, exactly as `cairn.publish` would store it (inputs,
+  unchanged check, digest, aliases; the label defaults to the start time; the version gets the
+  draft's uid), and is then removed; blobs are cloned or hard-linked, not copied, where possible.
+  - A draft is the run logger: `run.scalar(...)`, `run.figure(...)`, `run.json(...)`, ... write the
+    same files as `RunLogger` (which moved to `cairn.client.logger`; `cairn.runs.logger` re-exports it).
+  - An exception keeps the folder for inspection and publishes nothing.
+  - Pulls are recorded in every open draft; a pull made before a draft opens is carried into it;
+    `run.use(other)` declares another draft (published first, then named by its exact version), a
+    version, or a reference as an input.
+  - `config=` becomes `metadata["config"]`; `cairn show` prints it compactly and the UI shows it as a
+    table.
+  - `watch=True` keeps a running version synced while the block runs, like `--watch`.
+  - `cairn.current_draft()`; `cairn drafts`, `cairn drafts publish <uid>`, `cairn drafts discard <uid>`.
 - **Hydra run bookkeeping as a library** (`cairn.runs.hydra`, `cairn.runs.snapshot`):
   `run_experiment`, `StudyCompletion`, the source snapshot, and `cairn finalize-study`.
+  `hydra.run.dir: ${cairn.draft:<name>}` (an OmegaConf resolver, one folder per job or sweep) makes a
+  completed run a version of `<name>` with the resolved config and overrides as metadata; a sweep
+  draft is published once, by `StudyCompletion`, with every trial as a subfolder.
 - **Package layout.** `store`, `client`, `server`, `ui`, `reports` and `runs`, with import
   boundaries enforced by a test. `import cairn` loads no server, UI, report or plotting code.
 
@@ -119,5 +137,7 @@ that pin an older cairn-report tag keep working as they are; moving to 0.13 need
   `cairn.runs...` / `cairn.reports...`, and the config file `cairn.toml`. `cairn-report.toml` is
   read for this release, with a warning.
 - Old hub data: `cairn migrate <old-hub-root> <new-root>`.
+- `cairn.reports.build()` is `cairn.reports.build_all()` (a package function must not shadow the
+  `cairn.reports.build` module).
 - Reports: move each report to `reports/<slug>/report.md`, publish the runs it reads, declare them
   under `inputs:`, and replace `run:` with `input:`.

@@ -272,10 +272,11 @@ class LocalStore:
         self._writing()
         return self._blobs.writer(sha, size)
 
-    def put_file(self, sha: str, source: Path | str) -> bool:
-        """Store a local file as a blob: a copy-on-write clone where the filesystem has them, else a copy (verified)."""
+    def put_file(self, sha: str, source: Path | str, link: bool = False) -> bool:
+        """Store a local file as a blob: a copy-on-write clone where the filesystem has them, else a copy (verified);
+        `link`: a hard link instead of the copy, for a source that is deleted right after (a published draft)."""
         self._writing()
-        return self._blobs.put_file(sha, Path(source))
+        return self._blobs.put_file(sha, Path(source), link=link)
 
     def missing(self, entries: list[dict]) -> list[str]:
         return self._blobs.missing(entries)

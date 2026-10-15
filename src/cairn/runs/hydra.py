@@ -1,4 +1,5 @@
-"""Run bookkeeping for Hydra projects: run.json, the per-name `latest` link, and study completion.
+"""Run bookkeeping for Hydra projects: run.json, drafts as run folders (or the per-name `latest` link), and study
+completion.
 
 Every run directory gets `run.json`, its single completion record: `running` before experiment
 code, then `completed` or `failed` (with the error). Only a completed single run advances
@@ -22,6 +23,22 @@ with the callbacks in configs/config.yaml:
 
 `cairn finalize-study outputs/<run-name>/<timestamp>` completes a study whose launcher
 died (for example a killed Slurm launcher) by the same rule, once every trial job has ended.
+
+Drafts as run folders. Importing this module registers the OmegaConf resolver `cairn.draft`, so a config can
+write into a draft (cairn/client/drafts.py) instead of a runs/ folder:
+
+    hydra:
+      run: {dir: "${cairn.draft:descent}"}                              # one run: one draft
+      sweep: {dir: "${cairn.draft:descent-sweep}", subdir: "${hydra.job.num}"}   # trials are its subfolders
+
+The resolver is cached (OmegaConf `use_cache`), so every resolution in a job, and every trial of a sweep
+(Hydra copies the launcher's resolver cache into each trial's config), gets the same folder. In a draft,
+`run_experiment` records the job's pulls in the run folder, stores the resolved job config and its overrides
+as `metadata["config"]` and `metadata["overrides"]`, and, for a single run, publishes the draft when the
+experiment completes (a failed run keeps it, see `cairn drafts`) instead of moving `latest`; run.json is
+written as always. `StudyCompletion` (and `cairn finalize-study`) publishes a sweep draft once every trial
+completed, with the base config and the sweep's overrides as metadata, and keeps it otherwise. The experiment
+gets its draft from `cairn.current_draft()` (a view on its trial folder in a sweep); `run(output_dir)` is unchanged.
 """
 
 from __future__ import annotations
@@ -37,6 +54,49 @@ from pathlib import Path
 from typing import Any
 
 RUN_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+RESOLVER = "cairn.draft"
+
+
+def draft_folder(name: str) -> str:
+    """The `${cairn.draft:<name>}` resolver: a new draft of artifact `name`, as its folder (cached per config)."""
+    from ..client.drafts import Draft
+
+    return str(Draft(str(name), activate=False).folder)
+
+
+def register_resolver() -> None:
+    """Register `cairn.draft` with OmegaConf (done on import; nothing happens without OmegaConf)."""
+    try:
+        from omegaconf import OmegaConf
+    except ImportError:
+        return
+    if not OmegaConf.has_resolver(RESOLVER):
+        OmegaConf.register_new_resolver(RESOLVER, draft_folder, use_cache=True)
+
+
+register_resolver()
+
+
+def _plain(config: Any) -> Any:
+    """A config as plain JSON values (resolved); None when it cannot be resolved or serialized."""
+    try:
+        from omegaconf import OmegaConf
+
+        value = OmegaConf.to_container(config, resolve=True) if OmegaConf.is_config(config) else config
+        json.dumps(value)
+        return value
+    except Exception:  # an interpolation that fails, a value JSON cannot hold: no config metadata
+        return None
+
+
+def _config_metadata(config: Any, overrides) -> dict:
+    found = {}
+    plain = _plain(config)
+    if plain is not None:
+        found["config"] = plain
+    if overrides is not None:
+        found["overrides"] = [str(item) for item in overrides]
+    return found
 
 
 def now() -> str:
@@ -96,8 +156,16 @@ def run_experiment(cfg: Any, base: type | None = None, require_source_snapshot: 
 
     from .snapshot import require_snapshot
 
+    from ..client.drafts import find as find_draft
+
     hydra_cfg = HydraConfig.get()
     output_dir = Path(hydra_cfg.runtime.output_dir).resolve()
+    draft = find_draft(output_dir)
+    single = draft is not None and not draft.trial and hydra_cfg.mode == RunMode.RUN
+    if draft is not None:
+        if single:
+            draft.set_metadata(**_config_metadata(cfg, list(hydra_cfg.overrides.task)))
+        draft.activate()  # the job's pulls are recorded in its folder (a trial's own subfolder in a sweep)
     record = {
         "status": "running",
         "name": validate_run_name(str(cfg.run.name)),
@@ -117,9 +185,15 @@ def run_experiment(cfg: Any, base: type | None = None, require_source_snapshot: 
         write_status(output_dir, {**record, "status": "failed", "ended": now(),
                                   "error": f"{type(error).__name__}: {error}",
                                   "traceback": traceback.format_exc()})
+        if draft is not None:
+            draft.fail(error) if single else draft.deactivate()
         raise
     write_status(output_dir, {**record, "status": "completed", "ended": now()})
-    if hydra_cfg.mode == RunMode.RUN:
+    if single:
+        draft.publish()
+    elif draft is not None:
+        draft.deactivate()
+    elif hydra_cfg.mode == RunMode.RUN:
         update_latest(output_dir)
 
 
@@ -129,8 +203,11 @@ def _trial_status(folder: Path) -> dict:
 
 
 def complete_study(study: Path, name: str, trials: list[str], started: str | None, revision: str,
-                   **extra: Any) -> bool:
-    """Write a study's run.json (completed only when every trial completed) and move latest."""
+                   metadata: dict | None = None, **extra: Any) -> bool:
+    """Write a study's run.json (completed only when every trial completed) and move latest; a sweep draft is
+    published instead (with `metadata` added), or kept when a trial did not complete."""
+    from ..client.drafts import find as find_draft
+
     records = {trial: _trial_status(study / trial) for trial in trials}
     rows = [{"trial": trial, "status": records[trial].get("status", "missing")} for trial in trials]
     complete = bool(rows) and all(row["status"] == "completed" for row in rows)
@@ -138,7 +215,16 @@ def complete_study(study: Path, name: str, trials: list[str], started: str | Non
     write_status(study, {"status": "completed" if complete else "failed", "kind": "study",
                          "name": validate_run_name(name), "started": started, "ended": now(),
                          "code_revision": revision, "trials": rows, **extra})
-    if complete:
+    draft = find_draft(study)
+    if draft is not None and not draft.trial:
+        if metadata:
+            draft.set_metadata(**metadata)
+        if complete:
+            draft.publish()
+        else:
+            failed = [row["trial"] for row in rows if row["status"] != "completed"]
+            draft.fail(f"trial(s) {', '.join(failed) or '-'} did not complete")
+    elif complete:
         update_latest(study)
     return complete
 
@@ -166,7 +252,19 @@ class StudyCompletion(Callback):
     def on_multirun_end(self, config: Any, **kwargs) -> None:
         study = getattr(self, "study", Path(config.hydra.sweep.dir).resolve())
         complete_study(study, str(config.run.name), _numbered(study), getattr(self, "started", None),
-                       getattr(self, "revision", None) or code_revision(Path.cwd()))
+                       getattr(self, "revision", None) or code_revision(Path.cwd()), metadata=_study_metadata(config))
+
+
+def _study_metadata(config: Any) -> dict:
+    """A sweep's base config (without the hydra node) and its overrides (the sweep), for a sweep draft."""
+    try:
+        from omegaconf import OmegaConf
+
+        base = OmegaConf.masked_copy(config, [key for key in config if key != "hydra"])
+        overrides = list(config.hydra.overrides.task)
+    except Exception:
+        return {}
+    return _config_metadata(base, overrides)
 
 
 def finalize_study(study: Path) -> bool:
@@ -196,4 +294,13 @@ def finalize_study(study: Path) -> bool:
     name = str(((config or {}).get("run") or {}).get("name") or study.parent.name)
     started = min((r["started"] for r in records if r.get("started")), default=None)
     revision = next((r["code_revision"] for r in records if r.get("code_revision")), "unversioned")
-    return complete_study(study, name, trials, started, revision, finalized_by="cairn finalize-study")
+    metadata = {}
+    sweep = study / "multirun.yaml"  # the launcher's config: the base config and the sweep's overrides
+    if sweep.is_file():
+        try:
+            from omegaconf import OmegaConf
+
+            metadata = _study_metadata(OmegaConf.load(sweep))
+        except ImportError:
+            pass
+    return complete_study(study, name, trials, started, revision, metadata=metadata, finalized_by="cairn finalize-study")
