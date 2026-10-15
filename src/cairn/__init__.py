@@ -20,16 +20,16 @@ and the shortcuts, on top of it:
 
 `store=None` means the configured store (`[store]` in cairn.toml): a store server when `url`
 is set (`RemoteStore`; the token comes from CAIRN_STORE_TOKEN or `token_file`), else a local folder,
-`path` (default `.store` in the project root). `project` names the default project (default: the
+`path` (default `.cairn/store` in the project root). `project` names the default project (default: the
 project folder's slug). Every `pull` appends the exact version to `$CAIRN_INPUTS`, else to
 `.cairn-inputs.jsonl` in the working directory; `publish` carries a folder's `.cairn-inputs.jsonl`
 along as the version's `inputs`, which is how lineage is recorded without any framework hook.
 
 Every version has a uid (UUIDv7), and `name@<uid>` names it as exactly as `name@v<n>`. Publishing to a
 store server goes through a local replica, so it works while the server is down: the version is pending
-in the durable data root (`$CAIRN_DATA_DIR`, else `~/.local/share/cairn`), usable at once by its uid,
+in the durable data root (`$CAIRN_DATA_DIR`, else `.cairn/pending` in the project), usable at once by its uid,
 and sent later (`cairn status`, `cairn sync`). Pulls of exact versions, or of aliases by their last known
-resolution, work from the throwaway cache root (`$CAIRN_CACHE_DIR`, else `~/.cache/cairn`).
+resolution, work from the throwaway cache root (`$CAIRN_CACHE_DIR`, else `.cairn/cache` in the project; `$CAIRN_DIR` moves the whole `.cairn` folder).
 
 The parts are packages: `cairn.store` (the core), `cairn.client` (HTTP client, the object API, publishing,
 the replica, `RemoteStore`), `cairn.server`, `cairn.ui`, `cairn.reports`, and `cairn.runs`; each is

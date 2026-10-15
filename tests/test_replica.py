@@ -67,13 +67,13 @@ def test_data_root_resolution_order(tmp_path, monkeypatch, capsys):
     assert data_root() == tmp_path / "flag"
 
 
-def test_pending_survives_deleting_the_cache_and_stays_out_of_the_project(down, env, capsys, monkeypatch):
+def test_pending_survives_deleting_the_cache_and_lives_in_the_project_folder(down, env, capsys, monkeypatch):
     monkeypatch.delenv("CAIRN_DATA_DIR")
     version = cairn.connect().artifact("data").publish(folder(env, "d", {"a.txt": "kept"}))
-    here = Path(os.environ["XDG_DATA_HOME"]) / "cairn"
+    here = env / ".cairn" / "pending"  # the project's own folder, ignored by git through its own .gitignore
     assert data_root() == here and (here / "versions" / version.uid / "manifest.json").is_file()
     assert [path for path in (here / "blobs").rglob("*") if path.is_file()]
-    assert not (env / ".cairn").exists()
+    assert (env / ".cairn" / ".gitignore").read_text() == "*\n"
     shutil.rmtree(cache_root(), ignore_errors=True)
     capsys.readouterr()
     down.start()
@@ -181,7 +181,7 @@ def test_pending_version_is_usable_before_upload(down, env, capsys, monkeypatch)
     report.write_text("---\ntitle: R\ninputs:\n  data: data@best\n---\n\n"
                       "```python exec hide\nn = int((inputs.data / 'n.txt').read_text()) + 1\n```\n\nThe answer is {{ n }}.\n")
     build_all(load_config(env))
-    assert "42" in (env / "generated" / "reports" / "r" / "narrative.html").read_text()
+    assert "42" in (env / ".cairn" / "build" / "r" / "narrative.html").read_text()
 
     (env / "job" / "fit.txt").write_text("fit")  # a consumer published while down, with the pending input
     fit = store.artifact("fit").publish(env / "job")
@@ -314,7 +314,7 @@ def test_sync_refreshes_alias_knowledge_and_status_all_lists_everything(down, en
     store.artifact("data").publish(folder(env, "d", {"a.txt": "one"}), aliases=["best"])
     with monkeypatch.context() as other:  # another machine publishes v2 and moves best
         other.setenv("CAIRN_DATA_DIR", str(env.parent / "other-data"))
-        other.setenv("XDG_CACHE_HOME", str(env.parent / "other-cache"))
+        other.setenv("CAIRN_CACHE_DIR", str(env.parent / "other-cache"))
         cairn.connect(down.url, token=down.token, project="study").artifact("data").publish(
             folder(env, "d2", {"a.txt": "two"}), aliases=["best"])
     cairn.pull("data@v2", record=False)  # in the cache, but this machine still thinks best is v1

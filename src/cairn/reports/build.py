@@ -3,8 +3,8 @@
 A report is a folder `reports/<slug>/` with a `report.md` (front matter + Markdown), an optional
 `assets/` folder, and optional `data/`. There is no nesting:
 
-    reports/<slug>/report.md   ->  generated/reports/<slug>/index.html
-                                   generated/reports/index.html   (the project index)
+    reports/<slug>/report.md   ->  .cairn/build/<slug>/index.html
+                                     .cairn/build/index.html   (the project index)
 
 The data a report reads is declared in its front matter (`inputs:`), pinned to exact artifact
 versions at build time, and enforced: reading anything else in the project fails the build. Pages
@@ -48,7 +48,7 @@ from plotly.offline import get_plotlyjs, get_plotlyjs_version
 
 from .._version import __version__
 from ..client.open import open_store
-from ..config import Config, load_config
+from ..config import Config, load_config, protect
 from ..formats import METRICS, fold_scalars, read_jsonl
 from ..client.offline import local_folder, resolve_version
 from ..client.replica import exact_ref
@@ -1210,6 +1210,7 @@ def input_record(build: Build) -> dict:
 def build_report(key: str, folder: Path) -> Build:
     build = Build(key, folder)
     build.meta = front_matter(folder)
+    protect(CONFIG.cairn_dir, build.generated)
     build.generated.mkdir(parents=True, exist_ok=True)
     for name in OWN_FILES:
         (build.generated / name).unlink(missing_ok=True)
@@ -1357,6 +1358,6 @@ def build_all(config: Config | None = None, report: str | None = None) -> list[B
     write_site(reports, STATIC_NAMES)
     check_links(builds, reports)
     for build in builds:
-        print(f"Built {build.key}: {build.generated.relative_to(PROJECT)}/index.html "
+        print(f"Built {build.key}: {build.generated.relative_to(PROJECT) if PROJECT in build.generated.parents else build.generated}/index.html "
               f"({build.figures} figures, {len(build.findings)} findings, {len(build.typed)} typed numbers)")
     return builds

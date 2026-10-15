@@ -230,7 +230,7 @@ def cmd_status(args) -> None:
         print("the configured store is a local folder: nothing is ever pending (--all shows every server's versions)")
         return
     uid = replica.known_uid(url) if url else None
-    rows = replica.records() + (replica.synced_records() if args.all else [])
+    rows = replica.records(all_roots=True) + (replica.synced_records() if args.all else [])
     rows = [row for row in rows if args.all or replica.belongs(row, url, uid)]
     now = time.time()
     for row in sorted(rows, key=lambda row: row["uid"]):
@@ -422,7 +422,7 @@ def main(argv: list[str] | None = None) -> None:
     prune.add_argument("--dry-run", action="store_true", help="only say what would be removed")
     prune.set_defaults(run=cmd_prune)
     for command in (sync, status):
-        command.add_argument("--data-dir", type=Path, help="the data root to use (default: $CAIRN_DATA_DIR, else ~/.local/share/cairn): "
+        command.add_argument("--data-dir", type=Path, help="the data root to use (default: $CAIRN_DATA_DIR, else <project>/.cairn/pending, else ~/.local/share/cairn): "
                              "send the pending versions kept there")
     for command in (artifacts, versions, show, sync, status):
         command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local store server (sends the token unencrypted)")

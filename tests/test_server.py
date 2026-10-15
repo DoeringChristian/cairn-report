@@ -291,7 +291,7 @@ def test_pull_materializes_once_and_never_downloads_a_blob_twice(server, env, tm
     store.pull("data@v2", store=r)
     assert blob_gets(server) - before == 3  # only c.txt was new
     # a fresh pull cache folder with the blob cache kept would not re-download either; a corrupt download is refused
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "other-machine"))
+    monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / "other-machine"))
     assert (store.pull("data@v1", store=r) / "b.txt").read_text() == "only in v1"
     assert blob_gets(server) - before == 5
 

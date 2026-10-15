@@ -213,7 +213,7 @@ def test_offline_pulls_of_exact_and_alias_refs(down, env, capsys, monkeypatch):
     down.start()  # --offline: the fallback even though the server answers
     with monkeypatch.context() as other:  # another machine (its own replica) moves best
         other.setenv("CAIRN_DATA_DIR", str(env.parent / "other-data"))
-        other.setenv("XDG_CACHE_HOME", str(env.parent / "other-cache"))
+        other.setenv("CAIRN_CACHE_DIR", str(env.parent / "other-cache"))
         cairn.connect(down.url, token=down.token, project="study").artifact("data").publish(
             folder(env, "d2", {"a.txt": "two"}), aliases=["best"])
     capsys.readouterr()
@@ -239,6 +239,6 @@ def test_report_inputs_fall_back_while_down(down, env, capsys):
     capsys.readouterr()
     build_all(load_config(env))
     assert "last known resolution of study:data@best: study:data@v1" in capsys.readouterr().err
-    narrative = (env / "generated" / "reports" / "r" / "narrative.html").read_text()
+    narrative = (env / ".cairn" / "build" / "r" / "narrative.html").read_text()
     assert "42" in narrative
-    shutil.rmtree(env / "generated")
+    shutil.rmtree(env / ".cairn" / "build")

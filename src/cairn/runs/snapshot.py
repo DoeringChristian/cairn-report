@@ -87,6 +87,8 @@ SOURCE_NAMES = {
 }
 DENIED_PARTS = {
     ".git",
+    ".cairn",  # Cairn's own folder: store, pending and cached versions, built pages
+    ".store",  # the local store of earlier releases
     ".pixi",
     ".venv",
     "__pycache__",
@@ -94,7 +96,7 @@ DENIED_PARTS = {
     "mlruns",
     "node_modules",
     "outputs",
-    "runs",  # run folders (outputs_dir), which are evidence, not source
+    "runs",  # run folders, which are evidence, not source
     "site-packages",
     "venv",
     ".ssh",

@@ -6,13 +6,15 @@
     <cache>/blobs/<aa>/<sha256>            file contents downloaded from a store server
     <data>/...                             versions not on the server yet (cairn.client.replica)
 
-`<cache>` is throwaway: `$CAIRN_CACHE_DIR`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`; on a
-cluster it may be node-local scratch, and `cairn prune` trims it. `<data>` is durable (the data root):
-`$CAIRN_DATA_DIR`, else `$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`. It holds what only this
-machine has (pending versions and their blobs; real data, not a cache) and must sit on persistent
-storage with room for it: on a cluster with a small home quota, point `CAIRN_DATA_DIR` at a project or
-work filesystem. A version's folder is named by its uid, never by project, name, and number, so two
-stores never collide.
+`<cache>` is throwaway: `$CAIRN_CACHE_DIR`, else `<base>/cache` (the project's `.cairn/`, see config.py),
+else `$XDG_CACHE_HOME/cairn` outside a project; on a cluster it may be node-local scratch, and `cairn
+prune` trims it. `<data>` is durable (the data root): `--data-dir`, else `$CAIRN_DATA_DIR`, else
+`<base>/pending`, else `$XDG_DATA_HOME/cairn` (`~/.local/share/cairn`) outside a project. It holds what only
+this machine has (pending versions and their blobs; real data, not a cache) and must sit on persistent
+storage with room for it. A version's folder is named by its uid, never by project, name, and number, so
+two stores never collide. Pending versions an earlier release kept in the global `~/.local/share/cairn`
+move into the project's pending root when their source folder lies inside the project; the rest stay, and
+`data_roots()` lists both so `cairn sync` and `cairn status` see them.
 
 Either root may sit on NFS and be filled by many jobs at once, so nothing locks: a folder, a blob, or a
 record is written under a scratch name (`<target>.tmp-<host>-<pid>-<random>`) and renamed into place in
@@ -29,8 +31,10 @@ import shutil
 import socket
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
+from ..config import cairn_base, protect
 from . import refs
 from .blobs import now
 from .errors import NotFound, StoreError
@@ -52,15 +56,43 @@ def use_data_dir(path: Path | str | None) -> None:
     _override["data"] = Path(path).expanduser().resolve() if path else None
 
 
+@contextmanager
+def data_root_at(path: Path | str):
+    """Use `path` as the data root inside the block (to look at a second root)."""
+    before = _override["data"]
+    use_data_dir(path)
+    try:
+        yield
+    finally:
+        _override["data"] = before
+
+
+def _pending_default() -> Path | None:
+    """`<base>/pending` when nothing overrides the data root and a base exists, else None."""
+    if _override["data"] is not None or os.environ.get(DATA_ENV) or os.environ.get(LEGACY_STATE_ENV):
+        return None
+    base = cairn_base()
+    return base / "pending" if base else None
+
+
 def cache_root() -> Path:
-    """`$CAIRN_CACHE_DIR`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`."""
+    """`$CAIRN_CACHE_DIR`, else `<base>/cache`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`."""
     if os.environ.get(CACHE_ENV):
         return Path(os.environ[CACHE_ENV]).expanduser()
+    base = cairn_base()
+    if base:
+        protect(base)
+        return base / "cache"
     return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "cairn"
 
 
+def global_data_root() -> Path:
+    """`$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`: the data root outside a project (and the earlier default)."""
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "cairn"
+
+
 def data_root() -> Path:
-    """`--data-dir`, else `$CAIRN_DATA_DIR`, else `$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`.
+    """`--data-dir`, else `$CAIRN_DATA_DIR`, else `<base>/pending`, else `$XDG_DATA_HOME/cairn`, else `~/.local/share/cairn`.
 
     The deprecated `$CAIRN_STATE_DIR` is read (with a warning) when `$CAIRN_DATA_DIR` is not set."""
     if _override["data"] is not None:
@@ -72,7 +104,25 @@ def data_root() -> Path:
             _warned.add(LEGACY_STATE_ENV)
             print(f"warning: {LEGACY_STATE_ENV} is deprecated: rename it to {DATA_ENV}", file=sys.stderr)
         return Path(os.environ[LEGACY_STATE_ENV]).expanduser()
-    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "cairn"
+    base = cairn_base()
+    if base:
+        protect(base)
+        return base / "pending"
+    return global_data_root()
+
+
+def project_pending_default() -> Path | None:
+    """`<base>/pending` while it is the data root (nothing overrides it), else None."""
+    return _pending_default()
+
+
+def data_roots() -> list[Path]:
+    """The data root, then (when it is the project's pending folder) the global one if it still holds versions."""
+    first = data_root()
+    other = global_data_root()
+    if _pending_default() is not None and (other / "versions").is_dir() and os.path.realpath(other) != os.path.realpath(first):
+        return [first, other]
+    return [first]
 
 
 def old_state_root() -> Path:

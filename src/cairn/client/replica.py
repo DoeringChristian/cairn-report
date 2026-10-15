@@ -10,8 +10,8 @@
     <cache>/versions/<uid>/manifest.json, files/    a synced version (store/cache.py), with its last access time
     <cache>/blobs/<aa>/<sha256>                     downloaded contents
 
-`<data>` (`$CAIRN_DATA_DIR`, else `<project>/.cairn`, else `~/.local/share/cairn`; see store/cache.py) is durable:
-what only this machine has lives there, never only in the cache. `<cache>` (`$CAIRN_CACHE_DIR`) is
+`<data>` (`$CAIRN_DATA_DIR`, else `<project>/.cairn/pending`, else `~/.local/share/cairn`; see config.py) is durable:
+what only this machine has lives there, never only in the cache. `<cache>` (`$CAIRN_CACHE_DIR`, else `<project>/.cairn/cache`) is
 throwaway: it can be node-local scratch, deleted at any time, or trimmed by `cairn prune`.
 
 A record holds everything the server needs: project, name, the manifest entries, label, metadata,
@@ -36,8 +36,10 @@ from datetime import datetime
 from pathlib import Path
 
 from ..store.blobs import now
-from ..store.cache import (FILES, RECORD, blob_cache, cache_root, data_root, files_folder, hostname, install, link_files,
-                           old_state_root, place, read_json, read_record, remove, scratch, version_folder, write_json)
+from ..config import find_project_root
+from ..store.cache import (FILES, RECORD, blob_cache, cache_root, data_root, data_root_at, data_roots, files_folder,
+                           global_data_root, hostname, install, link_files, old_state_root, place, project_pending_default,
+                           read_json, read_record, remove, scratch, version_folder, write_json)
 from ..store.errors import StoreError
 from ..store.refs import Ref
 
@@ -84,8 +86,15 @@ def save(record: dict) -> None:
     write_json(folder_of(record["uid"]) / RECORD, {key: value for key, value in record.items() if not key.startswith("_")})
 
 
-def records() -> list[dict]:
-    """Every local record (any store), oldest first (by uid)."""
+def records(all_roots: bool = False) -> list[dict]:
+    """Every local record (any store), oldest first (by uid); with `all_roots`, those of the global data root too."""
+    if all_roots:
+        extra = data_roots()[1:]
+        found = records()
+        for root in extra:
+            with data_root_at(root):
+                found += records()
+        return sorted(found, key=lambda record: record["uid"])
     ensure_layout()
     found = []
     base = data_root() / "versions"
@@ -500,6 +509,7 @@ def ensure_layout() -> None:
     _checked.add(roots)
     try:
         move_old_state()
+        move_global_pending()
     except OSError:
         pass
     cache = cache_root()
@@ -517,7 +527,8 @@ def move_old_state() -> list[str]:
     `~/.local/state/cairn`) into the data root, with their blobs and store files; returns what was moved.
     The old folder is removed once empty. (Nothing moves when `$CAIRN_STATE_DIR` named the old folder: it
     is the data root then.)"""
-    old, new = old_state_root(), data_root()
+    old = old_state_root()
+    new = global_data_root() if project_pending_default() is not None else data_root()
     if not (old / "versions").is_dir() or os.path.realpath(old) == os.path.realpath(new):
         return []
     moved = []
@@ -552,6 +563,57 @@ def move_old_state() -> list[str]:
     if moved:
         print(f"cairn: moved {len(moved)} pending versions from {old} to {new}", file=sys.stderr)
     return moved
+
+
+def move_global_pending() -> list[str]:
+    """Move pending records from the global data root whose `source.folder` lies inside this project into the
+    project's pending root (used only when that is the data root); returns the uids moved. Running versions
+    stay (their job writes to the old place); so do records of other projects. Never overwrites."""
+    if project_pending_default() is None:
+        return []
+    old, new, project = global_data_root(), data_root(), find_project_root()
+    if project is None or not (old / "versions").is_dir() or os.path.realpath(old) == os.path.realpath(new):
+        return []
+    moved = []
+    for folder in sorted((old / "versions").iterdir()):
+        record = None if ".tmp-" in folder.name else read_record(folder)
+        if not record or record.get("sync") in ("synced", "running"):
+            continue
+        where = (record.get("source") or {}).get("folder")
+        if not where or not _inside(Path(where), project):
+            continue
+        target = version_folder(new, record["uid"])
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.rename(folder, target)
+        except OSError:
+            shutil.copytree(folder, target, symlinks=True)
+            remove(folder)
+        for item in record.get("files", []):
+            if "sha256" in item and blob_cache(old, item["sha256"]).is_file() and not data_blob(item["sha256"]).is_file():
+                _copy_blob(blob_cache(old, item["sha256"]), data_blob(item["sha256"]))
+        moved.append(record["uid"])
+    if moved:
+        left = set()
+        for folder in (old / "versions").iterdir():
+            record = None if ".tmp-" in folder.name else read_record(folder)
+            left |= {item["sha256"] for item in (record or {}).get("files", []) if "sha256" in item}
+        for uid in moved:
+            for item in (read_record(version_folder(new, uid)) or {}).get("files", []):
+                if "sha256" in item and item["sha256"] not in left:
+                    blob_cache(old, item["sha256"]).unlink(missing_ok=True)
+        print(f"cairn: moved {len(moved)} pending versions of this project from {old} to {new}", file=sys.stderr)
+    return moved
+
+
+def _inside(path: Path, folder: Path) -> bool:
+    try:
+        path = path.resolve()
+    except OSError:
+        return False
+    return folder in [path, *path.parents]
 
 
 def migrate(cache: Path) -> list[str]:

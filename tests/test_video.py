@@ -45,7 +45,7 @@ def test_video_becomes_a_figure_card(project):
     alpha = project / "reports" / "alpha" / "report.md"
     alpha.write_text(alpha.read_text() + "\n![Rollout](input:descent/videos/rollout.mp4 \"Twelve frames.\")\n")
     build_all(load_config(project))
-    narrative = (project / "generated" / "reports" / "alpha" / "narrative.html").read_text()
+    narrative = (project / ".cairn" / "build" / "alpha" / "narrative.html").read_text()
     assert 'data-figure-type="video"' in narrative and "<video data-src=" in narrative
     assert 'data-fps="12"' in narrative
     assert 'width="64" height="48"' in narrative  # the card's shape is known before the video loads
@@ -63,11 +63,11 @@ def test_served_video_answers_range_requests(project, monkeypatch):
     alpha = project / "reports" / "alpha" / "report.md"
     alpha.write_text(alpha.read_text() + "\n![Rollout](input:descent/videos/rollout.mp4)\n")
     build_all(load_config(project))
-    monkeypatch.setattr(server, "OUTPUT_ROOT", project / "generated" / "reports")
+    monkeypatch.setattr(server, "OUTPUT_ROOT", project / ".cairn" / "build")
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
-        copied = next((project / "generated" / "reports").rglob("*.mp4")).relative_to(project / "generated" / "reports")
+        copied = next((project / ".cairn" / "build").rglob("*.mp4")).relative_to(project / ".cairn" / "build")
         request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}/{copied.as_posix()}",
                                          headers={"Range": "bytes=10-19"})
         with urllib.request.urlopen(request) as response:

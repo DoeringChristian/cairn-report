@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..client.http import Client, connect
 from ..client.remote import RemoteStore
-from ..config import Config, load_config
+from ..config import Config, load_config, migrate_store, protect
 from ..store import LocalStore, Unauthorized
 from ..store.tokens import OWNER, Tokens, read_token
 from .sessions import Session
@@ -75,8 +75,9 @@ def open_backend(store: str | None = None, config: Config | None = None, no_auth
             if config.store.get("url"):
                 store = config.store["url"]
             else:
-                root = Path(config.store.get("path", ".store")).expanduser()
-                return LocalBackend(root if root.is_absolute() else config.project / root, no_auth)
+                migrate_store(config)
+                protect(config.cairn_dir, config.store_path)
+                return LocalBackend(config.store_path, no_auth)
         else:
             return LocalBackend(Path(store), no_auth)
     token = connect(config, store, allow_http).token if no_auth else ""  # CAIRN_STORE_TOKEN or [store] token_file

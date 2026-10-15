@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from ..config import Config, load_config
+from ..config import Config, load_config, migrate_store, protect
 from ..store import LocalStore, StoreError, refs
 from .http import connect, project_name
 from .remote import RemoteStore
@@ -17,8 +15,9 @@ def open_store(config: Config | None = None) -> LocalStore | RemoteStore:
     project = project_name(config)
     if settings.get("url"):
         return RemoteStore(connect(config), project)
-    root = Path(settings.get("path", ".store")).expanduser()
-    store = LocalStore(root if root.is_absolute() else config.project / root, project)
+    migrate_store(config)
+    protect(config.cairn_dir, config.store_path)
+    store = LocalStore(config.store_path, project)
     store.create_project(store.project)
     return store
 

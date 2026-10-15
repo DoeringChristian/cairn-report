@@ -15,7 +15,7 @@ from cairn.store.cache import materialize
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """A project folder with a configured local store, an isolated cache, and cwd inside the project."""
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
     project = tmp_path / "study"
     project.mkdir()
@@ -240,7 +240,7 @@ def test_configured_store_pull_publish_lineage(env, tmp_path):
     (env / "cairn.toml").write_text('[store]\nexclude = ["*.pkl"]\n')
     data = folder(tmp_path, "crops", {"a.txt": "1", "skip.pkl": "x"})
     assert store.publish("datasets/crops", data, aliases=["paper"]) == 1
-    assert (env / ".store").is_dir()
+    assert (env / ".cairn" / "store").is_dir()
     assert "skip.pkl" not in {f["path"] for f in store.versions("datasets/crops")[0]["files"]}
 
     work = env / "work"

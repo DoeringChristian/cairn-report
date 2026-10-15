@@ -1,7 +1,7 @@
 """Serve the built reports as a static site, with HTTP caching.
 
-    /                  the root report (generated/reports/index.html)
-    /<path>/           a child report (generated/reports/<path>/index.html)
+    /                  the root report (<build dir>/index.html)
+    /<path>/           a child report (<build dir>/<path>/index.html)
     /_static/...       shared page files, named by content hash
 
 Hashed (`_static/`) and versioned (`?v=`) files are cached for good, everything

@@ -78,7 +78,7 @@ several flat reports, one per research direction. A `report.md` anywhere else
 single pages: move it to reports/<slug>/".
 
 ```text
-reports/                       ->  generated/reports/
+reports/                       ->  .cairn/build/
 ├── alpha/                     ->  alpha/index.html
 │   ├── report.md
 │   ├── assets/                    images, Plotly JSON, HTML fragments
@@ -88,12 +88,12 @@ reports/                       ->  generated/reports/
 ```
 
 ```bash
-cairn build             # build every report into generated/reports/
+cairn build             # build every report into .cairn/build/
 cairn build --report beta
 cairn serve             # build, then serve at http://127.0.0.1:8000/
 ```
 
-The build also writes `generated/reports/index.html`, a project index with one
+The build also writes `.cairn/build/index.html`, a project index with one
 card per report (title, status, summary, update time, number of inputs), and
 `site.json`, the flat report list the sidebar uses. `serve` moves to the next
 free port when the requested one is taken (`--strict-port` fails instead). The
@@ -170,7 +170,7 @@ reached through a path outside the project and the cache (a store kept
 elsewhere is watched, other locations are not), and imports of project modules
 (importing is not reading data).
 
-The manifest (`generated/reports/<slug>/manifest.json`) and `report-data.json`
+The manifest (`.cairn/build/<slug>/manifest.json`) and `report-data.json`
 record `inputs: {name: {requested, resolved, files}}`; the manifest also lists
 every file read with its hash, links, typed numbers in prose, and the tooling
 versions.
@@ -220,7 +220,7 @@ chat with an LLM: `reports/a/report.md:42 "the selected text"`, or for a figure
 
 ### Loading and caching
 
-The page files and Plotly are shared in `generated/reports/_static/`, named by
+The page files and Plotly are shared in `.cairn/build/_static/`, named by
 content hash and stored gzipped too, so browsers download them once. Each
 `index.html` points at versioned URLs of its report data, so switching between
 reports costs only `index.html`. Figures and plots load as they approach the
@@ -230,7 +230,7 @@ report remembers the reader's position in the browser.
 ### Sharing as one page
 
 ```bash
-cairn share                 # build, then write generated/share/index.html
+cairn share                 # build, then write .cairn/share/index.html
 cairn share --report alpha  # only alpha
 ```
 
@@ -343,7 +343,7 @@ imported the first time it is opened; the old files stay beside it as `*.migrate
 `cairn export-metadata <folder> <dir>` writes the metadata as readable JSON Lines, for backups and
 inspection.
 
-A project works offline against a store folder (`.store` by default, `[store] path`). To share
+A project works offline against a store folder (`.cairn/store` by default, `[store] path`). To share
 it, serve a folder over HTTP and point projects at the server. The two halves are separate:
 
 - the **store server** (`cairn server`) is only an artifact store: a JSON API and file
@@ -373,7 +373,7 @@ read the folder but publish through the server's URL (`cairn token` commands on 
 still work). Keep the folder on a local disk of the server's machine. `cairn server` refuses a folder
 on NFS, Lustre, GPFS, SMB, BeeGFS, Ceph and other network filesystems, where SQLite's and the
 server's locks are not reliable; `--allow-network-fs` overrides that when nothing else ever touches
-the folder. A local store folder (a project's `.store`) on a network filesystem warns once when it
+the folder. A local store folder (a project's `.cairn/store`) on a network filesystem warns once when it
 is written. Cluster jobs talk to a store server over HTTP; their pull cache may live on NFS.
 
 The server is built for many clients at once: it is asynchronous (uvicorn's event loop, with disk
@@ -487,13 +487,13 @@ two roots:
 <cache>/blobs/<aa>/<sha256>                    downloaded contents (a file is downloaded once)
 ```
 
-`<data>` (the data root) is durable: `$CAIRN_DATA_DIR`, else `$XDG_DATA_HOME/cairn`, else
-`~/.local/share/cairn`. It holds what only this machine has: pending versions are real data, not
+`<data>` (the data root) is durable: `--data-dir`, else `$CAIRN_DATA_DIR`, else `.cairn/pending`
+in the project (`~/.local/share/cairn` outside a project; see "Where Cairn keeps things"). It holds what only this machine has: pending versions are real data, not
 cache, so the root belongs on persistent storage with room for them (`CAIRN_STATE_DIR`, its old name,
 is still read for one release, with a warning; pending versions in the old `~/.local/state/cairn` or
 `$XDG_STATE_HOME/cairn` are moved into the data root on first use). It is the counterpart of
 W&B's offline runs: the work is kept locally until `cairn sync` sends it. `<cache>` is throwaway:
-`$CAIRN_CACHE_DIR`, else `$XDG_CACHE_HOME/cairn`, else `~/.cache/cairn`; deleting it loses nothing
+`$CAIRN_CACHE_DIR`, else `.cairn/cache` in the project (`~/.cache/cairn` outside one); deleting it loses nothing
 the server does not have, and `cairn prune` trims it by last pull (recorded in the manifest, not the
 filesystem's atime), never touching pending or running versions or the blobs they need.
 
@@ -553,30 +553,30 @@ The safe setup:
 - run `cairn server` on a machine with a local disk (not on a compute node, and with its root not
   on a shared filesystem many writers touch), behind HTTPS;
 - jobs publish over HTTP (`[store] url`), never into a store folder on NFS;
-- `CAIRN_DATA_DIR` points at persistent storage with enough space, such as a project or work
-  filesystem (home quotas are usually small, and pending data is real data); pending versions live
-  there until the server has them, also after the job and its node are gone, and every node and the
-  login node see the same folder;
+- the project lives on persistent storage, so the default `.cairn/` folder is already right:
+  pending versions in `.cairn/pending` stay there until the server has them, also after the job and
+  its node are gone, and every node and the login node see the same folder (set `CAIRN_DIR` to
+  put the whole folder elsewhere on persistent storage, e.g. when the project is not shared);
 - `CAIRN_CACHE_DIR` points at node-local scratch, so pulls read from a local disk and the cache
-  disappears with the job;
+  disappears with the job (the default `.cairn/cache` sits on the project filesystem);
 - every job script ends with `cairn sync` (it sends what the job left pending; a job killed before
   that is sent by the next sync anywhere, and a killed `--watch` version is failed once its heartbeat
-  expires), and a login-node timer can run `cairn sync` too, with the same `CAIRN_DATA_DIR` (or
-  `cairn sync --data-dir PATH`);
+  expires), and a login-node timer can run `cairn sync` too, from the project (or with the same
+  `CAIRN_DIR`, `CAIRN_DATA_DIR`, or `cairn sync --data-dir PATH`);
 - `cairn status` shows what is still pending, from which host, and why.
 
 ```bash
 #!/bin/bash
 #SBATCH ...
 export CAIRN_CACHE_DIR="${TMPDIR:-/tmp}/cairn-$SLURM_JOB_ID"   # node-local, throwaway
-export CAIRN_DATA_DIR=/work/my-group/me/cairn                  # persistent and shared: pending data waits here
+cd /work/my-group/me/my-study                                  # the project: .cairn/pending waits here
 cairn publish runs/fit/latest fit --watch -- python fit.py
 cairn sync                                                    # send anything still pending
 ```
 
 ```bash
 # on a login node, e.g. from cron or a systemd user timer
-*/15 * * * * CAIRN_DATA_DIR=/work/my-group/me/cairn cairn --project ~/my-study sync >/dev/null 2>&1
+*/15 * * * * cd /work/my-group/me/my-study && cairn sync >/dev/null 2>&1
 ```
 
 `exclude` takes gitignore-style globs on project paths: `*` and `?` stay within a folder, `**`
@@ -673,14 +673,56 @@ old report version is migrated, split into one `reports/<slug>` artifact per rep
 read runs with `run:` must be rewritten by hand to declare `inputs:`. Running it again adds
 nothing. `cairn server /srv/store` then gives the new folder an owner token if it has none.
 
+## Where Cairn keeps things
+
+Everything Cairn writes for a project goes into one folder, `.cairn/` in the project root (like
+W&B's `./wandb/`). It creates a `.gitignore` containing `*` inside, so git ignores it; your own
+`.gitignore` is never edited.
+
+```text
+<project>/.cairn/
+├── .gitignore      "*"
+├── store/          the local store, when [store] has no url
+├── pending/        the data root: versions/<uid>/, blobs/, stores/ (pending, running, rejected versions)
+├── cache/          the cache root: versions/<uid>/, blobs/, hash caches (throwaway)
+├── build/          built report pages
+└── share/          `cairn share` pages (next to build/)
+```
+
+Each place is resolved separately; the first match wins:
+
+| What | Resolution |
+| --- | --- |
+| base folder | `$CAIRN_DIR`, else `[cairn] dir` in `cairn.toml` (relative to the project root), else `<project root>/.cairn`; none outside a project |
+| pending (data root) | `cairn sync --data-dir`, else `$CAIRN_DATA_DIR` (`$CAIRN_STATE_DIR`, deprecated), else `<base>/pending`, else `$XDG_DATA_HOME/cairn` (`~/.local/share/cairn`) |
+| cache root | `$CAIRN_CACHE_DIR`, else `<base>/cache`, else `$XDG_CACHE_HOME/cairn` (`~/.cache/cairn`) |
+| local store | `[store] path`, else `<base>/store` |
+| built pages | `output_dir` in `cairn.toml`, else `<base>/build` |
+
+The project root is the nearest folder above the working directory with a `cairn.toml`,
+`pixi.toml`, or `pyproject.toml`. Source snapshots of Hydra runs skip `.cairn`.
+
+Earlier layouts move on first use (once, announced on stderr, never overwriting anything): a
+project's `.store/` becomes `.cairn/store/`; pending versions in the global `~/.local/share/cairn`
+whose source folder lies inside the project move to `.cairn/pending/` (running versions and other
+projects' versions stay there, and `cairn sync` and `cairn status` still cover the global root).
+`generated/reports/` is left alone: the next build writes to `.cairn/build/`, and the old folder can
+be deleted. `outputs_dir` in `cairn.toml` is no longer used (one warning, then ignored).
+
+On a cluster the project sits on persistent storage, so the default is the right one: pending
+versions survive the job. Set `CAIRN_CACHE_DIR` to node-local scratch for fast pulls, and end every
+job with `cairn sync` (see "Clusters (Slurm)").
+
 ## Configuration
 
 Everything has a default; `cairn.toml` at the project root changes it:
 
 ```toml
 reports_dir = "reports"            # holds one folder per report
-output_dir = "generated/reports"   # the built site
-outputs_dir = "outputs"            # run folders
+output_dir = ".cairn/build"        # the built site (default: <cairn dir>/build)
+
+[cairn]
+dir = ".cairn"                     # where Cairn keeps its files for this project (default)
 
 [style]
 css = ["style.css"]                # extra stylesheets, loaded after the default style

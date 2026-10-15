@@ -109,7 +109,7 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
      against local and remote stores.
    - **Offline publishing:**
      - every publish commits first to the local replica (pending, in the data root
-       `~/.local/share/cairn/`, or `$CAIRN_DATA_DIR`): manifest, blob references, inputs;
+       `<project>/.cairn/pending/`, or `$CAIRN_DATA_DIR`): manifest, blob references, inputs;
      - a background uploader sends it when the server answers; the server assigns the version
        number at upload, and until then the version is pending;
      - `cairn sync` sends the pending versions by hand, and `cairn status` shows what is pending;
@@ -135,9 +135,14 @@ release. The environment variables `CAIRN_STORE_TOKEN` and `CAIRN_INPUTS` keep t
      - an alias falls back to its last known resolution, with a warning naming the version, and
        records that version as the input;
      - `--offline` forces the fallback.
+   - **Layout** (owner-approved, on `artifact-store`): everything Cairn writes for a project goes into one
+     relocatable folder, `<project>/.cairn/` (`CAIRN_DIR`, or `[cairn] dir`), with its own `.gitignore` of `*`:
+     `store/` (was `.store/`), `pending/` (the data root), `cache/` (the cache root), `build/` (was
+     `generated/reports/`). `CAIRN_DATA_DIR` and `CAIRN_CACHE_DIR` still override single roots; outside a
+     project the XDG folders apply. `.store/` and global pending records of the project move in on first use.
    - **The local replica** (owner-approved, replaces the outbox; on branch `replica`):
-     - two roots: `CAIRN_DATA_DIR` (durable, default `~/.local/share/cairn`; on a cluster point it at a
-       persistent project filesystem, since home quotas are small) holds pending and running versions and
+     - two roots: `CAIRN_DATA_DIR` (durable, default `<project>/.cairn/pending`, `~/.local/share/cairn` outside a project;
+       the project sits on persistent storage on a cluster) holds pending and running versions and
        their blobs, like W&B's offline runs; `CAIRN_STATE_DIR` is read for one release with a warning and
        old `~/.local/state/cairn` records are moved over on first use; `cairn sync --data-dir PATH` flushes
        a given data root from a login node; `CAIRN_CACHE_DIR` (throwaway, may be node-local scratch) holds synced
