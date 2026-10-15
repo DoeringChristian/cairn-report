@@ -267,11 +267,10 @@ def test_publish_follows_symlinked_folder_and_labels_by_target(env, tmp_path):
     assert store.pull("descent@2026-10-15_07-49-37//r.txt").read_text() == "x"
 
 
-def test_remote_store_needs_a_token_and_refuses_plain_http(env, monkeypatch):
+def test_remote_store_without_a_token_and_plain_http(env, monkeypatch):
     monkeypatch.delenv("CAIRN_STORE_TOKEN", raising=False)
     (env / "cairn-report.toml").write_text('[store]\nurl = "https://store.example.org"\n')
-    with pytest.raises(SystemExit, match="no store token"):
-        store.pull("a@v1")
+    assert store.open_store().client.token == ""  # only a --no-auth server answers; others say a token is needed
     monkeypatch.setenv("CAIRN_STORE_TOKEN", "t" * 40)
     (env / "cairn-report.toml").write_text('[store]\nurl = "http://store.example.org"\n')
     with pytest.raises(SystemExit, match="plain HTTP"):

@@ -304,6 +304,10 @@ The first `serve` of a new folder creates it with a random owner token (owner-on
 `<folder>/token`); every launch prints `Store: <url>` and `Token: <owner token>` to the terminal
 (never into a URL). Binding to a non-local `--host` warns: the server speaks plain HTTP.
 
+For local testing, `store serve <folder> --no-auth` needs no login and no token: every request acts
+as the owner, and clients connect without `CAIRN_STORE_TOKEN`. It is refused on any `--host` but
+loopback.
+
 ```bash
 cairn-report store token create /srv/store --project my-study --write --name cluster   # printed once
 cairn-report store token list /srv/store       # names, projects, access: never token values

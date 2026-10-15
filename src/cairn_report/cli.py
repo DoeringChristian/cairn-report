@@ -80,7 +80,7 @@ def cmd_store_serve(args) -> None:
     from .store.server import serve_store
 
     serve_store(args.root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3),
-                secure_cookie=not args.insecure_cookies)
+                secure_cookie=not args.insecure_cookies, no_auth=args.no_auth)
 
 
 def cmd_store_migrate(args) -> None:
@@ -174,6 +174,7 @@ def main(argv: list[str] | None = None) -> None:
     store_serve.add_argument("--port", type=int, default=8800)
     store_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
     store_serve.add_argument("--insecure-cookies", action="store_true", help="browser login over plain HTTP (SSH tunnel)")
+    store_serve.add_argument("--no-auth", action="store_true", help="no login or token, everyone acts as the owner (local testing; loopback hosts only)")
     store_serve.set_defaults(run=cmd_store_serve)
     migrate = store_commands.add_parser("migrate", help="copy an old hub root into a store (the old root is not modified)")
     migrate.add_argument("old_root", type=Path)

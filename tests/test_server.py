@@ -510,3 +510,24 @@ def test_end_to_end_two_machines_lineage(server, tmp_path, monkeypatch):
     assert b"fit of 1,2,3" in call(server, "GET", "/p/study/r/summary/narrative.html")[2]
     # the report data records its exact input for the Data panel
     assert json.loads(call(server, "GET", "/p/study/r/summary/report-data.json")[2])["inputs"]["fit"]["resolved"] == chain[1]
+
+
+def test_no_auth_serves_without_tokens_on_loopback_only(tmp_path, env, monkeypatch):
+    root = tmp_path / "open-store"
+    init_root(root)
+    with pytest.raises(SystemExit, match="loopback"):
+        make_server(root, host="0.0.0.0", port=0, no_auth=True)
+    httpd = make_server(root, port=0, no_auth=True)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        server = SimpleNamespace(url=f"http://127.0.0.1:{httpd.server_address[1]}", port=httpd.server_address[1], token="")
+        monkeypatch.delenv("CAIRN_STORE_TOKEN", raising=False)
+        use_remote(env, server)
+        version = store.publish("open", folder(env, "open-run", {"a.txt": "x"}))  # a client with no token at all
+        assert version == 1
+        assert api(server, "GET", "/api/v2/projects", token="")[0]["name"] == "study"
+        status, _, page = call(server, "GET", "/p/study/a/open", token="")
+        assert status == 200 and b"open" in page  # pages too, without a login
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

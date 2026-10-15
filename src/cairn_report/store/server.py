@@ -84,6 +84,7 @@ class StoreHandler(BaseHTTPRequestHandler):
     owner_token: str = ""
     tokens: Tokens
     secure_cookie: bool = True
+    no_auth: bool = False  # --no-auth: every request acts as the owner (local testing only)
     max_blob: int = 0
     static_cache: dict
     server_version = f"cairn-store/{__version__}"
@@ -100,11 +101,15 @@ class StoreHandler(BaseHTTPRequestHandler):
         return hmac.new(self.owner_token.encode(), SESSION_LABEL + b":" + identifier.encode(), hashlib.sha256).hexdigest()
 
     def _bearer(self) -> Principal | None:
+        if self.no_auth:
+            return OWNER
         header = self.headers.get("Authorization", "")
         return self._principal_for(header[7:].strip()) if header.startswith("Bearer ") else None
 
     def _cookie(self) -> Principal | None:
         """The session cookie is `<token id>.<HMAC of the id>`: the token itself is never in it, and a revoked token stops working."""
+        if self.no_auth:
+            return OWNER
         morsel = SimpleCookie(self.headers.get("Cookie", "")).get(COOKIE)
         if not morsel:
             return None
@@ -553,8 +558,11 @@ def entry_type(path: str) -> str:
 
 
 def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
-                secure_cookie: bool = True) -> ThreadingHTTPServer:
-    """A bound store server (not yet serving) for a root that has its owner token."""
+                secure_cookie: bool = True, no_auth: bool = False) -> ThreadingHTTPServer:
+    """A bound store server (not yet serving) for a root that has its owner token. With no_auth every
+    request acts as the owner, so it is refused on any address but this machine's loopback."""
+    if no_auth and host not in LOCAL_HOSTS:
+        raise SystemExit("--no-auth serves every project to anyone who can connect: only with a loopback --host")
     root = root.resolve()
     if not (root / "token").is_file():
         raise SystemExit(f"{root} is not a store root; `cairn-report store serve {root}` creates it")
@@ -563,6 +571,7 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         "owner_token": read_token(root / "token"),
         "tokens": Tokens(root),
         "secure_cookie": secure_cookie,
+        "no_auth": no_auth,
         "max_blob": max_blob,
         "static_cache": {},
     })
@@ -572,16 +581,20 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
 
 
 def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
-                secure_cookie: bool = True) -> None:
+                secure_cookie: bool = True, no_auth: bool = False) -> None:
     """Serve a store; a new root (no token yet) is initialized first. Prints the owner token, which is the
     login for browsers and clients, to the terminal only: never into a URL."""
     created = None if (root / "token").exists() else init_root(root)
-    server = make_server(root, host, port, max_blob=max_blob, secure_cookie=secure_cookie)
+    server = make_server(root, host, port, max_blob=max_blob, secure_cookie=secure_cookie, no_auth=no_auth)
     if host not in LOCAL_HOSTS:
         print("warning: the store serves plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
     if created:
         print(f"Created store {root.resolve()} with a new owner token ({created}, owner-only)", flush=True)
     print(f"Store: http://{host}:{server.server_address[1]}/ (data in {root.resolve()})", flush=True)
+    if no_auth:
+        print("Authentication is off (--no-auth): every request acts as the owner; for local testing only", flush=True)
+        server.serve_forever()
+        return
     print(f"Token: {server.RequestHandlerClass.owner_token}", flush=True)
     print("  log in with it in the browser; clients read it from CAIRN_STORE_TOKEN or a token_file;"
           " `cairn-report store token create` makes project-scoped tokens", flush=True)

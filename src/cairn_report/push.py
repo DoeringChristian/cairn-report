@@ -79,7 +79,7 @@ class Client:
                 expect=(200,), stream_to: Path | None = None):
         connection = self._connection()
         try:
-            connection.request(method, path, body=body, headers={"Authorization": f"Bearer {self.token}", **(headers or {})})
+            connection.request(method, path, body=body, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})
             response = connection.getresponse()
             if response.status in expect and stream_to is not None:
                 with stream_to.open("wb") as handle:
@@ -90,7 +90,8 @@ class Client:
         finally:
             connection.close()
         if response.status == 401:
-            raise ClientError("the store rejected the token", 401)
+            raise ClientError("the store rejected the token" if self.token else
+                              "the store needs a token: set CAIRN_STORE_TOKEN or [store] token_file", 401)
         if response.status not in expect:
             raise ClientError(_message(method, path, response.status, data), response.status)
         return response.status, data
@@ -134,8 +135,7 @@ def connect(config: Config | None, url: str | None = None, allow_http: bool = Fa
         if token_file.stat().st_mode & 0o077:
             print(f"warning: {token_file} is readable by other users; run chmod 600 {token_file}", file=sys.stderr)
         token = token_file.read_text().strip()
-    if not token:
-        raise SystemExit("no store token: set CAIRN_STORE_TOKEN or [store] token_file in cairn-report.toml")
+    # without a token only a server started with --no-auth answers
     return Client(url, token, allow_http=allow_http or bool(settings.get("allow_http")))
 
 
