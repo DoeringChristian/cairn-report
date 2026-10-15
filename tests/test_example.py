@@ -27,7 +27,6 @@ def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
     shutil.copytree(EXAMPLE, project, ignore=shutil.ignore_patterns(".cairn", "__pycache__"))
     monkeypatch.delenv("CAIRN_DIR", raising=False)
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
-    monkeypatch.delenv("CAIRN_DATA_DIR", raising=False)  # the project's own .cairn/pending, as for a user
 
     result = subprocess.run([sys.executable, str(project / "run_example.py")], cwd=tmp_path, capture_output=True, text=True,
                             env={**os.environ})

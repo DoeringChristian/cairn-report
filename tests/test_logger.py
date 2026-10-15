@@ -53,7 +53,6 @@ def test_rejects_bad_names_and_values(tmp_path):
 def test_report_reads_logged_run(tmp_path, monkeypatch):
     import cairn as store
 
-    monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / "cache"))
     (tmp_path / "pyproject.toml").write_text("")
     monkeypatch.chdir(tmp_path)
     run = tmp_path / "outputs" / "demo" / "2026-01-01_00-00-00"

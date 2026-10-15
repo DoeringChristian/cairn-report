@@ -14,8 +14,7 @@ from cairn.store.folders import materialize
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """A project folder with a configured local store, an isolated cache, and cwd inside the project."""
-    monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / "cache"))
+    """A project folder (its repo .cairn/, no remote yet), with the working directory inside it."""
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
     project = tmp_path / "study"
     project.mkdir()

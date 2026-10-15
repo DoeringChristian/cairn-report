@@ -110,6 +110,32 @@ class Sync:
         """The entries still to send (everything but rejected ones)."""
         return [record for record in self.records() if record["sync"] in ("pending", "running")]
 
+    @staticmethod
+    def ordered(records: list[dict]) -> list[dict]:
+        """Entries in the order they can be sent: oldest first (uid order), but every entry after the pending entries it
+        names as inputs (a draft's uid can be older than the run it is an output of: the run starts when the draft opens)."""
+        by_uid = {record["uid"]: record for record in records}
+        order: list[dict] = []
+        state: dict[str, str] = {}
+
+        def visit(record: dict) -> None:
+            if state.get(record["uid"]):
+                return  # done, or on the way (a cycle cannot be sent in any order: the remote decides)
+            state[record["uid"]] = "open"
+            for item in record.get("inputs") or []:
+                try:
+                    uid = refs.parse(item).uid
+                except ValueError:
+                    continue
+                if uid in by_uid:
+                    visit(by_uid[uid])
+            state[record["uid"]] = "done"
+            order.append(record)
+
+        for record in records:
+            visit(record)
+        return order
+
     def waiting(self) -> bool:
         """Whether anything waits for the remote: an entry to send, or a version the repo numbered itself (no network)."""
         return bool(self.pending()) or bool(self.copies.local_versions())
@@ -313,7 +339,7 @@ class Sync:
             return result
         if result["adopted"]:
             say(f"adopted {result['adopted']} versions this repo numbered itself: the remote numbers them as they are sent")
-        records = self.pending()
+        records = self.ordered(self.pending())
         for index, record in enumerate(records):
             if record["sync"] == "running":
                 why = self.outbox.dead(record, self.timeout)

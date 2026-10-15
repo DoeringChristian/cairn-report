@@ -36,7 +36,6 @@ def build_data(base: Path, url: str) -> None:
     (project / "pyproject.toml").write_text("")
     (project / "cairn.toml").write_text(f'[repo]\nremote = "{url}"\nproject = "study"\ninterval = 1\n')
     os.chdir(project)
-    os.environ["CAIRN_CACHE_DIR"] = str(base / "cache")
     os.environ.pop("CAIRN_INPUTS", None)
     toy = make_data(base)
     (toy / "notes.md").write_text("# Toy data\n\nA few numbers.\n")

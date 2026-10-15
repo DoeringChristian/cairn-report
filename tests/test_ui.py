@@ -479,7 +479,6 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
         (root / "pyproject.toml").write_text("")
         (root / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "study"\ninterval = 1\n')
         monkeypatch.chdir(root)
-        monkeypatch.setenv("CAIRN_CACHE_DIR", str(tmp_path / f"cache-{name}"))
         monkeypatch.delenv("CAIRN_INPUTS", raising=False)
         return root
 

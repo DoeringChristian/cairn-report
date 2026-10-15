@@ -213,7 +213,7 @@ def publish_folder(config: Config, folder: Path, name: str, label: str | None, a
     """Publish one folder and print what happened."""
     store = open_repo(config)
     try:
-        before = max((v["version"] for v in versions_of(store, name)), default=0)
+        before = max((v["version"] or 0 for v in versions_of(store, name)), default=0)
     except StoreError:  # also a remote that does not answer: the version stays pending below
         before = 0
     number = publish(name, folder, metadata=meta, aliases=aliases, label=label, store=store, config=config,
