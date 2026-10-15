@@ -59,6 +59,7 @@ from .tokens import OWNER, Principal, Tokens, init_root, read_token
 
 MAX_JSON = 64 * 1024 * 1024
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+PARENT_ENV = "CAIRN_UI_PARENT"  # set for a UI the store server spawned: the pid it belongs to
 
 
 class HttpError(Exception):
@@ -424,6 +425,7 @@ def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool
     env.pop("CAIRN_STORE_TOKEN", None)
     if not no_auth:
         env["CAIRN_STORE_TOKEN"] = owner_token
+    env[PARENT_ENV] = str(os.getpid())  # the UI exits when this process is gone, even after a SIGKILL
     child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, text=True)
     line = child.stdout.readline().rstrip()
     if not line:

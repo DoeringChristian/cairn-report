@@ -527,3 +527,28 @@ def test_the_server_keeps_running_when_its_ui_dies(tmp_path):
     finally:
         stop_process(process)
     assert not alive(child)
+
+
+def test_the_spawned_ui_exits_when_the_server_is_killed(tmp_path):
+    import signal
+    import time
+    root = tmp_path / "killed-store"
+    server = subprocess.Popen([sys.executable, "-m", "cairn_report", "store", "serve", str(root), "--port", "0"],
+                              stdout=subprocess.PIPE, text=True)
+    try:
+        lines = [server.stdout.readline() for _ in range(4)]
+        ui = next(line for line in lines if line.startswith("UI:"))
+        port = int(ui.split(":")[3].split("/")[0])
+        os.kill(server.pid, signal.SIGKILL)  # no handler in the server runs
+        server.wait()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                http.client.HTTPConnection("127.0.0.1", port, timeout=1).request("GET", "/")
+            except OSError:
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError("the UI kept running after its server was killed")
+    finally:
+        server.kill()

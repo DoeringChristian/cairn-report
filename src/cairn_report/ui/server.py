@@ -27,6 +27,7 @@ from __future__ import annotations
 import hmac
 import json
 import mimetypes
+import os
 import re
 import secrets
 import sys
@@ -433,6 +434,21 @@ def make_ui_server(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1
     return server
 
 
+def follow_parent() -> None:
+    """A UI spawned by `store serve` exits as soon as that server is gone (stopped, crashed, or
+    killed with SIGKILL, which no handler in the server can catch)."""
+    parent = os.environ.get("CAIRN_UI_PARENT")
+    if not parent or not parent.isdigit():
+        return
+
+    def watch() -> None:
+        while os.getppid() == int(parent):
+            time.sleep(1)
+        os._exit(0)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def serve_ui(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", port: int = 8801, no_auth: bool = False,
              secure_cookie: bool = True) -> None:
     server = make_ui_server(backend, host, port, no_auth=no_auth, secure_cookie=secure_cookie)
@@ -442,6 +458,7 @@ def serve_ui(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", por
         print("warning: the UI speaks plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
     if no_auth:
         print("Authentication is off (--no-auth): everyone who can connect sees the store; for local use only", flush=True)
+    follow_parent()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
