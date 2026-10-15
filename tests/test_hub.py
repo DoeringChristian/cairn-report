@@ -228,3 +228,19 @@ def test_files_answer_range_requests(hub, client):
     status, headers, data = call(hub, "GET", path, headers={"Range": "bytes=5-14"})
     assert status == 206 and data == whole[5:15] and headers["Content-Range"] == f"bytes 5-14/{len(whole)}"
     assert call(hub, "GET", path, headers={"Range": f"bytes={len(whole)}-"})[0] == 416
+
+
+def test_serve_creates_a_new_hub_and_prints_its_token(tmp_path, monkeypatch, capsys):
+    from cairn_report import hub as hub_module
+
+    monkeypatch.delenv("CAIRN_HUB_TOKEN", raising=False)
+    monkeypatch.setattr(hub_module.ThreadingHTTPServer, "serve_forever", lambda self: self.server_close())
+    root = tmp_path / "new-hub"
+    hub_module.serve_hub(root, port=0)
+    token = (root / "token").read_text().strip()
+    out = capsys.readouterr().out
+    assert f"Token: {token}" in out and "Created hub" in out
+    assert oct((root / "token").stat().st_mode & 0o777) == "0o600"
+    hub_module.serve_hub(root, port=0)  # a second launch reuses it and prints the same token
+    out = capsys.readouterr().out
+    assert f"Token: {token}" in out and "Created hub" not in out

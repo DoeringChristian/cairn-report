@@ -241,9 +241,12 @@ complete version of its sources and built pages) and its **runs** (files under
 the hub never runs pushed code.
 
 ```bash
-cairn-report hub init /srv/hub     # data folder + random token (owner-only)
 cairn-report hub serve /srv/hub    # 127.0.0.1:8800; put an HTTPS reverse proxy in front
 ```
+
+The first `serve` of a new folder creates it with a random token (owner-only, in
+`<folder>/token`); every launch prints the token to the terminal, for the browser
+login and for clients. `cairn-report hub init <folder>` only creates the folder.
 
 In a project:
 

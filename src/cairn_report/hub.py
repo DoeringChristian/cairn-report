@@ -670,7 +670,7 @@ def make_hub(root: Path, host: str = "127.0.0.1", port: int = 8800, token: str |
     """A bound hub server (not yet serving)."""
     root = root.resolve()
     if not root.is_dir():
-        raise SystemExit(f"{root} does not exist; create it with `cairn-report hub init {root}`")
+        raise SystemExit(f"{root} does not exist; `cairn-report hub serve {root}` creates it")
     token = token or os.environ.get("CAIRN_HUB_TOKEN") or read_token(token_file or root / "token")
     if len(token) < MIN_TOKEN:
         raise SystemExit(f"the hub token must have at least {MIN_TOKEN} characters")
@@ -688,8 +688,18 @@ def make_hub(root: Path, host: str = "127.0.0.1", port: int = 8800, token: str |
 
 def serve_hub(root: Path, host: str = "127.0.0.1", port: int = 8800, token_file: Path | None = None,
               max_blob: int = 50 * 1024**3, secure_cookie: bool = True) -> None:
+    """Serve a hub; a new root (no token yet, none given) is initialized first. Prints the token, which
+    is the login for browsers and clients, to the terminal only: never into a URL."""
+    created = None
+    if token_file is None and not os.environ.get("CAIRN_HUB_TOKEN") and not (root / "token").exists():
+        created = init_root(root)
     server = make_hub(root, host, port, token_file=token_file, max_blob=max_blob, secure_cookie=secure_cookie)
     if host not in ("127.0.0.1", "localhost", "::1"):
         print("warning: the hub serves plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
-    print(f"Hub: http://{host}:{server.server_address[1]}/ (data in {root.resolve()})", flush=True)
+    url = f"http://{host}:{server.server_address[1]}/"
+    if created:
+        print(f"Created hub {root.resolve()} with a new token ({created}, owner-only)", flush=True)
+    print(f"Hub: {url} (data in {root.resolve()})", flush=True)
+    print(f"Token: {server.RequestHandlerClass.token}", flush=True)
+    print("  log in with it in the browser; clients read it from CAIRN_HUB_TOKEN or a token_file", flush=True)
     server.serve_forever()
