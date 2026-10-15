@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { paths, useApi, type Entry, type Manifest, type Summary, type VersionRow } from "../api";
 import { CopyButton, ErrorNote, Hero, Loading, Pill, Table } from "../components";
-import { artifactHref, bytes, exact, fileHref, isReport, parseRef, previewKind, reportHref, when } from "../util";
+import { artifactHref, bytes, exact, fileHref, isReport, parseRef, previewKind, reportHref, when, zipHref } from "../util";
 import { Graph } from "./Graph";
+import { RunPanel } from "./Run";
 
 interface ArtifactData { project: string; name: string; summary: Summary; versions: VersionRow[]; aliases: Record<string, number> }
 interface VersionData { project: string; name: string; version: Manifest; consumers: string[]; deleted?: string[] }
@@ -149,6 +150,7 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
   const report = isReport(name);
   const aliasPills = (list: string[] = []) => list.sort().map(a => <span className="pill alias" key={a}>{a}</span>);
   const gone = manifest?.status === "deleted";
+  const isRun = (manifest?.metadata as Record<string, unknown> | undefined)?.kind === "run";
 
   return (
     <main>
@@ -157,7 +159,7 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
       {art.data && manifest && number !== undefined && (
         <>
           <Hero
-            eyebrow={<><Link to="/">Projects</Link> / <Link to={`/p/${encodeURIComponent(project)}/`}>{project}</Link> / {report ? "report" : "artifact"}</>}
+            eyebrow={<><Link to="/">Projects</Link> / <Link to={`/p/${encodeURIComponent(project)}/${isRun ? "?tab=runs" : ""}`}>{project}</Link> / {report ? "report" : isRun ? "run" : "artifact"}</>}
             title={name}
             subtitle={art.data.summary.metadata.title && report ? art.data.summary.metadata.title : undefined}
             status={manifest.status === "completed" ? `v${number}` : `v${number} ${manifest.status}`}
@@ -180,6 +182,14 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             <ul>
               <li className="data-row"><span className="data-name">Version</span><span className="data-version">{exact(project, name, number)}</span><span className="data-files" /><CopyButton text={exact(project, name, number)} label="Copy exact version" done="Version copied" /></li>
               {!gone && <li className="data-row"><span className="data-name">Pull</span><span className="data-version">cairn pull {exact(project, name, number)}</span><span className="data-files" /><CopyButton text={`cairn pull ${exact(project, name, number)}`} label="Copy pull command" done="Command copied" /></li>}
+              {!gone && manifest.files.length > 0 && (
+                <li className="data-row">
+                  <span className="data-name">Files</span>
+                  <span className="data-version"><a className="comment-trigger small" href={zipHref(project, name, number)} download>Download zip</a></span>
+                  <span className="data-files">{manifest.status === "running" ? "what is synced so far; the run is still running" : bytes(manifest.files.reduce((n, f) => n + (f.size ?? 0), 0))}</span>
+                  <span />
+                </li>
+              )}
               {manifest.digest && <li className="data-row"><span className="data-name">Digest</span><span className="data-version mono">{manifest.digest}</span><span className="data-files" /><CopyButton text={manifest.digest} label="Copy digest" done="Digest copied" /></li>}
             </ul>
           </section>
@@ -189,6 +199,8 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             <div className="metric"><span>Created</span><strong className="small-value">{when(manifest.created)}</strong><small>{manifest.source?.host ? `on ${manifest.source.host}` : " "}</small></div>
             <div className="metric"><span>Versions</span><strong>{art.data.versions.length}</strong><small>{manifest.label ? `label ${manifest.label}` : " "}</small></div>
           </div>
+
+          {isRun && !gone && <RunPanel project={project} name={name} version={number} status={manifest.status} />}
 
           <section className="app-section">
             <div className="section-head"><h2>Versions</h2>
@@ -212,7 +224,7 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
 
           <section className="app-section">
             <div className="section-head"><h2>Lineage of v{number}</h2></div>
-            {manifest.status === "completed" || gone ? <Graph root={exact(project, name, number)} project={project} /> : <p className="hint">Lineage is available once the version has completed.</p>}
+            {["completed", "deleted", "running", "failed"].includes(manifest.status) ? <Graph root={exact(project, name, number)} project={project} /> : <p className="hint">Lineage is available once the version is on the store.</p>}
           </section>
 
           <section className="app-section">

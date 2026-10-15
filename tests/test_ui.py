@@ -491,17 +491,20 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
 
     chain = "study:datasets/toy@v1", "study:toy-fit@v1", "study:reports/summary@v1"
     lineage = api(server, "GET", "/api/v2/lineage?ref=study:reports%2Fsummary@latest")
-    assert lineage == {"ref": chain[2], "inputs": [chain[1]], "consumers": [], "deleted": []}
+    assert lineage == {"ref": chain[2], "inputs": [chain[1]], "consumers": [], "deleted": [],
+                       "nodes": {chain[2]: {"status": "completed"}, chain[1]: {"status": "completed"}}}
     middle = api(server, "GET", "/api/v2/lineage?ref=study:toy-fit@v1")
-    assert middle["inputs"] == [chain[0]] and middle["consumers"] == [chain[2]]
-    assert api(server, "GET", "/api/v2/lineage?ref=study:datasets%2Ftoy@v1")["consumers"] == [chain[1]]
+    assert middle["inputs"] == [chain[0]] and middle["consumers"] == [chain[2]]  # the script's parent heard of its pull
+    script_run = "study:runs/interactive@v1"  # the script was a run too (python -c: "interactive"), completed at exit
+    assert api(server, "GET", "/api/v2/lineage?ref=study:datasets%2Ftoy@v1")["consumers"] == [script_run, chain[1]]
+    assert api(server, "GET", f"/api/v2/lineage?ref={script_run}")["nodes"][script_run] == {"status": "completed", "kind": "run"}
     # the same chain in the UI's data, both ways
     cookie = login(ui)
 
     def version(name):
         return data(ui, f"projects/study/artifacts/{name.replace('/', '%2F')}/versions/1", cookie)
 
-    assert version("datasets/toy")["consumers"] == [chain[1]]
+    assert version("datasets/toy")["consumers"] == ["study:runs/interactive@v1", chain[1]]
     assert version("toy-fit")["version"]["inputs"] == [chain[0]] and version("toy-fit")["consumers"] == [chain[2]]
     assert version("reports/summary")["version"]["inputs"] == [chain[1]]
     graph = data(ui, "lineage?ref=study:reports%2Fsummary@v1&depth=2", cookie)["nodes"]
@@ -528,3 +531,97 @@ def test_the_built_app_ships_with_the_package():
     for token in (".rail", ".hero", ".figure-card", ".image-copy", ".data-row", "--accent", "prefers-color-scheme:dark", ".graph-node"):
         assert token in css, token  # report.css, report-extra.css and app.css are all in it
     assert "/ui-api/" in (static / "assets" / scripts[0]).read_text()
+
+
+# ------------------------------------------------------------------ runs and zips
+
+
+def test_the_run_panel_data_of_a_running_and_a_completed_run(ui, env):
+    r = use_remote(env, ui.server)
+    store.publish("datasets/toy", folder(env, "toy", {"x.txt": "1"}), store=r)
+    run = store.init(name="train", config={"lr": 0.1, "model": {"depth": 2}}, code=False, watch=False)
+    store.use("datasets/toy@v1")
+    run.add({"loss": 1.0, "step": 0})
+    run.add({"loss": 0.5, "acc": 0.9, "step": 1, "note": "text is left out"})
+    (run.path / "logs").mkdir(exist_ok=True)
+    (run.path / "logs" / "stdout.txt").write_text("".join(f"line {i}\n" for i in range(20000)))  # more than the tail
+    (run.path / "logs" / "stderr.txt").write_text("a warning\n")
+    with store.draft("models/toy") as model:
+        model.add_text("weights", "w")
+    run.sync()
+    cookie = login(ui)
+    panel = data(ui, "projects/study/artifacts/runs%2Ftrain/versions/1/run", cookie)
+    assert panel["status"] == "running" and panel["config"] == {"lr": 0.1, "model": {"depth": 2}}
+    assert [(row["step"], row["loss"]) for row in panel["metrics"]["rows"]] == [(0, 1.0), (1, 0.5)]
+    assert panel["metrics"]["rows"][1]["acc"] == 0.9 and "note" not in panel["metrics"]["rows"][1]
+    assert panel["system"]["rows"] and "disk_percent" in panel["system"]["rows"][0]
+    assert panel["stdout"]["truncated"] and panel["stdout"]["text"].endswith("line 19999\n") and len(panel["stdout"]["text"]) <= 64 * 1024
+    assert panel["stderr"] == {"text": "a warning\n", "truncated": False, "size": 10} and panel["error"] is None
+    assert panel["info"]["host"] and panel["info"]["run"] == run.ref
+    running = data(ui, "projects/study/artifacts/runs%2Ftrain/versions/1", cookie)
+    assert running["consumers"] == ["study:models/toy@v1"]  # a running run has its outputs already
+    graph = data(ui, "lineage?ref=study:models/toy@v1", cookie)["nodes"]
+    assert graph["study:runs/train@v1"]["kind"] == "run" and graph["study:runs/train@v1"]["status"] == "running"
+    run.finish()
+    store.connect().sync()
+    graph = data(ui, "lineage?ref=study:models/toy@v1", cookie)["nodes"]  # depth 1, but a run counts no level
+    assert graph["study:runs/train@v1"]["inputs"] == ["study:datasets/toy@v1"] and "status" not in graph["study:runs/train@v1"]
+    assert data(ui, "projects/study/artifacts/runs%2Ftrain/versions/1/run", cookie)["status"] == "completed"
+    assert data(ui, "projects/study/artifacts/datasets%2Ftoy/versions/1/run", cookie)["metrics"] == {"rows": [], "total": 0, "truncated": False}
+
+
+def test_a_version_downloads_as_a_zip(ui, env):
+    import io
+    import zipfile
+
+    r = use_remote(env, ui.server)
+    big = os.urandom(3 << 20)
+    files = {"a.txt": "alpha\n", "deep/er/b.json": '{"b": 1}', "img.png": "not really a png"}
+    data_ = folder(env, "zipme", files)
+    (data_ / "big.bin").write_bytes(big)
+    (data_ / "link.txt").symlink_to("a.txt")
+    store.publish("datasets/zip-me", data_, store=r)
+    cookie = login(ui)
+    status, headers, body = get(ui, "/files/study/datasets/zip-me@v1.zip", cookie)
+    assert status == 200 and headers["Content-Type"] == "application/zip"
+    assert headers["Content-Disposition"] == 'attachment; filename="datasets-zip-me-v1.zip"'
+    archive = zipfile.ZipFile(io.BytesIO(body))
+    names = sorted(archive.namelist())
+    assert names == sorted(f"datasets-zip-me-v1/{path}" for path in [*files, "big.bin", "link.txt"])
+    for path, text in files.items():
+        assert archive.read(f"datasets-zip-me-v1/{path}") == text.encode()
+    assert archive.read("datasets-zip-me-v1/big.bin") == big and archive.read("datasets-zip-me-v1/link.txt") == b"alpha\n"
+    assert archive.getinfo("datasets-zip-me-v1/img.png").compress_type == zipfile.ZIP_STORED
+    assert archive.getinfo("datasets-zip-me-v1/a.txt").compress_type == zipfile.ZIP_DEFLATED
+    assert get(ui, "/files/study/datasets/zip-me@latest.zip", cookie)[0] == 200
+    assert get(ui, "/files/study/nothing@v1.zip", cookie)[0] == 404
+    viewer = login(ui, create_token(ui.server.root, "other", name="other-viewer"))
+    assert get(ui, "/files/study/datasets/zip-me@v1.zip", viewer)[0] == 403  # a scoped session: its project only
+
+
+def test_a_zip_streams_without_holding_the_files(ui, env, monkeypatch):
+    """The zip is written while it is sent: the UI never holds a whole file (nor the archive) in memory."""
+    import tracemalloc
+
+    r = use_remote(env, ui.server)
+    data_ = folder(env, "large", {})
+    data_.mkdir(exist_ok=True)
+    with (data_ / "large.bin").open("wb") as handle:
+        for _ in range(24):
+            handle.write(os.urandom(1 << 20))
+    store.publish("large", data_, store=r)
+    cookie = login(ui)
+    import http.client
+
+    tracemalloc.start()
+    connection = http.client.HTTPConnection("127.0.0.1", ui.port)
+    connection.request("GET", "/files/study/large@v1.zip", headers=cookie)
+    response = connection.getresponse()
+    total = 0
+    while chunk := response.read(1 << 16):
+        total += len(chunk)
+    connection.close()
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert response.status == 200 and total > 24 << 20
+    assert peak < 12 << 20, f"peak {peak / 2**20:.1f} MiB while zipping 24 MiB"

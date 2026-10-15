@@ -66,6 +66,18 @@ def build_data(base: Path, url: str) -> None:
         (long / f"part-{i:02d}.txt").write_text(f"part {i}\n" * 5)
     store.publish("datasets/long-set", long)
     store.publish("models/denoiser", toy, inputs=["study:toy-fit@v1"], aliases=["best"])
+    # a run: a script that uses the dataset, logs a curve, and publishes a model (the run is its one input)
+    (project / "train.py").write_text(
+        "import time, cairn\n"
+        "run = cairn.init(name='train', config={'lr': 0.1, 'epochs': 3, 'model': {'depth': 4}}, system=0.2)\n"
+        "cairn.use('datasets/toy@v2')\n"
+        "for step in range(40):\n"
+        "    run.add({'loss': 1 / (step + 1), 'acc': step / 40, 'step': step})\n"
+        "print('training done')\n"
+        "time.sleep(0.6)\n"
+        "with cairn.draft('models/student') as model:\n"
+        "    model.add_text('weights', 'w')\n")
+    subprocess.run([sys.executable, "train.py"], check=True, cwd=project, env=os.environ)
 
 
 def check_no_overflow(page, label: str) -> None:
@@ -231,6 +243,23 @@ def run(keep: bool) -> int:
         page.locator(".brand").click()
         page.wait_for_url("**/p/study/")
         page.get_by_role("heading", name="study").wait_for()
+
+        # a run: its panel, its node in an output's lineage, the data-only view, the Runs tab
+        page.goto(ui + "/p/study/a/runs/train")
+        page.locator(".run-chart").first.wait_for()
+        assert page.locator(".run-chart").count() >= 4, "charts of loss, acc, and the system metrics"
+        assert "training done" in page.locator(".run-log pre").first.text_content()
+        shot("15-run")
+        page.goto(ui + "/p/study/a/models/student")
+        page.locator(".graph-node.is-run").first.wait_for()
+        shot("16-output-with-run")
+        page.get_by_role("button", name="Data only").click()
+        page.wait_for_function("document.querySelectorAll('.graph-node.is-run').length === 0")
+        assert page.locator(".graph-node", has_text="datasets/toy").count() == 1, "the data behind the run"
+        shot("17-data-only")
+        page.goto(ui + "/p/study/?tab=runs")
+        page.get_by_role("link", name="train").first.wait_for()
+        shot("18-runs-tab")
 
         # phone width and dark mode
         page.set_viewport_size({"width": 390, "height": 800})

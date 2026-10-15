@@ -134,3 +134,25 @@ main { margin-block: 0; align-self: start; }
 .tombstone-note { border-left-color: var(--muted); }
 .graph-node.is-deleted rect { fill: transparent; stroke: var(--muted); stroke-dasharray: 5 4; }
 .graph-node.is-deleted .graph-name { fill: var(--muted); }
+
+/* runs: their lineage nodes, and the Run panel of a version of kind "run" */
+.graph-toggle { display: inline-flex; gap: 4px; }
+.graph-toggle button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.graph-node.is-run > [role="link"] > rect { fill: var(--card); stroke-dasharray: 2 0; }
+.graph-pill rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
+.graph-pill text { fill: var(--accent); font: 700 10px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; }
+.graph-node.is-failed > [role="link"] > rect { stroke: var(--warn); stroke-dasharray: 5 3; }
+.graph-node.is-failed .graph-sub { fill: var(--warn); }
+.graph-node.is-running .graph-sub { fill: var(--accent); }
+.run-panel h3 { margin: 18px 0 8px; font-size: 15px; }
+.run-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 10px; }
+.run-chart { margin: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 8px 10px 4px; }
+.run-chart figcaption { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; margin-bottom: 2px; }
+.run-chart svg { display: block; width: 100%; height: auto; }
+.run-axis { stroke: var(--line); stroke-width: 1; }
+.run-tick { fill: var(--muted); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.run-line { fill: none; stroke: var(--accent); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.run-dot { fill: var(--accent); }
+.run-log { margin: 0 0 12px; }
+.run-log-title { margin: 0 0 4px; font-size: 13px; }
+.run-log pre { max-height: 22rem; overflow: auto; }

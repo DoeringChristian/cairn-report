@@ -68,6 +68,28 @@ function layout(root: string, info: Info) {
   return { placed, edges: [...unique].map(key => key.split("\n") as [string, string]), width: PAD_X * 2 + keys.length * W + (keys.length - 1) * GAP_X, height: height + PAD * 2 };
 }
 
+/** The "data only" view: run nodes left out, their inputs joined straight to their outputs (the root always stays). */
+function collapse(info: Info, root: string): Info {
+  const isRun = (ref: string) => ref !== root && info[ref]?.kind === "run";
+  const through = (ref: string, side: "inputs" | "consumers", seen: Set<string>): string[] =>
+    (info[ref]?.[side] ?? []).flatMap(next => {
+      if (!isRun(next)) return [next];
+      if (seen.has(next)) return [];
+      seen.add(next);
+      return through(next, side, seen);
+    });
+  const out: Info = {};
+  for (const [ref, node] of Object.entries(info)) {
+    if (isRun(ref)) continue;
+    out[ref] = {
+      ...node,
+      inputs: node.inputs === null ? null : [...new Set(through(ref, "inputs", new Set()))],
+      consumers: node.consumers === null ? null : [...new Set(through(ref, "consumers", new Set()))],
+    };
+  }
+  return out;
+}
+
 function label(ref: string, project: string) {
   const parsed = parseRef(ref);
   if (!parsed) return { top: ref, bottom: "" };
@@ -80,12 +102,18 @@ export function Graph({ root, project }: { root: string; project: string }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [dataOnly, setDataOnly] = useState(false);
 
   const merge = (data: Lineage) => {
     setTruncated(t => t || data.truncated);
     setInfo(prev => {
       const next: Info = { ...prev };
-      for (const [ref, node] of Object.entries(data.nodes)) next[ref] = { inputs: node.inputs ?? next[ref]?.inputs ?? null, consumers: node.consumers ?? next[ref]?.consumers ?? null, deleted: node.deleted || next[ref]?.deleted };
+      for (const [ref, node] of Object.entries(data.nodes)) {
+        next[ref] = {
+          inputs: node.inputs ?? next[ref]?.inputs ?? null, consumers: node.consumers ?? next[ref]?.consumers ?? null,
+          deleted: node.deleted || next[ref]?.deleted, kind: node.kind ?? next[ref]?.kind, status: node.status ?? next[ref]?.status,
+        };
+      }
       return next;
     });
   };
@@ -96,7 +124,9 @@ export function Graph({ root, project }: { root: string; project: string }) {
   };
   useEffect(() => { setInfo({}); setTruncated(false); load(root, 1); /* eslint-disable-next-line */ }, [root]);
 
-  const model = useMemo(() => (info[root] ? layout(root, info) : null), [info, root]);
+  const hasRuns = useMemo(() => Object.entries(info).some(([ref, node]) => ref !== root && node.kind === "run"), [info, root]);
+  const view = useMemo(() => (dataOnly ? collapse(info, root) : info), [info, root, dataOnly]);
+  const model = useMemo(() => (view[root] ? layout(root, view) : null), [view, root]);
   if (error) return <p className="hint">Lineage unavailable: {error}</p>;
   if (!model) return <p className="hint state-note">Loading lineage…</p>;
   const { placed, edges, width, height } = model;
@@ -105,7 +135,7 @@ export function Graph({ root, project }: { root: string; project: string }) {
   const expandable = (p: Placed) => {
     if (p.col === 0) return false;
     const side = p.col < 0 ? "inputs" : "consumers";
-    return info[p.ref]?.[side] == null;
+    return view[p.ref]?.[side] == null;
   };
   const anyExpandable = Object.values(placed).some(expandable);
 
@@ -113,6 +143,12 @@ export function Graph({ root, project }: { root: string; project: string }) {
     <div className="graph-card">
       <div className="graph-bar">
         <span className="muted">Inputs on the left, consumers on the right. Click a node to open it, + to expand one more level.</span>
+        {hasRuns && (
+          <span className="graph-toggle" role="group" aria-label="Runs in the graph">
+            <button className="comment-trigger small" aria-pressed={!dataOnly} onClick={() => setDataOnly(false)}>Show runs</button>
+            <button className="comment-trigger small" aria-pressed={dataOnly} onClick={() => setDataOnly(true)}>Data only</button>
+          </span>
+        )}
         <button className="comment-trigger" disabled={busy || !anyExpandable} onClick={async () => {
           setBusy(true);
           try { merge(await api<Lineage>(paths.lineage(root, 3))); } catch (e) { setError((e as Error).message); }
@@ -129,13 +165,17 @@ export function Graph({ root, project }: { root: string; project: string }) {
           {Object.values(placed).map(p => {
             const parsed = parseRef(p.ref), text = label(p.ref, project);
             const go = () => parsed && navigate(artifactHref(parsed.project, parsed.name, parsed.sel));
+            const node = info[p.ref], run = node?.kind === "run", status = node?.status;
+            const top = run ? text.top.replace(/^runs\//, "") : text.top, room = run ? 22 : 28;
+            const classes = ["graph-node", p.col === 0 ? "is-root" : "", node?.deleted ? "is-deleted" : "", run ? "is-run" : "", status === "failed" ? "is-failed" : "", status === "running" ? "is-running" : ""];
             return (
-              <g key={p.ref} className={"graph-node" + (p.col === 0 ? " is-root" : "") + (info[p.ref]?.deleted ? " is-deleted" : "")} transform={`translate(${p.x},${p.y})`}>
+              <g key={p.ref} className={classes.filter(Boolean).join(" ")} transform={`translate(${p.x},${p.y})`}>
                 <g role="link" tabIndex={0} onClick={go} onKeyDown={e => { if (e.key === "Enter") go(); }}>
-                  <title>{p.ref}{info[p.ref]?.deleted ? " (deleted)" : ""}</title>
-                  <rect width={W} height={H} rx={10} />
-                  <text x={12} y={19} className="graph-name">{text.top.length > 28 ? "…" + text.top.slice(-27) : text.top}</text>
-                  <text x={12} y={35} className="graph-sub">{text.bottom}{info[p.ref]?.deleted ? " · deleted" : ""}</text>
+                  <title>{p.ref}{node?.deleted ? " (deleted)" : status ? ` (${status})` : ""}</title>
+                  <rect width={W} height={H} rx={run ? H / 2 : 10} />
+                  {run && <g className="graph-pill" transform={`translate(${W - 44},9)`}><rect width={34} height={16} rx={8} /><text x={17} y={12} textAnchor="middle">run</text></g>}
+                  <text x={run ? 18 : 12} y={19} className="graph-name">{top.length > room ? "…" + top.slice(-(room - 1)) : top}</text>
+                  <text x={run ? 18 : 12} y={35} className="graph-sub">{text.bottom}{node?.deleted ? " · deleted" : status ? ` · ${status}` : ""}</text>
                 </g>
                 {expandable(p) && (
                   <g role="button" tabIndex={0} aria-label={`Expand ${p.ref}`} className="graph-expand" transform={`translate(${p.col < 0 ? -10 : W + 10},${H / 2})`}

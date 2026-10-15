@@ -9,6 +9,7 @@ export function bytes(size: number): string {
 }
 
 export const isReport = (name: string) => /^reports\/[^/]+$/.test(name);
+export const isRunName = (name: string) => name.startsWith("runs/");
 export const enc = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 export const exact = (project: string, name: string, version: number) => `${project}:${name}@v${version}`;
 export const artifactHref = (project: string, name: string, sel?: string | number | null) =>
@@ -17,6 +18,9 @@ export const reportHref = (project: string, name: string, version?: number | nul
   `/p/${encodeURIComponent(project)}/r/${encodeURIComponent(name.split("/")[1])}${version ? `@v${version}` : ""}/`;
 export const fileHref = (project: string, name: string, version: number, path: string, download = false) =>
   `/files/${encodeURIComponent(project)}/${enc(name)}@v${version}//${enc(path)}${download ? "?download=1" : ""}`;
+
+export const zipHref = (project: string, name: string, version: number) =>
+  `/files/${encodeURIComponent(project)}/${enc(name)}@v${version}.zip`;
 
 export function parseRef(text: string) {
   const match = /^([^:@/]+):([^@]+)@(.+)$/.exec(text);

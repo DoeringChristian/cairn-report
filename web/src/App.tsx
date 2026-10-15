@@ -5,7 +5,7 @@ import { Hero, Loading } from "./components";
 import { ArtifactPage } from "./pages/Artifact";
 import { ProjectPage } from "./pages/Project";
 import { ProjectsPage } from "./pages/Projects";
-import { artifactHref, isReport, enc } from "./util";
+import { artifactHref, isReport, isRunName, enc } from "./util";
 
 function Rail() {
   const { pathname } = useLocation();
@@ -16,7 +16,8 @@ function Rail() {
   const me = useApi<Me>(pathname === "/login" ? null : "me");
   const artifacts = (detail.data?.artifacts ?? []).slice().sort((a, b) => b.updated.localeCompare(a.updated));
   const reports = artifacts.filter(a => isReport(a.name));
-  const others = artifacts.filter(a => !isReport(a.name));
+  const others = artifacts.filter(a => !isReport(a.name) && !isRunName(a.name));
+  const runs = artifacts.filter(a => isRunName(a.name));
   return (
     <aside className="rail">
       <Link className="brand" to="/"><span>C</span> Cairn</Link>
@@ -48,6 +49,14 @@ function Rail() {
             <p className="rail-label">Artifacts</p>
             <nav>
               {others.slice(0, 60).map(a => <Link key={a.name} to={artifactHref(project, a.name)}>{a.name}</Link>)}
+            </nav>
+          </section>
+        )}
+        {project && runs.length > 0 && (
+          <section className="report-list rail-project" aria-label="Runs">
+            <p className="rail-label">Runs</p>
+            <nav>
+              {runs.slice(0, 30).map(a => <Link key={a.name} to={artifactHref(project, a.name, a.versions ? `v${a.versions}` : null)}>{a.name.slice("runs/".length)}</Link>)}
             </nav>
           </section>
         )}

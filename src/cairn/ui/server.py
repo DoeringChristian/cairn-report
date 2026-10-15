@@ -12,6 +12,7 @@ a folder), so it runs next to the store or on a laptop against a remote one. It 
     /p/<p>/r/<slug>[@v<n>]/...                   a report version's built site (latest without @), its `_static/`
                                                  files and a generated `site.json` at /p/<p>/r/
     /files/<p>/<name>@sel//<path>                the store's files, with Range (so videos seek)
+    /files/<p>/<name>@sel.zip                    a whole version as a zip, streamed (`<name>-v<n>/...` inside)
 
 Reports are a UI concept: an artifact `reports/<slug>` whose files have `site/` and `source/`.
 
@@ -28,6 +29,7 @@ the owner's full access to a folder.
 from __future__ import annotations
 
 import html
+import io
 import json
 import mimetypes
 import os
@@ -36,6 +38,7 @@ import secrets
 import sys
 import threading
 import time
+import zipfile
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -53,6 +56,11 @@ STATIC = Path(__file__).parent / "static"  # the built app (web/ -> npm run buil
 MAX_LINEAGE_DEPTH = 3
 MAX_LINEAGE_NODES = 200
 MAX_LOGIN_BODY = 4096
+RUN_TAIL = 64 * 1024  # bytes of logs/stdout.txt and stderr.txt the run panel shows
+RUN_ROWS_BYTES = 8 * 1024 * 1024  # the most of a metrics file the run panel reads (its end)
+RUN_POINTS = 2000  # rows per chart, at most (evenly thinned)
+STORED = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".mp4", ".webm", ".mov", ".m4v", ".mkv", ".zip", ".gz", ".tgz",
+          ".bz2", ".xz", ".zst", ".7z", ".npz", ".pt", ".pth", ".safetensors", ".h5", ".parquet", ".jxl", ".heic", ".mp3", ".ogg"}
 
 
 class HttpError(Exception):
@@ -266,6 +274,8 @@ class UIHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"project": record, "artifacts": store.summaries(project)})
             case ["projects", project, "artifacts", *rest] if rest:
                 self._allow(session, project)
+                if len(rest) >= 4 and rest[-3] == "versions" and rest[-1] == "run":
+                    return self._json(200, self._run_api(store, project, "/".join(rest[:-3]), rest[-2]))
                 if len(rest) >= 3 and rest[-2] == "versions":
                     return self._json(200, self._version_api(store, project, "/".join(rest[:-2]), rest[-1]))
                 return self._json(200, self._artifact_api(store, project, "/".join(rest)))
@@ -292,11 +302,80 @@ class UIHandler(BaseHTTPRequestHandler):
         """One manifest (files, metadata, inputs) with its consumers; `selector` is a number, `v<n>`, an alias or a label."""
         chosen = f"v{selector}" if selector.isdigit() else selector
         version = self._version(store, project, name, chosen)
-        consumers, deleted = [], []
-        if version["status"] in ("completed", "deleted"):  # a deleted version keeps its edges
+        consumers, deleted, nodes = [], [], {}
+        if version["status"] in ("completed", "deleted", "running", "failed"):  # a deleted version keeps its edges, a running run has some
             found = store.lineage(refs.exact(project, name, version["version"]), marks=True)
-            consumers, deleted = found["consumers"], found.get("deleted", [])
-        return {"project": project, "name": name, "version": version, "consumers": consumers, "deleted": deleted}
+            consumers, deleted, nodes = found["consumers"], found.get("deleted", []), found.get("nodes", {})
+        return {"project": project, "name": name, "version": version, "consumers": consumers, "deleted": deleted, "nodes": nodes}
+
+    def _run_api(self, store, project: str, name: str, selector: str) -> dict:
+        """What the app's Run panel shows of a run version: its metrics.jsonl and system/metrics.jsonl rows (numbers
+        only, thinned to RUN_POINTS), the tails of logs/stdout.txt, stderr.txt, and error.txt, system/info.json, and
+        the config. A running version answers with what it has synced so far."""
+        chosen = f"v{selector}" if selector.isdigit() else selector
+        version = self._version(store, project, name, chosen)
+        if version["status"] == "deleted":
+            raise Deleted(f"{refs.exact(project, name, version['version'])} was deleted")
+        files = {entry["path"]: entry for entry in version.get("files", [])}
+        exact = f"v{version['version']}"
+
+        def read(path: str, limit: int) -> tuple[bytes, bool]:
+            entry = files.get(path)
+            if entry is None:
+                return b"", False
+            size = entry.get("size") or 0
+            wanted = f"bytes=-{limit}" if size > limit else None
+            try:
+                found = store.read_file(project, name, exact, path, wanted)
+            except (NotFound, StoreError, BadRange):
+                return b"", False
+            try:
+                return b"".join(found.chunks), size > limit
+            finally:
+                found.close()
+
+        def text(path: str) -> dict | None:
+            data, cut = read(path, RUN_TAIL)
+            if path not in files:
+                return None
+            return {"text": data.decode("utf-8", "replace"), "truncated": cut, "size": files[path].get("size", 0)}
+
+        def rows(path: str) -> dict:
+            data, cut = read(path, RUN_ROWS_BYTES)
+            lines = data.decode("utf-8", "replace").splitlines()
+            if cut and lines:
+                lines = lines[1:]  # the first line of a tail is cut
+            found = []
+            for line in lines:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                if isinstance(row.get("name"), str) and "value" in row and set(row) <= {"name", "value", "step", "time", "origin", "nonfinite"}:
+                    row = {row["name"]: row["value"], "step": row.get("step"), "time": row.get("time")}  # an earlier release's line
+                keep = {key: value for key, value in row.items() if key == "time" or (isinstance(value, (int, float)) and not isinstance(value, bool))}
+                if len(keep) > 1 or (keep and "time" not in keep):
+                    found.append(keep)
+            total = len(found)
+            if total > RUN_POINTS:
+                stride = total / RUN_POINTS
+                found = [found[int(index * stride)] for index in range(RUN_POINTS - 1)] + [found[-1]]
+            return {"rows": found, "total": total, "truncated": cut}
+
+        info = None
+        raw, _ = read("system/info.json", 1 << 20)
+        if raw:
+            try:
+                info = json.loads(raw)
+            except ValueError:
+                info = None
+        metadata = version.get("metadata") or {}
+        return {"project": project, "name": name, "version": version["version"], "status": version["status"],
+                "metrics": rows("metrics.jsonl"), "system": rows("system/metrics.jsonl"), "stdout": text("logs/stdout.txt"),
+                "stderr": text("logs/stderr.txt"), "error": text("logs/error.txt"), "info": info,
+                "config": metadata.get("config"), "sweep": metadata.get("sweep")}
 
     def _lineage_api(self, session: Session, ref: Ref, depth: int) -> dict:
         """Inputs to the left and consumers to the right of a version, `depth` levels each way, from one-level lineage calls.
@@ -306,48 +385,57 @@ class UIHandler(BaseHTTPRequestHandler):
         through their consumers only. References in projects the session may not read are left out. A deleted
         version keeps its edges; its node says `deleted: true` (the key is there only then)."""
         store, principal = session.store, session.principal
-        first = store.lineage(ref, marks=True)
-        try:
-            number = store.resolve(ref)[2]["version"]
-        except Deleted:
-            if not ref.exact:
-                raise
+        if ref.exact:  # any status: a deleted version keeps its edges, a running run has consumers already
             number = ref.version or store.get_version(ref.project, ref.name, ref.uid)["version"]
+        else:
+            number = store.resolve(ref)[2]["version"]
         root = refs.exact(ref.project, ref.name, number)
+        first = store.lineage(root, marks=True)
         nodes: dict[str, dict] = {root: {"inputs": None, "consumers": None}}
         gone = set(first.get("deleted", []))
+        marks: dict[str, dict] = dict(first.get("nodes", {}))
         truncated = False
 
         def visible(items: list[str]) -> list[str]:
             return [item for item in items if can(principal, refs.parse(item).project)]
 
-        for side, other in (("inputs", "consumers"), ("consumers", "inputs")):
-            frontier = [root]
-            for level in range(depth):
-                following: list[str] = []
-                for current in frontier:
-                    if level == 0 and current == root:
-                        found = visible(first[side])
-                    else:
-                        try:
-                            answer = store.lineage(current, marks=True)
-                            gone.update(answer.get("deleted", []))
-                            found = visible(answer[side])
-                        except (NotFound, StoreError, Forbidden):
-                            found = []
-                    kept = []
-                    for item in found:
-                        if item not in nodes:
-                            if len(nodes) >= MAX_LINEAGE_NODES:
-                                truncated = True
-                                continue
-                            nodes[item] = {"inputs": None, "consumers": None}
-                            following.append(item)
-                        kept.append(item)
-                    nodes[current][side] = kept
-                frontier = following
+        def is_run(item: str) -> bool:
+            return marks.get(item, {}).get("kind") == "run"
+
+        for side in ("inputs", "consumers"):
+            queue = [(root, 0)]  # a run in between counts no level: the data on its other side comes along
+            while queue:
+                current, level = queue.pop(0)
+                if level >= depth or nodes[current][side] is not None:
+                    continue
+                if current == root:
+                    found = visible(first[side])
+                else:
+                    try:
+                        answer = store.lineage(current, marks=True)
+                        gone.update(answer.get("deleted", []))
+                        marks.update(answer.get("nodes", {}))
+                        found = visible(answer[side])
+                    except (NotFound, StoreError, Forbidden):
+                        found = []
+                kept = []
+                for item in found:
+                    if item not in nodes:
+                        if len(nodes) >= MAX_LINEAGE_NODES:
+                            truncated = True
+                            continue
+                        nodes[item] = {"inputs": None, "consumers": None}
+                        queue.append((item, level + (0 if is_run(item) else 1)))
+                    kept.append(item)
+                nodes[current][side] = kept
         for item in gone & nodes.keys():
             nodes[item]["deleted"] = True
+        for item, node in nodes.items():
+            mark = marks.get(item, {})
+            if mark.get("kind"):
+                node["kind"] = mark["kind"]
+            if mark.get("status") not in (None, "completed", "deleted"):
+                node["status"] = mark["status"]
         return {"ref": root, "depth": depth, "nodes": nodes, "truncated": truncated}
 
     # ------------------------------------------------------------------ files
@@ -356,6 +444,8 @@ class UIHandler(BaseHTTPRequestHandler):
         rest = unquote(path)[len("/files/"):]
         project, _, remainder = rest.partition("/")
         head, separator, inner = remainder.partition("//")
+        if not separator and head.endswith(".zip") and "@" in head:
+            return self._zip(session, project, head[: -len(".zip")])
         if not separator:
             raise HttpError(404, "file URLs look like /files/<project>/<name>@v<n>//<path>")
         ref = refs.parse(f"{project}:{head}//{inner}")
@@ -366,6 +456,59 @@ class UIHandler(BaseHTTPRequestHandler):
         if query.get("download"):
             extra["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(ref.path.rsplit('/', 1)[-1])}"
         self._stream(read, entry_type(ref.path), read.immutable, extra)
+
+    def _zip(self, session: Session, project: str, head: str) -> None:
+        """`/files/<p>/<name>@<sel>.zip`: the version's files as one zip, streamed while it is written (chunked; ZIP64,
+        data descriptors, no temporary file): `<name>-v<n>/<path>` inside, a stored symlink as the file it names;
+        already compressed types are stored, the rest deflated."""
+        ref = refs.parse(f"{project}:{head}")
+        if ref.path or not ref.selector:
+            raise HttpError(404, "zip URLs look like /files/<project>/<name>@v<n>.zip")
+        self._allow(session, project)
+        store = session.store
+        version = self._version(store, project, ref.name, ref.selector)
+        if version["status"] == "deleted":
+            raise Deleted(f"{refs.exact(project, ref.name, version['version'])} was deleted: its files are gone")
+        exact = f"v{version['version']}"
+        top = f"{ref.name.replace('/', '-')}-{exact}"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", f'attachment; filename="{top}.zip"')
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Cache-Control", "private, max-age=31536000, immutable" if version["status"] == "completed" else "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        sink = _ChunkedSink(self.wfile)
+        try:
+            self._zip_into(sink, store, project, ref.name, exact, top, version.get("files", []))
+        except (BrokenPipeError, ConnectionResetError):
+            raise
+        except Exception as error:  # noqa: BLE001  (the headers are sent: end the connection, the zip stays incomplete)
+            self.close_connection = True
+            sys.stderr.write(f"zip of {project}:{ref.name}@{exact} broke off: {error}\n")
+            return
+        sink.finish()
+
+    @staticmethod
+    def _zip_into(sink, store, project: str, name: str, exact: str, top: str, files: list[dict]) -> None:
+        stamp = time.localtime()[:6]
+        with zipfile.ZipFile(sink, "w", allowZip64=True) as archive:
+            for entry in sorted(files, key=lambda item: item["path"]):
+                try:
+                    read = store.read_file(project, name, exact, entry["path"])
+                except (NotFound, StoreError):
+                    continue  # a link to a file the version does not have
+                info = zipfile.ZipInfo(f"{top}/{entry['path']}", date_time=max(stamp, (1980, 1, 1, 0, 0, 0)))
+                info.compress_type = zipfile.ZIP_STORED if Path(entry["path"]).suffix.lower() in STORED else zipfile.ZIP_DEFLATED
+                info.external_attr = 0o644 << 16
+                try:
+                    with archive.open(info, "w", force_zip64=True) as target:
+                        for chunk in read.chunks:
+                            view = memoryview(chunk)
+                            for start in range(0, len(view), 1 << 20):  # small pieces: the compressor's output stays small
+                                target.write(view[start:start + (1 << 20)])
+                finally:
+                    read.close()
 
     def _stream(self, read: FileRead, kind: str, immutable: bool, extra: dict | None = None, encoding: str | None = None) -> None:
         etag = f'"{read.sha256}"'
@@ -524,6 +667,49 @@ class UIHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):  # one line per request, without the session
         sys.stderr.write(f"{self.log_date_time_string()} {self.address_string()} {format % args}\n")
+
+
+class _ChunkedSink(io.RawIOBase):
+    """A write-only stream that sends what is written as HTTP/1.1 chunks of about 256 KB (zipfile writes to it)."""
+
+    SIZE = 256 * 1024
+
+    def __init__(self, wfile):
+        self.wfile, self.buffer, self.position = wfile, bytearray(), 0
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data) -> int:
+        size = len(data)
+        self.position += size
+        if size >= self.SIZE:  # a large piece goes out as its own chunk, uncopied
+            self._send()
+            self.wfile.write(b"%X\r\n" % size)
+            self.wfile.write(data)
+            self.wfile.write(b"\r\n")
+            return size
+        self.buffer += data
+        if len(self.buffer) >= self.SIZE:
+            self._send()
+        return size
+
+    def tell(self) -> int:
+        return self.position
+
+    def _send(self) -> None:
+        if self.buffer:
+            self.wfile.write(b"%X\r\n" % len(self.buffer))
+            self.wfile.write(self.buffer)
+            self.wfile.write(b"\r\n")
+            self.buffer = bytearray()
+
+    def flush(self) -> None:
+        self._send()
+
+    def finish(self) -> None:
+        self._send()
+        self.wfile.write(b"0\r\n\r\n")
 
 
 def make_ui_server(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", port: int = 8801,
