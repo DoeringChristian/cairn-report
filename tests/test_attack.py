@@ -80,8 +80,17 @@ def script(project: Path, name: str, code: str) -> Path:
 _LOGS = iter(range(10**9))
 
 
+def _interruptible() -> None:
+    """In a spawned child before it starts: SIGINT as Python expects it (KeyboardInterrupt). A test runner started as a
+    background job of a shell (`pytest ... &`, nohup) passes SIGINT on ignored, and a process that inherits an ignored
+    SIGINT keeps ignoring it, so `send_signal(SIGINT)` would stop nothing."""
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
 def spawn(project: Path, *argv, env=None, **kwargs) -> subprocess.Popen:
-    """A process whose output goes to files (a pipe nobody reads would block it once full)."""
+    """A process whose output goes to files (a pipe nobody reads would block it once full); SIGINT stops it, whatever
+    the test runner inherited (`_interruptible`)."""
+    kwargs.setdefault("preexec_fn", _interruptible)
     number = next(_LOGS)
     logs = project / ".logs"
     logs.mkdir(exist_ok=True)
@@ -2041,3 +2050,21 @@ def test_a_run_ends_only_once_its_large_output_is_on_a_healthy_remote(tmp_path):
     verify_clean(project, env)
     proxy.close()
     server.stop()
+
+
+def test_a_spawned_process_stops_on_sigint_when_the_runner_ignores_it(tmp_path):
+    """A test runner started as a background job ignores SIGINT, and its children would inherit that: `spawn` gives
+    them the default back, so a login node's `cairn sync --watch` stops when a test sends SIGINT."""
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)  # as `pytest ... &` starts
+    try:
+        process = spawn(tmp_path, "-c", "import time\nwhile True: time.sleep(0.05)")
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    time.sleep(0.5)
+    process.send_signal(signal.SIGINT)
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        raise
+    assert process.returncode != 0 and "KeyboardInterrupt" in process.logs[1].read_text()
