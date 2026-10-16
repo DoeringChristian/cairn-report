@@ -11,32 +11,40 @@ export class ApiError extends Error {
 export interface Project { name: string; title: string; description: string; created: string; artifacts?: number; updated?: string }
 export interface Summary { name: string; latest: number | null; versions: number; aliases: Record<string, number>; updated: string; metadata: Record<string, any>; pending?: number }
 export interface VersionRow {
-  version: number | null; uid: string; short_id?: string; pending?: boolean; sync?: string; error?: string | null; status: string; label: string | null; created: string; completed?: string;
+  version: number | null; id: string; short_id: string; pending?: boolean; sync?: string; error?: string | null; status: string; label: string | null; created: string; completed?: string;
   source?: { host?: string } | null; metadata: Record<string, any>; input_count: number; file_count: number; size: number;
   deleted_at?: string; deleted_by?: string | null; reason?: string | null;  // a tombstone (status "deleted")
 }
 export interface Entry { path: string; sha256?: string; size?: number; link?: string }
 export interface Manifest extends Omit<VersionRow, "input_count" | "file_count" | "size"> { inputs: string[]; files: Entry[]; digest?: string }
 export interface Me { auth: boolean; mode?: "local" | "server"; home?: string | null }
-export interface LineageNode { inputs: string[] | null; consumers: string[] | null; deleted?: boolean; kind?: string; status?: string }
+/** What the app knows of a version it names by id (an input, a consumer, a lineage node): name and number are null
+ *  for an id the repo does not know (and the number while it is pending). */
+export interface NodeInfo { name: string | null; version: number | null; short_id: string; status?: string | null; kind?: string }
+export interface LineageNode extends NodeInfo { inputs: string[] | null; consumers: string[] | null; deleted?: boolean }
 export interface Lineage { ref: string; depth: number; nodes: Record<string, LineageNode>; truncated: boolean }
+export interface ArtifactData { project: string; name: string; summary: Summary; versions: VersionRow[]; aliases: Record<string, number> }
+/** One version: `ref` is its exact reference (`name@v<n>`, or its whole id while pending); inputs and consumers are ids,
+ *  described in `nodes` (as the version itself). */
+export interface VersionData { project: string; name: string; ref: string; version: Manifest; consumers: string[]; deleted: string[]; nodes: Record<string, NodeInfo> }
 export type Row = Record<string, number | string>;
 export interface Rows { rows: Row[]; total: number; truncated: boolean }
 export interface Tail { text: string; truncated: boolean; size: number }
 export interface RunData {
-  project: string; name: string; version: number | null; status: string;
+  project: string; name: string; version: number | null; id: string; short_id: string; status: string;
   metrics: Rows; system: Rows; stdout: Tail | null; stderr: Tail | null; error: Tail | null;
   info: Record<string, any> | null; config: unknown; sweep: Record<string, any> | null;
 }
 
 const enc = encodeURIComponent;
+/** The API's paths; `ref` is any reference text (an id or a prefix of one, a name, name@v<n>, name@<word>). */
 export const paths = {
   projects: "projects",
   project: (p: string) => `projects/${enc(p)}`,
-  artifact: (p: string, name: string) => `projects/${enc(p)}/artifacts/${enc(name)}`,
-  version: (p: string, name: string, sel: string) => `projects/${enc(p)}/artifacts/${enc(name)}/versions/${enc(sel)}`,
-  run: (p: string, name: string, sel: string) => `projects/${enc(p)}/artifacts/${enc(name)}/versions/${enc(sel)}/run`,
-  lineage: (ref: string, depth = 1) => `lineage?ref=${enc(ref)}&depth=${depth}`,
+  artifact: (p: string, name: string) => `projects/${enc(p)}/artifacts/${name.split("/").map(enc).join("/")}`,
+  version: (p: string, ref: string) => `projects/${enc(p)}/version?ref=${enc(ref)}`,
+  run: (p: string, ref: string) => `projects/${enc(p)}/run?ref=${enc(ref)}`,
+  lineage: (p: string, ref: string, depth = 1) => `projects/${enc(p)}/lineage?ref=${enc(ref)}&depth=${depth}`,
 };
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

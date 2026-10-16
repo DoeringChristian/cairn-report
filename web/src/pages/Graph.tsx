@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, paths, type Lineage, type LineageNode } from "../api";
 import { Button, Card, Hint, Loading, ToggleGroup } from "../components";
-import { artifactHref, parseRef } from "../util";
+import { shortName, shownRef, versionHref } from "../refs";
 
 const W = 210, H = 46, GAP_X = 84, GAP_Y = 14, PAD = 16, PAD_X = 26;
 type Info = Record<string, LineageNode>;
@@ -54,7 +54,8 @@ function layout(root: string, info: Info) {
       const near = edges.filter(([a, b]) => (a === ref && rowOf[b] !== undefined) || (b === ref && rowOf[a] !== undefined)).map(([a, b]) => rowOf[a === ref ? b : a]);
       return near.length ? near.reduce((x, y) => x + y, 0) / near.length : 0;
     };
-    refs.sort((a, b) => score(a) - score(b) || a.localeCompare(b));
+    const name = (id: string) => info[id]?.name ?? "\uffff";  // known names first, alphabetically, then by number and id
+    refs.sort((a, b) => score(a) - score(b) || name(a).localeCompare(name(b)) || (info[a]?.version ?? 0) - (info[b]?.version ?? 0) || a.localeCompare(b));
     refs.forEach((ref, index) => (rowOf[ref] = index));
   }
   const tallest = Math.max(...keys.map(k => columns.get(k)!.length));
@@ -91,12 +92,14 @@ function collapse(info: Info, root: string): Info {
   return out;
 }
 
-function label(ref: string, project: string) {
-  const parsed = parseRef(ref);
-  if (!parsed) return { top: ref, bottom: "" };
-  return { top: parsed.name, bottom: (parsed.project === project ? "" : parsed.project + " ") + "@" + parsed.sel };
+/** A node's two lines: its name (its short id when the name is unknown), then `v<n> · <short id>` (or the short id). */
+function label(id: string, node: LineageNode | undefined) {
+  const short = node?.short_id ?? id.slice(0, 7);
+  if (!node || node.name == null) return { top: short, bottom: "" };
+  return { top: node.name, bottom: node.version != null ? `${shortName({ version: node.version, id, short_id: short })} · ${short}` : short };
 }
 
+/** The lineage of the version whose id is `root`; every node is a version named by its id. */
 export function Graph({ root, project }: { root: string; project: string }) {
   const navigate = useNavigate();
   const [info, setInfo] = useState<Info>({});
@@ -109,21 +112,23 @@ export function Graph({ root, project }: { root: string; project: string }) {
     setTruncated(t => t || data.truncated);
     setInfo(prev => {
       const next: Info = { ...prev };
-      for (const [ref, node] of Object.entries(data.nodes)) {
-        next[ref] = {
-          inputs: node.inputs ?? next[ref]?.inputs ?? null, consumers: node.consumers ?? next[ref]?.consumers ?? null,
-          deleted: node.deleted || next[ref]?.deleted, kind: node.kind ?? next[ref]?.kind, status: node.status ?? next[ref]?.status,
+      for (const [id, node] of Object.entries(data.nodes)) {
+        const prior = next[id];
+        next[id] = {
+          inputs: node.inputs ?? prior?.inputs ?? null, consumers: node.consumers ?? prior?.consumers ?? null,
+          deleted: node.deleted || prior?.deleted, kind: node.kind ?? prior?.kind, status: node.status ?? prior?.status,
+          name: node.name ?? prior?.name ?? null, version: node.version ?? prior?.version ?? null, short_id: node.short_id ?? prior?.short_id,
         };
       }
       return next;
     });
   };
-  const load = async (ref: string, depth = 1) => {
+  const load = async (id: string, depth = 1) => {
     setBusy(true); setError("");
-    try { merge(await api<Lineage>(paths.lineage(ref, depth))); } catch (e) { setError((e as Error).message); }
+    try { merge(await api<Lineage>(paths.lineage(project, id, depth))); } catch (e) { setError((e as Error).message); }
     setBusy(false);
   };
-  useEffect(() => { setInfo({}); setTruncated(false); load(root, 1); /* eslint-disable-next-line */ }, [root]);
+  useEffect(() => { setInfo({}); setTruncated(false); load(root, 1); /* eslint-disable-next-line */ }, [root, project]);
 
   const hasRuns = useMemo(() => Object.entries(info).some(([ref, node]) => ref !== root && node.kind === "run"), [info, root]);
   const view = useMemo(() => (dataOnly ? collapse(info, root) : info), [info, root, dataOnly]);
@@ -151,7 +156,7 @@ export function Graph({ root, project }: { root: string; project: string }) {
       )}
       <Button disabled={busy || !anyExpandable} onClick={async () => {
         setBusy(true);
-        try { merge(await api<Lineage>(paths.lineage(root, 3))); } catch (e) { setError((e as Error).message); }
+        try { merge(await api<Lineage>(paths.lineage(project, root, 3))); } catch (e) { setError((e as Error).message); }
         setBusy(false);
       }}>Expand all (3 levels)</Button>
     </>}>
@@ -163,22 +168,22 @@ export function Graph({ root, project }: { root: string; project: string }) {
             return <path key={a + b} className="graph-edge" d={`M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`} />;
           })}
           {Object.values(placed).map(p => {
-            const parsed = parseRef(p.ref), text = label(p.ref, project);
-            const go = () => parsed && navigate(artifactHref(parsed.project, parsed.name, parsed.sel));
-            const node = info[p.ref], run = node?.kind === "run", status = node?.status;
+            const node = info[p.ref], text = label(p.ref, node);
+            const go = () => navigate(versionHref(project, node?.name ?? null, node?.version ?? null, p.ref));
+            const run = node?.kind === "run", status = node?.status;
             const top = run ? text.top.replace(/^runs\//, "") : text.top, room = run ? 22 : 28;
             const classes = ["graph-node", p.col === 0 ? "is-root" : "", node?.deleted ? "is-deleted" : "", run ? "is-run" : "", status === "failed" ? "is-failed" : "", status === "running" ? "is-running" : ""];
             return (
               <g key={p.ref} className={classes.filter(Boolean).join(" ")} transform={`translate(${p.x},${p.y})`}>
                 <g role="link" tabIndex={0} onClick={go} onKeyDown={e => { if (e.key === "Enter") go(); }}>
-                  <title>{p.ref}{node?.deleted ? " (deleted)" : status ? ` (${status})` : ""}</title>
+                  <title>{node ? `${shownRef({ ...node, id: p.ref })} ` : ""}{p.ref}{node?.deleted ? " (deleted)" : status ? ` (${status})` : ""}</title>
                   <rect width={W} height={H} rx={run ? H / 2 : 10} />
                   {run && <g className="graph-pill" transform={`translate(${W - 44},9)`}><rect width={34} height={16} rx={8} /><text x={17} y={12} textAnchor="middle">run</text></g>}
                   <text x={run ? 18 : 12} y={19} className="graph-name">{top.length > room ? "…" + top.slice(-(room - 1)) : top}</text>
                   <text x={run ? 18 : 12} y={35} className="graph-sub">{text.bottom}{node?.deleted ? " · deleted" : status ? ` · ${status}` : ""}</text>
                 </g>
                 {expandable(p) && (
-                  <g role="button" tabIndex={0} aria-label={`Expand ${p.ref}`} className="graph-expand" transform={`translate(${p.col < 0 ? -10 : W + 10},${H / 2})`}
+                  <g role="button" tabIndex={0} aria-label={`Expand ${text.top} ${text.bottom}`.trim()} className="graph-expand" transform={`translate(${p.col < 0 ? -10 : W + 10},${H / 2})`}
                     onClick={() => load(p.ref)} onKeyDown={e => { if (e.key === "Enter") load(p.ref); }}>
                     <circle r={10} /><text textAnchor="middle" y={4}>+</text>
                   </g>

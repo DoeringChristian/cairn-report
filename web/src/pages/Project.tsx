@@ -1,7 +1,8 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { paths, useApi, type Project, type Summary } from "../api";
 import { AliasPills, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, Pill, SearchInput, Select, Tabs, Toolbar } from "../components";
-import { artifactHref, isReport, isRunName, reportHref, when } from "../util";
+import { artifactHref, reportHref, versionHref } from "../refs";
+import { isReport, isRunName, when } from "../util";
 
 type Tab = "reports" | "artifacts" | "runs";
 
@@ -52,7 +53,7 @@ export function ProjectPage() {
                         {a.metadata.summary && <><br /><span className="muted">{a.metadata.summary}</span></>}
                       </td>
                       <td>{a.metadata.status && <Pill>{a.metadata.status}</Pill>}</td>
-                      <td className="nowrap">{a.latest ? <Link to={artifactHref(project, a.name, a.latest)}>v{a.latest}</Link> : a.pending ? <Pill tone="pending">pending</Pill> : "none"}<br /><span className="muted">{a.versions} version{a.versions === 1 ? "" : "s"}</span></td>
+                      <td className="nowrap">{a.latest ? <Link to={versionHref(project, a.name, a.latest, null)}>v{a.latest}</Link> : a.pending ? <Pill tone="pending">pending</Pill> : "none"}<br /><span className="muted">{a.versions} version{a.versions === 1 ? "" : "s"}</span></td>
                       <td className="muted nowrap">{when(a.updated)}{a.latest && <><br /><a href={reportHref(project, a.name)}>Open report</a></>}</td>
                     </tr>
                   );
@@ -83,7 +84,7 @@ export function ProjectPage() {
                   return (
                     <tr key={a.name}>
                       <td><Link to={artifactHref(project, a.name)}><strong>{a.name.slice("runs/".length)}</strong></Link></td>
-                      <td>{a.latest ? <Link to={artifactHref(project, a.name, a.latest)}>v{a.latest}</Link> : <span className="muted">none yet</span>}</td>
+                      <td>{a.latest ? <Link to={versionHref(project, a.name, a.latest, null)}>v{a.latest}</Link> : <span className="muted">none yet</span>}</td>
                       <td className="muted">{config}</td>
                       <td>{a.versions}</td>
                       <td className="muted nowrap">{when(a.updated)}</td>
