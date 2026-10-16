@@ -798,7 +798,10 @@ its own, the entries that consumed the pending one name the remote's version ins
 refuses for good (its own content: an unknown input, a name it does not allow) stays as `rejected` with the
 reason (`cairn status` shows it; delete its folder to drop it). Everything else waits: a remote that is down
 or errors (5xx), a token that may not write (401/403: `publish` says so, the version stays pending), an
-input that is not sent yet, an answer the repo could not record (a busy database).
+input that is not sent yet, an answer the repo could not record (a busy database). Waiting costs a process
+little: a remote that does not answer at all costs it one short look (3 s), after which the process leaves it
+alone for 30 s; what a run or a command sends while it works waits at most 10 s for each answer, and the syncs
+at a command's start and end (and at exit) stop after 10 s (5 s), leaving the rest for the next sync.
 
 **Reading** asks the remote and copies what it gets into the repo; an exact reference the repo has
 (`@v<n>` of a copy, `@<uid>`) never asks the remote. While the remote does not answer, the repo answers

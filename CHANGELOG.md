@@ -33,7 +33,8 @@ before it, so there is no migration and no compatibility code, and a project sta
 - **Finding the repo** is one rule: `$CAIRN_DIR`, else the first folder upward from the working directory that
   holds `.cairn/repo.json` or `cairn.toml` (`pixi.toml` and `pyproject.toml` do not count; its repo is `[cairn] dir`, else
   `.cairn`); with nothing found, opening the repo creates `.cairn/` in the working directory (and says so), while
-  `cairn status`, `verify`, `prune`, and `sync` refuse. `cairn init [folder]` creates a repo (idempotent). A
+  `cairn status`, `verify`, `prune`, `sync`, and the commands that read versions (`artifacts`, `versions`, `show`,
+  `pull`, `alias`, `delete`, `drafts`) refuse. `cairn init [folder]` creates a repo (idempotent). A
   `cairn-report.toml` is no longer recognized at all.
 - **UI:** pending versions show a `pending` badge and their uid instead of `vN`.
 - **API:** `cairn.connect()` returns a `cairn.Repo` (was `Store`); `LocalRepo` (was `LocalStore`) and
