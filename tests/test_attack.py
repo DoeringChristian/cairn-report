@@ -1364,3 +1364,87 @@ def test_late_writes_never_bring_a_sent_entry_back(tmp_path):
     outbox.refresh_claim(claim)
     assert outbox.save({**record, "sync": "pending", "status": "completed"}) is False
     assert not outbox.folder_of(record["uid"]).exists() and outbox.records() == []
+
+
+# ====================================================================== 8. finding the repo
+
+def publish_here(where: Path, name: str, text: str, env=None) -> subprocess.CompletedProcess:
+    data = where / f"data-{name}-{abs(hash(text)) % 10**8}"
+    data.mkdir(parents=True)
+    (data / "a.txt").write_text(text)
+    return cli(where, "publish", str(data), name, env=env)
+
+
+def test_finding_the_repo_from_anywhere(tmp_path):
+    outer = project_at(tmp_path, "outer")
+    inner = outer / "sub" / "inner"
+    inner.mkdir(parents=True)
+    (inner / "cairn.toml").write_text('[repo]\nproject = "inner"\n')
+    deep = inner / "a" / "b"
+    deep.mkdir(parents=True)
+    assert publish_here(deep, "x", "inner").returncode == 0  # nested: the nearest project wins
+    assert LocalRepo(inner / ".cairn").versions("inner", "x")[0]["version"] == 1
+    assert publish_here(outer / "sub", "x", "outer").returncode == 0
+    assert LocalRepo(outer / ".cairn").versions("study", "x")[0]["version"] == 1
+
+    link = tmp_path / "link"  # a symlinked project folder: one repo, whichever path a process takes
+    link.symlink_to(outer)
+    writers = []
+    for index in range(6):
+        data = outer / "sub" / f"d{index}"
+        data.mkdir()
+        (data / "a.txt").write_text(str(index))
+        writers.append(spawn(link / "sub" if index % 2 else outer, "-m", "cairn", "publish", str(data), "shared"))
+    for writer in writers:
+        out, err = finish(writer, 120)
+        assert writer.returncode == 0, err
+    assert [v["version"] for v in LocalRepo(outer / ".cairn").versions("study", "shared")] == [1, 2, 3, 4, 5, 6]
+
+    hydra = outer / "outputs" / "2026-10-16" / "01-02-03"  # a Hydra job's fresh folder
+    hydra.mkdir(parents=True)
+    run = subprocess.run([sys.executable, "-c", "import cairn; r = cairn.init(name='h', code=False, system=False); r.finish(); print(r.uid)"],
+                         cwd=hydra, capture_output=True, text=True, env=base_env())
+    assert run.returncode == 0, run.stderr
+    assert LocalRepo(outer / ".cairn").get_version("study", "runs/h", run.stdout.split()[-1])["status"] == "completed"
+
+    drafting = subprocess.run([sys.executable, "-c", textwrap.dedent("""
+        import os, subprocess, sys, cairn
+        with cairn.draft("inside") as draft:
+            os.chdir(draft.path)  # a job that works inside its draft folder
+            (draft.path / "a.txt").write_text("x")
+            result = subprocess.run([sys.executable, "-m", "cairn", "versions", "shared"], capture_output=True, text=True)
+            assert result.returncode == 0 and result.stdout.count("completed") == 6, result.stdout + result.stderr
+        print(draft.version.ref)
+    """)], cwd=outer, capture_output=True, text=True, env=base_env())
+    assert drafting.returncode == 0, drafting.stderr
+    assert drafting.stdout.strip().startswith("study:inside@v1")
+
+    elsewhere = tmp_path / "elsewhere"  # CAIRN_DIR: that folder is the repo, wherever the command runs
+    elsewhere.mkdir()
+    named = tmp_path / "named-repo"
+    env = base_env(CAIRN_DIR=named)
+    assert cli(elsewhere, "init", env=env).returncode == 0
+    assert publish_here(elsewhere, "y", "named", env=env).returncode == 0
+    assert LocalRepo(named).versions("elsewhere", "y")[0]["version"] == 1
+    assert publish_here(deep, "z", "named too", env=env).returncode == 0  # inside a project: still CAIRN_DIR's repo
+    assert LocalRepo(named).versions("inner", "z")[0]["version"] == 1
+
+    nowhere = tmp_path / "nowhere"  # read-only commands outside any repo refuse, and make nothing
+    nowhere.mkdir()
+    for argv in (["status"], ["verify"], ["artifacts"], ["versions", "x"], ["show", "x"], ["pull", "x"], ["drafts", "list"],
+                 ["prune"], ["sync"]):
+        result = cli(nowhere, *argv)
+        assert result.returncode == 1 and "no repo here" in result.stderr, (argv, result.stderr)
+    assert not (nowhere / ".cairn").exists()
+
+    racing = tmp_path / "racing"  # many `cairn init` at once: one repo, one uid
+    racing.mkdir()
+    inits = [spawn(racing, "-m", "cairn", "init") for _ in range(8)]
+    for process in inits:
+        out, err = finish(process, 60)
+        assert process.returncode == 0, err
+    uid = json.loads((racing / ".cairn" / "repo.json").read_text())["uid"]
+    opened = [spawn(racing, "-c", "import cairn; print(cairn.connect().backend.uid)") for _ in range(8)]
+    assert {finish(process, 60)[0].strip() for process in opened} == {uid}
+    assert sorted(path.name for path in (racing / ".cairn").iterdir() if path.name.startswith("repo.json")) == ["repo.json"]
+    assert not stray_repos(tmp_path, {outer / ".cairn", inner / ".cairn", named, racing / ".cairn", tmp_path / "remote"})

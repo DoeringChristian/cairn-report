@@ -434,11 +434,14 @@ class Draft(Writer):
 
     def _remove(self) -> None:
         self._closed = True
+        try:  # before the folder goes: it may be the working directory, which the repo is found from
+            root = drafts_root().resolve()
+        except (OSError, StoreError):
+            root = None
         shutil.rmtree(self.folder, ignore_errors=True)
         _record_path(self.folder).unlink(missing_ok=True)
-        if find(self.folder.parent) is not None:  # a trial's folder inside its sweep's: the sweep's folder stays
+        if root is None or find(self.folder.parent) is not None:  # a trial's folder inside its sweep's: the sweep's stays
             return
-        root = drafts_root().resolve()
         parent = self.folder.parent.resolve()
         while parent != root and root in parent.parents:
             try:
