@@ -437,7 +437,7 @@ class LocalRemote(LocalRepo):
         if self.fail_after is not None and self.calls > self.fail_after:
             raise cairn.Unreachable("the stand-in remote went away")
 
-    def upload(self, sources, cache, quiet=False):
+    def upload(self, sources, cache, quiet=False, what=None):
         for sha, (path, size) in sources.items():
             self._tick()
             with open(path, "rb") as handle:

@@ -539,13 +539,15 @@ METHODS = {b"GET", b"POST", b"PUT", b"PATCH", b"DELETE", b"HEAD"}
 class FaultProxy:
     """A TCP proxy on its own port in front of `upstream` (a port), whose `mode` can change at any time:
     forward, hang (accept, read, never answer), error (HTTP 500), slow (wait `delay` s per connection, then forward),
-    slow-request (wait `delay` s before each request), refuse (close at once, like a server that restarts). A kept-alive
-    connection follows the mode at each new request."""
+    slow-request (wait `delay` s before each request), refuse (close at once, like a server that restarts), throttle
+    (`rate` bytes per second towards the remote), stall (stop forwarding, keep the connection). A kept-alive connection
+    follows the mode at each new request (throttle and stall at every piece of data)."""
 
-    def __init__(self, upstream: int | None = None, mode: str = "forward", delay: float = 5.0):
-        self.upstream, self.mode, self.delay = upstream, mode, delay
+    def __init__(self, upstream: int | None = None, mode: str = "forward", delay: float = 5.0, rate: float = 2e6):
+        self.upstream, self.mode, self.delay, self.rate = upstream, mode, delay, rate
         self.listener = socket.socket()
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 << 10)  # like a network path, not a loopback
         self.listener.bind(("127.0.0.1", 0))
         self.listener.listen(64)
         self.port = self.listener.getsockname()[1]
@@ -590,6 +592,7 @@ class FaultProxy:
         client.settimeout(None)
 
         def pipe(source, target, requests=False):
+            paced = [None, 0]  # when throttling began, bytes sent since (sleeps are coarse in the background: keep the average)
             try:
                 while data := source.recv(1 << 16):
                     if requests and data.split(b" ", 1)[0] in METHODS:  # a new request on a kept-alive connection
@@ -605,6 +608,17 @@ class FaultProxy:
                             return
                         if mode == "slow-request":
                             time.sleep(self.delay)
+                    if requests and self.mode == "stall":  # bytes stop moving, the connection stays open
+                        while not self.closed:
+                            time.sleep(0.1)
+                        return
+                    if requests and self.mode == "throttle":  # bytes move at `rate` bytes per second on average
+                        if paced[0] is None:
+                            paced[0] = time.monotonic()
+                        target.sendall(data)
+                        paced[1] += len(data)
+                        time.sleep(max(0.0, paced[0] + paced[1] / self.rate - time.monotonic()))
+                        continue
                     target.sendall(data)
             except OSError:
                 pass
@@ -1775,3 +1789,66 @@ def test_the_outbox_listing_cache_sees_changes_and_removals_at_once(tmp_path):
     assert [record["label"] for record in listed] == ["aaaa", "bbbb"]
     listed[0]["label"] = "edited by a caller"  # a caller's change does not reach the next listing
     assert outbox.records()[0]["label"] == "aaaa"
+
+
+BIG_RUN = """
+import json, os, sys, time, cairn
+began = time.perf_counter()
+run = cairn.init(name="big", code=False, system=False)
+(run.path / "files").mkdir(exist_ok=True)
+(run.path / "files" / "model.bin").write_bytes(os.urandom(20 << 20))
+with open("written", "w"):
+    pass
+run.finish()
+print(json.dumps({"uid": run.uid, "finish": time.perf_counter() - began}))
+"""
+
+
+def test_a_run_ends_only_once_its_large_output_is_on_a_healthy_remote(tmp_path):
+    """A run's 20 MB output goes to a remote that accepts 2 MB/s: the run's end waits for the upload while bytes flow
+    (about 10 s, well over its 4 s budget for waiting), says so once, and exits with the version numbered on the remote.
+    When the bytes stop moving partway, the wait ends after the stall timeout, the version stays pending, and `cairn sync`
+    sends it later."""
+    server = RealServer(tmp_path / "remote").start()
+    proxy = FaultProxy(server.port, mode="forward", rate=2e6)
+    env = base_env(CAIRN_TOKEN=server.token)
+    project = project_at(tmp_path, "study", proxy.url)
+    script(project, "big.py", BIG_RUN)
+    proxy.mode = "throttle"
+    began = time.perf_counter()
+    process = spawn(project, "big.py", env=env)
+    out, err = finish(process, 300)
+    took = time.perf_counter() - began
+    assert process.returncode == 0, err
+    row = json.loads(out.strip().splitlines()[-1])
+    print(f"\n20 MB at 2 MB/s: the run's process took {took:.1f} s; stderr: {err.strip()!r}")
+    assert outbox_of(project) == []  # synced and numbered before the process ended
+    remote = LocalRepo(server.root)
+    assert remote.get_version("study", "runs/big", row["uid"])["status"] == "completed"
+    assert err.count("cairn: sending") == 1 and "MB of study:runs/big" in err, err
+    assert 8 < took < 60, took
+
+    proxy.mode = "throttle"  # now the bytes stop moving partway through
+    (project / "written").unlink()
+    began = time.perf_counter()
+    process = spawn(project, "big.py", env=env)
+    while not (project / "written").exists():
+        assert process.poll() is None, finish(process)
+        time.sleep(0.05)
+    time.sleep(3)
+    proxy.mode = "stall"
+    stalled = time.perf_counter()
+    out, err = finish(process, 300)
+    ended = time.perf_counter() - stalled
+    assert process.returncode == 0, err
+    row = json.loads(out.strip().splitlines()[-1])
+    print(f"stalled partway: the process ended {ended:.1f} s after the stall; stderr: {err.strip()!r}")
+    assert len(outbox_of(project)) == 1 and remote.get_version("study", "runs/big", row["uid"])["status"] == "running"  # pending
+    assert ended < 25, ended  # the stall timeout (10 s) and a little, not the whole budget of a transfer
+    proxy.mode = "forward"
+    synced = cli(project, "sync", env=env)
+    assert synced.returncode == 0, synced.stdout + synced.stderr
+    assert outbox_of(project) == [] and remote.get_version("study", "runs/big", row["uid"])["status"] == "completed"
+    verify_clean(project, env)
+    proxy.close()
+    server.stop()

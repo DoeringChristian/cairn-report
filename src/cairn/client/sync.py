@@ -196,7 +196,7 @@ class Sync:
 
     # ------------------------------------------------------------- sending
 
-    def _upload(self, files: list[dict]) -> None:
+    def _upload(self, files: list[dict], what: str | None = None) -> None:
         """Upload the blobs the remote lacks, from the repo."""
         sources = {}
         missing = set(self.remote.missing(files)) if any("sha256" in item for item in files) else set()
@@ -207,7 +207,7 @@ class Sync:
                     raise StoreError(f"the staged contents of {item['path']} ({item['sha256'][:12]}) left the repo {self.root}")
                 sources[item["sha256"]] = (blob, item["size"])
         if sources:
-            self.remote.upload(sources, None, quiet=True)
+            self.remote.upload(sources, None, quiet=True, what=what)
 
     def push(self, record: dict, claimed=None) -> bool:
         """Send what the remote lacks of an entry; True once the version is final there (and recorded in the repo).
@@ -222,7 +222,7 @@ class Sync:
             self._start_inputs(record)
         if record["kind"] == "publish":
             for attempt in range(RETRIES):
-                self._upload(record["files"])
+                self._upload(record["files"], f"{project}:{name}")
                 self.outbox.refresh_claim(claimed)
                 try:
                     record["number"] = remote.publish(project, name, record["files"], inputs=record["inputs"],
@@ -244,7 +244,7 @@ class Sync:
         try:
             if fresh:
                 for attempt in range(RETRIES):
-                    self._upload(fresh)
+                    self._upload(fresh, f"{project}:{name}")
                     self.outbox.refresh_claim(claimed)
                     try:
                         remote.add_files(project, name, record["number"], fresh)

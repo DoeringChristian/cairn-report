@@ -802,7 +802,9 @@ input that is not sent yet, an answer the repo could not record (a busy database
 little: a remote that does not answer at all costs it one short look (3 s), after which the process leaves it
 alone for 30 s, and so does a remote that answers but slowly. A run's start waits for the remote at most 3 s in
 all, its end 4 s, and the last attempt at exit 4 s; a single publish or live sync 3 s; a command (`publish`, `pull`,
-`versions`, ...) 10 s in all, its blob transfers aside. Whatever did not go out then is pending: the background
+`versions`, ...) 10 s in all. These budgets count waiting, not transfers: while a file's bytes flow, the upload (or
+download) goes on, also at a run's end (a job does not exit with its output half sent; a line on stderr says what is
+being sent), and it gives up only when nothing moved for 10 s. Whatever did not go out is pending: the background
 uploader, the next command, or `cairn sync` sends it. A process keeps its connections to the remote alive.
 
 **Reading** asks the remote and copies what it gets into the repo; an exact reference the repo has

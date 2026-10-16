@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -23,6 +25,9 @@ from ..store.local import FileRead
 from ..store.refs import Ref
 from ..store.uids import UID
 from .http import BATCH, Client, ClientError, upload_missing
+
+
+ANNOUNCE = 3.0  # seconds after which an upload in progress is announced (once)
 
 
 def q(text: str) -> str:
@@ -63,13 +68,23 @@ class Remote:
         except ClientError as error:
             raise _translate(error) from error
 
-    def upload(self, sources: dict[str, tuple[Path, int]], cache, quiet: bool = False) -> None:
-        """Upload, in parallel, the blobs of `sources` ({sha: (file, size)}) that the server lacks."""
+    def upload(self, sources: dict[str, tuple[Path, int]], cache, quiet: bool = False, what: str | None = None) -> None:
+        """Upload, in parallel, the blobs of `sources` ({sha: (file, size)}) that the server lacks. With `what` (a
+        version's name), an upload still going after ANNOUNCE seconds says so once on stderr."""
         errors: list = []
+        size = sum(item[1] for item in sources.values())
+        timer = threading.Timer(ANNOUNCE, lambda: print(f"cairn: sending {size / 1e6:.0f} MB of {what} to {self.url}",
+                                                        file=sys.stderr, flush=True)) if what else None
+        if timer is not None:
+            timer.daemon = True
+            timer.start()
         try:
             failed, _ = upload_missing(self.client, sources, cache, errors=errors, quiet=quiet)
         except ClientError as error:
             raise _translate(error) from error
+        finally:
+            if timer is not None:
+                timer.cancel()
         if failed:
             if any(isinstance(error, ClientError) and error.unreachable for error in errors):
                 raise Unreachable(f"{len(failed)} files were not uploaded: {errors[0]}")

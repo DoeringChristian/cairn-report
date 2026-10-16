@@ -760,7 +760,7 @@ def main(argv: list[str] | None = None) -> None:
     from .client.http import budget
 
     bounded = args.run in BOUNDED_COMMANDS and not getattr(args, "watch", False)  # a command waits so long in all
-    with budget(COMMAND_BUDGET, uploads=False) if bounded else nullcontext():
+    with budget(COMMAND_BUDGET) if bounded else nullcontext():
         if syncing:
             sync_quietly(args)
         try:

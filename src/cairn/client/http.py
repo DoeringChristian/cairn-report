@@ -13,6 +13,7 @@ import json
 import os
 import posixpath
 import re
+import socket
 import ssl
 import sys
 import threading
@@ -32,6 +33,7 @@ IDLE = 20.0  # seconds an idle kept-alive connection is used again (a server kee
 FRESH = 1.0  # seconds idle after which a request whose body cannot be sent twice takes a new connection
 KEEP = 4  # idle connections kept per remote (the uploader sends blobs in parallel)
 REPLAYABLE = (bytes, bytearray, str, type(None))
+SEND_BUFFER = 4 << 20  # bytes a connection's kernel send buffer may hold (see `_connection`)
 
 
 class _Pool:
@@ -72,11 +74,13 @@ _BUDGET = threading.local()
 
 
 @contextmanager
-def budget(seconds: float, *, uploads: bool = True, default: bool = False):
+def budget(seconds: float, *, uploads: bool = False, default: bool = False):
     """Within the block, this thread's requests together wait for the remote at most `seconds` (nested budgets: the
-    shorter wins); a request once the time is up fails at once, as a remote that does not answer. `uploads=False`
-    exempts blob uploads (they make progress; each read or write still has its timeout). `default`: only when no
-    budget is set already (an operation's own budget, which a command's or a run's phase overrides)."""
+    shorter wins); a request once the time is up fails at once, as a remote that does not answer. Blob transfers
+    (uploads, downloads) are exempt unless `uploads`: they go on while bytes flow (each read or write still has its
+    timeout, which is the stall timeout), and the time they take is added to the budget (`credit_transfer`), so it caps
+    only the waiting. `default`: only when no budget is set already (an operation's own budget, which a command's or a
+    run's phase overrides)."""
     outer = getattr(_BUDGET, "deadline", None), getattr(_BUDGET, "uploads", True)
     if default and outer[0] is not None:
         yield
@@ -88,6 +92,18 @@ def budget(seconds: float, *, uploads: bool = True, default: bool = False):
         yield
     finally:
         _BUDGET.deadline, _BUDGET.uploads = outer
+
+
+def credit_transfer(seconds: float) -> None:
+    """A blob transfer that the budget exempts took `seconds`: the budget's deadline moves by as much."""
+    _BUDGET.moved = transferring() + seconds
+    if getattr(_BUDGET, "deadline", None) is not None and not getattr(_BUDGET, "uploads", True):
+        _BUDGET.deadline += seconds
+
+
+def transferring() -> float:
+    """Seconds this thread spent transferring blobs so far (to tell a slow remote from a large transfer)."""
+    return getattr(_BUDGET, "moved", 0.0)
 
 
 def remaining(upload: bool = False) -> float | None:
@@ -207,6 +223,9 @@ class Client:
         try:
             connection.connect()
             connection.sock.settimeout(limit)
+            # bytes the kernel holds unsent count as sent: a bounded send buffer keeps "no answer within the timeout
+            # after the body" the stall it means (the drain of a few MB), not the drain of a buffer that grew to many
+            connection.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)
         except BaseException:
             connection.close()
             raise
@@ -218,8 +237,16 @@ class Client:
         noticed when the request fails on it: the request is sent once more on a new one (every request of the API is
         idempotent; a body that cannot be sent twice always goes on a connection used a moment ago, or a new one)."""
         replayable = isinstance(body, REPLAYABLE)
+        transfer, began = upload or stream_to is not None, time.monotonic()
+        try:
+            return self._request(method, path, body, headers, expect, stream_to, transfer, replayable)
+        finally:
+            if transfer:
+                credit_transfer(time.monotonic() - began)
+
+    def _request(self, method, path, body, headers, expect, stream_to, transfer, replayable):
         for attempt in range(2):
-            limit = self._limit(method, path, upload or stream_to is not None)  # a download is a transfer too
+            limit = self._limit(method, path, transfer)
             connection, reused = _POOL.take(self._key, fresh_only=not replayable) if attempt == 0 else (None, False)
             try:
                 if connection is None:
@@ -437,6 +464,8 @@ def upload_missing(client: Client, sources: dict[str, tuple[Path, int]], cache=N
                 print(f"warning: {file} not uploaded ({error}); retrying next time", file=sys.stderr)
             return 0
 
-    with ThreadPoolExecutor(workers) as pool:
+    began = time.monotonic()
+    with ThreadPoolExecutor(workers) as pool:  # the workers have no budget: their timeout is the stall timeout
         sent = sum(pool.map(send, sorted(missing)))
+    credit_transfer(time.monotonic() - began)  # the caller's budget caps waiting, not the transfer
     return failed, sent

@@ -55,7 +55,7 @@ from ..store.prune import prune as prune_folders
 from ..store.refs import Ref
 from ..store.uids import UID, new_uid
 from ..store.verify import Report, check_blobs, verify_copies, verify_folders, verify_outbox, verify_store, verify_version
-from .http import budget, entries_for, scan
+from .http import budget, entries_for, scan, transferring
 from .remote import Remote
 from .sync import NotRecorded, Sync, Waiting
 
@@ -852,10 +852,10 @@ class SyncedRepo(ProjectRepo):
         """What a process sends or reads now waits for the remote at most SEND_BUDGET seconds in all (unless the command
         or the run's phase set a budget already, `http.budget`); a remote that took SLOW seconds or more, even if it
         answered, is left to the background for DOWN_FOR seconds (`_failed`): a slow remote never slows a run."""
-        began = time.monotonic()
+        began, moved = time.monotonic(), transferring()
         with budget(SEND_BUDGET, default=True):
             yield
-        self._failed(began)
+        self._failed(began + transferring() - moved)  # the time spent waiting, not moving bytes
 
     def _send_now(self, record: dict) -> dict:
         """Send an entry that is final now; when the remote does not answer it stays pending (a warning says so, and a
@@ -1031,7 +1031,7 @@ class SyncedRepo(ProjectRepo):
 DOWN_FOR = 30.0  # seconds a remote that was slow to fail is not asked again for reads and background sends
 SLOW = 2.0  # seconds: a failure that took this long counts as slow (a refused connection takes milliseconds)
 PROBE = 3.0  # seconds the first look at the remote may take
-QUICK = 10.0  # seconds a request a process makes while it works may wait for each answer (`SyncedRepo.quick`)
+QUICK = 10.0  # seconds a request a process makes while it works may wait for each answer or move of bytes (`quick`)
 SEND_BUDGET = 3.0  # seconds one publish, start, or sync of a running version waits for the remote in all (`_waiting`)
 _DOWN: dict[str, float] = {}  # remote URL -> until when this process does not ask it (`SyncedRepo.down`)
 
@@ -1123,7 +1123,7 @@ def _flush_at_exit() -> None:
     for repo in list(_exit_flush.values()):
         try:
             if not repo.down() and any(record["sync"] == "pending" for record in repo.records()):
-                with budget(EXIT_TIMEOUT):
-                    repo.with_timeout(EXIT_TIMEOUT).engine.flush(time.monotonic() + EXIT_TIMEOUT)
+                with budget(EXIT_TIMEOUT):  # waiting; uploads go on while bytes flow (QUICK: the stall timeout)
+                    repo.quick.engine.flush()
         except Exception:  # noqa: BLE001 - never a traceback at exit
             pass

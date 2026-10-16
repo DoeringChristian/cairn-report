@@ -39,6 +39,7 @@ from pathlib import Path
 
 from ..store import StoreError, refs
 from ..store.folders import pid_alive as _pid_alive, read_json, write_json
+from .http import credit_transfer, transferring
 from .open import repo_root
 from ..store.uids import UID, new_uid
 from . import logger as _logger
@@ -127,6 +128,7 @@ class Draft(Writer):
         self._lock = threading.Lock()
         self._stop: threading.Event | None = None
         self._watcher: threading.Thread | None = None
+        self._moved = 0.0  # seconds the watcher spent transferring blobs (`_stop_watch`)
         self._closed = False
 
     def __repr__(self) -> str:
@@ -317,15 +319,23 @@ class Draft(Writer):
             try:
                 current = signature(self.folder, self._pub.config)
                 if current != seen:
-                    self.sync()
+                    moved = transferring()
+                    try:
+                        self.sync()
+                    finally:
+                        self._moved += transferring() - moved
                     seen = current
             except (StoreError, OSError) as error:
                 print(f"warning: syncing the draft {self.folder} failed ({error}); retrying", file=sys.stderr, flush=True)
 
     def _stop_watch(self) -> None:
+        """Stop following the folder, once the sync in progress ended (its waits for the remote are bounded; a transfer
+        goes on while bytes flow, and the time it took is not charged to this thread's budget for waiting)."""
         if self._stop is not None:
+            moved = self._moved
             self._stop.set()
-            self._watcher.join(timeout=60)
+            self._watcher.join()
+            credit_transfer(self._moved - moved)
             self._stop = self._watcher = None
 
     def sync(self) -> int:
