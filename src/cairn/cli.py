@@ -777,9 +777,11 @@ REPO_COMMANDS = {cmd_publish, cmd_pull, cmd_project, cmd_project_delete, cmd_art
 
 def _expected(error: BaseException) -> bool:
     """Repo, client, and report-build errors are messages for the user, not crashes."""
+    import sqlite3
+
     from .store.errors import StoreError
 
-    if isinstance(error, (StoreError, OSError)):
+    if isinstance(error, (StoreError, OSError, sqlite3.OperationalError)):  # also a full disk, a read-only repo
         return True
     module = type(error).__module__
     return module.startswith(("cairn.client", "cairn.reports")) and type(error).__name__.endswith("Error")
