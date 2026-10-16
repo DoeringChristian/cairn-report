@@ -57,8 +57,10 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
 - **The remote URL names the project:** its last path segment (`https://host/my-study`, or
   `https://host/prefix/my-study` behind a path prefix). Syncing to a project the server does not have
   creates it when the token is the owner's; a project-scoped token only reaches its existing project.
-- **Another project's artifacts** are read with `store=` (`cairn.use("datasets/x@v3",
-  store="https://host/other")`); lineage records that project's URL. A reference has no project prefix.
+- **There is no cross-project access.** A reference has no project prefix, a run's inputs and a report's
+  inputs come from its own project, and the public functions take no `store=` pointing elsewhere. A dataset
+  several projects need is published in each of them; the server stores its files once (content-addressed
+  blobs), and so does a repo for a file in several versions.
 
 ## Short ids
 
