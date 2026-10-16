@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { paths, useApi, type Entry, type Manifest, type Summary, type VersionRow } from "../api";
-import { CopyButton, ErrorNote, Hero, Loading, Pill, Select, Table } from "../components";
+import {
+  AliasPills, Button, CodeChips, CopyButton, Crumbs, DataTable, ErrorNote, Hero, HeroLine, Hint, JsonBlock,
+  KeyValueTable, LinkButton, Loading, MetricCard, MetricGrid, Note, Panel, RefRow, RefRows, RowActions, SearchInput, Section, Select,
+  StatusPill, TextBlock, Toolbar,
+} from "../components";
 import { artifactHref, bytes, exact, fileHref, isReport, parseRef, previewKind, reportHref, selOf, shortOf, when, zipHref } from "../util";
 import { Graph } from "./Graph";
 import { RunPanel } from "./Run";
@@ -31,47 +35,43 @@ function MetadataSections({ metadata }: { metadata: Record<string, unknown> }) {
   return (
     <>
       {hasConfig && (
-        <section className="app-section">
-          <div className="section-head"><h2>Config</h2></div>
-          {list.length > 0 && <p className="hint">Overrides: {list.map(item => <code key={item} style={{ marginRight: 8 }}>{item}</code>)}</p>}
-          <Table head={["Key", "Value"]}>
-            {flatten(config).map(([key, value]) => (
-              <tr key={key}><td><code>{key}</code></td><td><code>{value}</code></td></tr>
-            ))}
-          </Table>
-        </section>
+        <Section title="Config">
+          {list.length > 0 && <Hint>Overrides: <CodeChips items={list} /></Hint>}
+          <KeyValueTable head={["Key", "Value"]} code rows={flatten(config)} />
+        </Section>
       )}
-      <section className="app-section">
-        <div className="section-head"><h2>Metadata</h2></div>
-        <div className="report-prose table-card"><pre>{JSON.stringify(others, null, 2)}</pre></div>
-      </section>
+      <Section title="Metadata"><JsonBlock value={others} /></Section>
     </>
   );
 }
 
-function Preview({ project, name, version, entry }: { project: string; name: string; version: string; entry: Entry }) {
-  const kind = previewKind(entry.path), url = fileHref(project, name, version, entry.path);
+/** A file's inline preview: an image, a video, or the start of a text file. */
+function Preview({ url, entry }: { url: string; entry: Entry }) {
+  const kind = previewKind(entry.path);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
   const size = entry.size ?? 0;
   useEffect(() => {
     if (kind !== "text") return;
+    let live = true;
     fetch(url, { headers: { Range: `bytes=0-${TEXT_LIMIT - 1}` } }).then(r => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`)))).then(body => {
       if (size <= TEXT_LIMIT && entry.path.endsWith(".json")) { try { body = JSON.stringify(JSON.parse(body), null, 2); } catch { /* keep raw */ } }
-      setText(body);
-    }, e => setError(e.message));
+      if (live) setText(body);
+    }, e => { if (live) setError(e.message); });
+    return () => { live = false; };
   }, [url, kind, size, entry.path]);
-  if (kind === "image") return size > MEDIA_LIMIT ? <p className="hint">Too large to preview.</p> : <img className="preview-media" src={url} alt={entry.path} loading="lazy" />;
-  if (kind === "video") return size > MEDIA_LIMIT ? <p className="hint">Too large to preview.</p> : <video className="preview-media" src={url} controls preload="metadata" muted />;
-  if (error) return <p className="hint">Preview failed: {error}</p>;
+  if (kind === "image") return size > MEDIA_LIMIT ? <Hint>Too large to preview.</Hint> : <img className="preview-media" src={url} alt={entry.path} loading="lazy" />;
+  if (kind === "video") return size > MEDIA_LIMIT ? <Hint>Too large to preview.</Hint> : <video className="preview-media" src={url} controls preload="metadata" muted />;
+  if (error) return <Hint>Preview failed: {error}</Hint>;
   if (text === null) return <Loading />;
-  return <><pre className="preview-text">{text}</pre>{size > TEXT_LIMIT && <p className="hint">Showing the first {bytes(TEXT_LIMIT)} of {bytes(size)}.</p>}</>;
+  return <><TextBlock>{text}</TextBlock>{size > TEXT_LIMIT && <Hint>Showing the first {bytes(TEXT_LIMIT)} of {bytes(size)}.</Hint>}</>;
 }
 
 function Files({ project, name, version, files }: { project: string; name: string; version: string; files: Entry[] }) {
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [all, setAll] = useState(false);
+  const href = (path: string, download = false) => fileHref(project, name, version, path, download);
   const shown = files.filter(f => f.path.toLowerCase().includes(filter.toLowerCase()));
   const rows = all ? shown : shown.slice(0, SHOWN);
   const toggle = (path: string) => setOpen(prev => { const next = new Set(prev); next.has(path) ? next.delete(path) : next.add(path); return next; });
@@ -81,57 +81,54 @@ function Files({ project, name, version, files }: { project: string; name: strin
       {images.length > 0 && (
         <div className="figure-grid app-figures">
           {images.map(f => (
-            <a className="figure-card" key={f.path} href={fileHref(project, name, version, f.path)} target="_blank" rel="noreferrer">
-              <img src={fileHref(project, name, version, f.path)} alt={f.path} loading="lazy" />
+            <a className="figure-card" key={f.path} href={href(f.path)} target="_blank" rel="noreferrer">
+              <img src={href(f.path)} alt={f.path} loading="lazy" />
               <div className="figure-copy"><p className="mono">{f.path}</p></div>
             </a>
           ))}
         </div>
       )}
-      {files.length > 12 && <div className="toolbar"><input type="search" placeholder="Filter files" aria-label="Filter files" value={filter} onChange={e => setFilter(e.target.value)} /></div>}
-      <Table head={["File", "Size", ""]}>
+      {files.length > 12 && <Toolbar><SearchInput label="Filter files" value={filter} onChange={setFilter} /></Toolbar>}
+      <DataTable head={["File", "Size", ""]}>
         {rows.flatMap(f => {
           const kind = previewKind(f.path), isOpen = open.has(f.path);
           const row = (
             <tr key={f.path}>
-              <td className="mono wrap-any">{f.sha256 ? <a href={fileHref(project, name, version, f.path)}>{f.path}</a> : <>{f.path} <span className="muted">&rarr; {f.link}</span></>}</td>
+              <td className="mono wrap-any">{f.sha256 ? <a href={href(f.path)}>{f.path}</a> : <>{f.path} <span className="muted">&rarr; {f.link}</span></>}</td>
               <td className="muted nowrap">{f.sha256 ? bytes(f.size ?? 0) : "link"}</td>
-              <td><div className="row-actions">
-                {f.sha256 && kind && <button className="action-button small" aria-expanded={isOpen} onClick={() => toggle(f.path)}>{isOpen ? "Hide" : "Preview"}</button>}
-                {f.sha256 && <a className="action-button small" href={fileHref(project, name, version, f.path, true)}>Download</a>}
+              <td><RowActions>
+                {f.sha256 && kind && <Button small aria-expanded={isOpen} onClick={() => toggle(f.path)}>{isOpen ? "Hide" : "Preview"}</Button>}
+                {f.sha256 && <LinkButton small href={href(f.path, true)}>Download</LinkButton>}
                 {f.sha256 && <CopyButton text={`${exact(project, name, version)}//${f.path}`} label="Copy file reference" done="Reference copied" />}
-              </div></td>
+              </RowActions></td>
             </tr>
           );
-          return isOpen ? [row, <tr key={f.path + "#"} className="preview-row"><td colSpan={3}><Preview project={project} name={name} version={version} entry={f} /></td></tr>] : [row];
+          return isOpen ? [row, <tr key={f.path + "#"} className="preview-row"><td colSpan={3}><Preview url={href(f.path)} entry={f} /></td></tr>] : [row];
         })}
-      </Table>
-      {shown.length === 0 && <p className="hint">No file matches.</p>}
-      {!all && shown.length > SHOWN && <button className="action-button" onClick={() => setAll(true)}>Show all {shown.length} files</button>}
+      </DataTable>
+      {shown.length === 0 && <Hint>No file matches.</Hint>}
+      {!all && shown.length > SHOWN && <Button onClick={() => setAll(true)}>Show all {shown.length} files</Button>}
     </>
   );
 }
 
 function RefList({ title, refs, project, empty, deleted = [] }: { title: string; refs: string[]; project: string; empty: string; deleted?: string[] }) {
   return (
-    <section className="data-panel app-panel" aria-label={title}>
-      <h2>{title}</h2>
-      {refs.length === 0 ? <p className="hint">{empty}</p> : (
-        <ul>
+    <Panel title={title}>
+      {refs.length === 0 ? <Hint>{empty}</Hint> : (
+        <RefRows>
           {refs.map(ref => {
             const p = parseRef(ref);
             return (
-              <li className="data-row" key={ref}>
-                <span className="data-name">{p?.name ?? ref}</span>
-                {p ? <Link className="data-version" to={artifactHref(p.project, p.name, p.sel)}>{p.sel}</Link> : <span className="data-version">{ref}</span>}
-                <span className="data-files">{p && p.project !== project ? p.project : ""}{deleted.includes(ref) && <> <Pill status="deleted" /></>}</span>
-                <CopyButton text={ref} label="Copy exact version" done="Version copied" />
-              </li>
+              <RefRow key={ref} name={p?.name ?? ref}
+                value={p ? <Link className="data-version" to={artifactHref(p.project, p.name, p.sel)}>{p.sel}</Link> : ref}
+                extra={<>{p && p.project !== project ? p.project : ""}{deleted.includes(ref) && <> <StatusPill status="deleted" /></>}</>}
+                copy={{ text: ref, label: "Copy exact version", done: "Version copied" }} />
             );
           })}
-        </ul>
+        </RefRows>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -150,9 +147,9 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
   const number = manifest ? selOf(manifest) : undefined;  // v<n>, or the uid of a pending version
   const pending = !!manifest?.pending;
   const report = isReport(name);
-  const aliasPills = (list: string[] = []) => list.sort().map(a => <span className="pill alias" key={a}>{a}</span>);
   const gone = manifest?.status === "deleted";
   const isRun = (manifest?.metadata as Record<string, unknown> | undefined)?.kind === "run";
+  const size = manifest ? bytes(manifest.files.reduce((n, f) => n + (f.size ?? 0), 0)) : "";
 
   return (
     <main>
@@ -161,85 +158,75 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
       {art.data && manifest && number !== undefined && (
         <>
           <Hero
-            eyebrow={<><Link to="/">Projects</Link> / <Link to={`/p/${encodeURIComponent(project)}/${isRun ? "?tab=runs" : ""}`}>{project}</Link> / {report ? "report" : isRun ? "run" : "artifact"}</>}
+            eyebrow={<Crumbs items={[{ label: "Projects", to: "/" }, { label: project, to: `/p/${encodeURIComponent(project)}/${isRun ? "?tab=runs" : ""}` }, { label: report ? "report" : isRun ? "run" : "artifact" }]} />}
             title={name}
             subtitle={art.data.summary.metadata.title && report ? art.data.summary.metadata.title : undefined}
             status={manifest.status === "completed" ? number : pending ? `${shortOf(manifest)} pending` : `${number} ${manifest.status}`}
           >
-            <p className="alias-line">
-              {art.data.summary.latest ? <>latest <b>v{art.data.summary.latest}</b></> : "no completed version"} {aliasPills(Object.keys(art.data.aliases).filter(a => a !== "latest"))}
-            </p>
-            {report && manifest.status === "completed" && manifest.version != null && <p><a className="action-button open-report" href={reportHref(project, name, manifest.version)}>Open report {number}</a></p>}
+            <HeroLine>
+              {art.data.summary.latest ? <>latest <b>v{art.data.summary.latest}</b></> : "no completed version"} <AliasPills aliases={Object.keys(art.data.aliases).filter(a => a !== "latest")} />
+            </HeroLine>
+            {report && manifest.status === "completed" && manifest.version != null && <p><LinkButton primary className="open-report" href={reportHref(project, name, manifest.version)}>Open report {number}</LinkButton></p>}
           </Hero>
 
           {pending && (
-            <div className="admonition pending-note" role="note">
-              <p className="admonition-title">Pending</p>
+            <Note tone="pending" title="Pending">
               <p>This repo has this version, but its remote does not have it yet, so it has no number: its uid <code>{manifest.uid}</code> names it.
                 It is sent automatically (the next command, a running job, or <code>cairn sync</code>; <code>cairn status</code> lists it){manifest.sync === "rejected" ? <>. The remote refused it: {manifest.error}</> : "."}</p>
-            </div>
+            </Note>
           )}
 
           {gone && (
-            <div className="admonition tombstone-note" role="note">
-              <p className="admonition-title">Deleted</p>
+            <Note tone="deleted" title="Deleted">
               <p>{number} was deleted {when(manifest.deleted_at ?? "")}{manifest.deleted_by ? ` by ${manifest.deleted_by}` : ""}{manifest.reason ? `: ${manifest.reason}` : "."} Its files are gone; its number and uid are never used again, and its lineage is kept.</p>
-            </div>
+            </Note>
           )}
 
-          <section className="data-panel app-panel" aria-label="Reference">
-            <h2>Reference</h2>
-            <ul>
-              <li className="data-row"><span className="data-name">Version</span><span className="data-version">{exact(project, name, number)}</span><span className="data-files" /><CopyButton text={exact(project, name, number)} label="Copy exact version" done="Version copied" /></li>
-              {!gone && <li className="data-row"><span className="data-name">Pull</span><span className="data-version">cairn pull {exact(project, name, number)}</span><span className="data-files" /><CopyButton text={`cairn pull ${exact(project, name, number)}`} label="Copy pull command" done="Command copied" /></li>}
+          <Panel title="Reference">
+            <RefRows>
+              <RefRow name="Version" value={exact(project, name, number)} copy={{ text: exact(project, name, number), label: "Copy exact version", done: "Version copied" }} />
+              {!gone && <RefRow name="Pull" value={`cairn pull ${exact(project, name, number)}`} copy={{ text: `cairn pull ${exact(project, name, number)}`, label: "Copy pull command", done: "Command copied" }} />}
               {!gone && manifest.files.length > 0 && (
-                <li className="data-row">
-                  <span className="data-name">Files</span>
-                  <span className="data-version"><a className="action-button small" href={zipHref(project, name, number)} download>Download zip</a></span>
-                  <span className="data-files">{manifest.status === "running" ? "what is synced so far; the run is still running" : bytes(manifest.files.reduce((n, f) => n + (f.size ?? 0), 0))}</span>
-                  <span />
-                </li>
+                <RefRow name="Files" value={<LinkButton small href={zipHref(project, name, number)} download>Download zip</LinkButton>}
+                  extra={manifest.status === "running" ? "what is synced so far; the run is still running" : size} />
               )}
-              {manifest.digest && <li className="data-row"><span className="data-name">Digest</span><span className="data-version mono">{manifest.digest}</span><span className="data-files" /><CopyButton text={manifest.digest} label="Copy digest" done="Digest copied" /></li>}
-            </ul>
-          </section>
+              {manifest.digest && <RefRow name="Digest" value={manifest.digest} mono copy={{ text: manifest.digest, label: "Copy digest", done: "Digest copied" }} />}
+            </RefRows>
+          </Panel>
 
-          <div className="metric-grid app-metrics">
-            <div className="metric"><span>Files</span><strong>{gone ? 0 : manifest.files.length}</strong><small>{gone ? "deleted" : bytes(manifest.files.reduce((n, f) => n + (f.size ?? 0), 0))}</small></div>
-            <div className="metric"><span>Created</span><strong className="small-value">{when(manifest.created).replace(/-/g, "\u2011")}</strong><small>{manifest.source?.host ? `on ${manifest.source.host}` : " "}</small></div>
-            <div className="metric"><span>Versions</span><strong>{art.data.versions.length}</strong><small>{manifest.label ? `label ${manifest.label}` : " "}</small></div>
-          </div>
+          <MetricGrid>
+            <MetricCard label="Files" value={gone ? 0 : manifest.files.length} note={gone ? "deleted" : size} />
+            <MetricCard label="Created" compact value={when(manifest.created).replace(/-/g, "\u2011")} note={manifest.source?.host ? `on ${manifest.source.host}` : undefined} />
+            <MetricCard label="Versions" value={art.data.versions.length} note={manifest.label ? `label ${manifest.label}` : undefined} />
+          </MetricGrid>
 
           {isRun && !gone && !pending && <RunPanel project={project} name={name} sel={number} status={manifest.status} />}
 
-          <section className="app-section">
-            <div className="section-head"><h2>Versions</h2>
-              <Select label="Version" value={number} onChange={v => location.assign(artifactHref(project, name, v))}
-                choices={[...art.data.versions].reverse().map(v => ({ value: selOf(v), label: `${shortOf(v)}${v.label ? ` (${v.label})` : ""}`, note: v.status !== "completed" ? v.status : undefined }))} />
-            </div>
-            <Table head={["Version", "Label", "Status", "Created", "Aliases", "Source host"]}>
+          <Section title="Versions" actions={
+            <Select label="Version" value={number} onChange={v => location.assign(artifactHref(project, name, v))}
+              choices={[...art.data.versions].reverse().map(v => ({ value: selOf(v), label: `${shortOf(v)}${v.label ? ` (${v.label})` : ""}`, note: v.status !== "completed" ? v.status : undefined }))} />
+          }>
+            <DataTable head={["Version", "Label", "Status", "Created", "Aliases", "Source host"]}>
               {[...art.data.versions].reverse().map(v => (
-                <tr key={v.uid} className={[selOf(v) === number ? "selected" : "", v.status === "deleted" ? "tombstone" : "", v.pending ? "pending" : ""].join(" ").trim()}>
+                <tr key={v.uid} className={[selOf(v) === number ? "selected" : "", v.status === "deleted" ? "tombstone" : "", v.pending ? "pending" : ""].join(" ").trim() || undefined}>
                   <td className="nowrap"><Link to={artifactHref(project, name, selOf(v))} title={v.pending ? v.uid : undefined}><strong>{shortOf(v)}</strong></Link>{report && v.status === "completed" && v.version != null && <> &middot; <a href={reportHref(project, name, v.version)}>open</a></>}</td>
                   <td>{v.label}</td>
-                  <td><Pill status={v.status} />{v.status === "deleted" && <span className="muted tombstone-reason" title={`deleted ${v.deleted_at ?? ""}${v.deleted_by ? " by " + v.deleted_by : ""}`}> {v.reason || when(v.deleted_at ?? "")}</span>}</td>
+                  <td><StatusPill status={v.status} />{v.status === "deleted" && <span className="muted tombstone-reason" title={`deleted ${v.deleted_at ?? ""}${v.deleted_by ? " by " + v.deleted_by : ""}`}> {v.reason || when(v.deleted_at ?? "")}</span>}</td>
                   <td className="muted nowrap">{when(v.created)}</td>
-                  <td>{v.version != null ? aliasPills(byVersion[v.version]) : null}</td>
+                  <td>{v.version != null && <AliasPills aliases={byVersion[v.version]} />}</td>
                   <td className="muted">{v.source?.host}</td>
                 </tr>
               ))}
-            </Table>
-          </section>
+            </DataTable>
+          </Section>
 
-          <section className="app-section">
-            <div className="section-head"><h2>Lineage of {shortOf(manifest)}</h2></div>
-            {!pending && ["completed", "deleted", "running", "failed"].includes(manifest.status) ? <Graph root={exact(project, name, number)} project={project} /> : <p className="hint">Lineage is shown once the remote has the version (its inputs are listed below).</p>}
-          </section>
+          <Section title={`Lineage of ${shortOf(manifest)}`}>
+            {!pending && ["completed", "deleted", "running", "failed"].includes(manifest.status) ? <Graph root={exact(project, name, number)} project={project} /> : <Hint>Lineage is shown once the remote has the version (its inputs are listed below).</Hint>}
+          </Section>
 
-          <section className="app-section">
-            <div className="section-head"><h2>Files of {shortOf(manifest)}</h2></div>
-            {gone ? <p className="hint">This version was deleted: its files are gone.</p> : manifest.files.length ? <Files project={project} name={name} version={number} files={manifest.files} /> : <p className="hint">This version has no files.</p>}
-          </section>
+          <Section title={`Files of ${shortOf(manifest)}`}>
+            {gone ? <Hint>This version was deleted: its files are gone.</Hint> : manifest.files.length ? <Files project={project} name={name} version={number} files={manifest.files} /> : <Hint>This version has no files.</Hint>}
+          </Section>
 
           <RefList title="Inputs" refs={manifest.inputs} project={project} empty="No inputs recorded." deleted={ver.data!.deleted} />
           <RefList title="Consumers" refs={ver.data!.consumers} project={project} empty="No consumers yet." deleted={ver.data!.deleted} />

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { api, paths, useApi, type Me, type Project, type Summary } from "./api";
-import { Hero, Loading } from "./components";
+import { Field, Hero } from "./components";
 import { ArtifactPage } from "./pages/Artifact";
 import { ProjectPage } from "./pages/Project";
 import { ProjectsPage } from "./pages/Projects";
@@ -78,9 +78,7 @@ function Login() {
     <main>
       <Hero eyebrow="Cairn" title="Log in" subtitle="Enter a token: the repo's owner token or one scoped to a project (or open the one-time link cairn ui printed)." />
       <form className="login-form" onSubmit={submit}>
-        <label>Token
-          <input type="password" autoComplete="current-password" autoFocus required value={token} onChange={e => setToken(e.target.value)} />
-        </label>
+        <Field label="Token" type="password" autoComplete="current-password" autoFocus required value={token} onChange={e => setToken(e.target.value)} />
         {error && <p className="login-error" role="alert">{error}</p>}
         <div className="form-actions"><button className="primary" type="submit" disabled={busy}>Open repo</button></div>
       </form>
@@ -118,4 +116,3 @@ export function App() {
   );
 }
 
-export { Loading };

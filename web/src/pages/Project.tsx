@@ -1,7 +1,9 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { paths, useApi, type Project, type Summary } from "../api";
-import { ErrorNote, Hero, Loading, Select, Table } from "../components";
+import { AliasPills, Crumbs, DataTable, ErrorNote, Hero, Hint, Loading, Pill, SearchInput, Select, Tabs, Toolbar } from "../components";
 import { artifactHref, isReport, isRunName, reportHref, when } from "../util";
+
+type Tab = "reports" | "artifacts" | "runs";
 
 const matches = (a: Summary, query: string) =>
   !query || `${a.name} ${JSON.stringify(a.metadata)} ${Object.keys(a.aliases).join(" ")}`.toLowerCase().includes(query.toLowerCase());
@@ -11,7 +13,7 @@ export function ProjectPage() {
   const { data, error, loading } = useApi<{ project: Project; artifacts: Summary[] }>(paths.project(project));
   const [params, setParams] = useSearchParams();
   const asked = params.get("tab");
-  const query = params.get("q") ?? "", tab = asked === "artifacts" || asked === "runs" ? asked : "reports", sort = params.get("sort") ?? "updated";
+  const query = params.get("q") ?? "", tab: Tab = asked === "artifacts" || asked === "runs" ? asked : "reports", sort = params.get("sort") ?? "updated";
   const set = (key: string, value: string) => setParams(prev => { const next = new URLSearchParams(prev); value ? next.set(key, value) : next.delete(key); return next; }, { replace: true });
   document.title = `${data?.project.title ?? project} - Cairn`;
 
@@ -29,21 +31,18 @@ export function ProjectPage() {
       {loading && <Loading />}
       {data && (
         <>
-          <Hero eyebrow={<><Link to="/">Projects</Link> / {project}</>} title={data.project.title || project} subtitle={data.project.description} status={`${all.length} artifact${all.length === 1 ? "" : "s"}`} />
-          <div className="toolbar">
-            <input type="search" placeholder="Search names, titles, status, aliases" aria-label="Search" value={query} onChange={e => set("q", e.target.value)} />
+          <Hero eyebrow={<Crumbs items={[{ label: "Projects", to: "/" }, { label: project }]} />} title={data.project.title || project} subtitle={data.project.description} status={`${all.length} artifact${all.length === 1 ? "" : "s"}`} />
+          <Toolbar>
+            <SearchInput label="Search" placeholder="Search names, titles, status, aliases" value={query} onChange={v => set("q", v)} />
             <Select label="Sort" value={sort} onChange={v => set("sort", v === "updated" ? "" : v)}
               choices={[{ value: "updated", label: "Sort: updated" }, { value: "name", label: "Sort: name" }]} />
-          </div>
-          <div className="tabs" role="tablist">
-            <button role="tab" aria-selected={tab === "reports"} onClick={() => set("tab", "")}>Reports <span>{reports.length}</span></button>
-            <button role="tab" aria-selected={tab === "artifacts"} onClick={() => set("tab", "artifacts")}>Artifacts <span>{others.length}</span></button>
-            <button role="tab" aria-selected={tab === "runs"} onClick={() => set("tab", "runs")}>Runs <span>{runs.length}</span></button>
-          </div>
+          </Toolbar>
+          <Tabs<Tab> label="Kinds" value={tab} onChange={v => set("tab", v === "reports" ? "" : v)}
+            tabs={[{ value: "reports", label: "Reports", count: reports.length }, { value: "artifacts", label: "Artifacts", count: others.length }, { value: "runs", label: "Runs", count: runs.length }]} />
           {tab === "reports" && (reports.length === 0
-            ? <p className="hint">{reportCount ? "No report matches." : "No reports yet."}</p>
+            ? <Hint>{reportCount ? "No report matches." : "No reports yet."}</Hint>
             : (
-              <Table head={["Report", "Status", "Latest", "Updated"]}>
+              <DataTable head={["Report", "Status", "Latest", "Updated"]}>
                 {reports.map(a => {
                   const title = a.metadata.title || a.name.split("/")[1];
                   return (
@@ -52,33 +51,33 @@ export function ProjectPage() {
                         {a.latest ? <a href={reportHref(project, a.name)}><strong>{title}</strong></a> : <strong>{title}</strong>}
                         {a.metadata.summary && <><br /><span className="muted">{a.metadata.summary}</span></>}
                       </td>
-                      <td>{a.metadata.status && <span className="pill">{a.metadata.status}</span>}</td>
-                      <td className="nowrap">{a.latest ? <Link to={artifactHref(project, a.name, a.latest)}>v{a.latest}</Link> : a.pending ? <span className="pill pending">pending</span> : "none"}<br /><span className="muted">{a.versions} version{a.versions === 1 ? "" : "s"}</span></td>
+                      <td>{a.metadata.status && <Pill>{a.metadata.status}</Pill>}</td>
+                      <td className="nowrap">{a.latest ? <Link to={artifactHref(project, a.name, a.latest)}>v{a.latest}</Link> : a.pending ? <Pill tone="pending">pending</Pill> : "none"}<br /><span className="muted">{a.versions} version{a.versions === 1 ? "" : "s"}</span></td>
                       <td className="muted nowrap">{when(a.updated)}{a.latest && <><br /><a href={reportHref(project, a.name)}>Open report</a></>}</td>
                     </tr>
                   );
                 })}
-              </Table>
+              </DataTable>
             ))}
           {tab === "artifacts" && (others.length === 0
-            ? <p className="hint">{all.length > reportCount + runCount ? "No artifact matches." : "No other artifacts yet."}</p>
+            ? <Hint>{all.length > reportCount + runCount ? "No artifact matches." : "No other artifacts yet."}</Hint>
             : (
-              <Table head={["Artifact", "Latest", "Aliases", "Versions", "Updated"]}>
+              <DataTable head={["Artifact", "Latest", "Aliases", "Versions", "Updated"]}>
                 {others.map(a => (
                   <tr key={a.name}>
                     <td><Link to={artifactHref(project, a.name)}><strong>{a.name}</strong></Link></td>
-                    <td>{a.latest ? `v${a.latest}` : a.pending ? <span className="pill pending">pending</span> : "none"}</td>
-                    <td>{Object.keys(a.aliases).filter(x => x !== "latest").sort().map(x => <span className="pill alias" key={x}>{x}</span>)}</td>
+                    <td>{a.latest ? `v${a.latest}` : a.pending ? <Pill tone="pending">pending</Pill> : "none"}</td>
+                    <td><AliasPills aliases={Object.keys(a.aliases).filter(x => x !== "latest")} /></td>
                     <td>{a.versions}</td>
                     <td className="muted nowrap">{when(a.updated)}</td>
                   </tr>
                 ))}
-              </Table>
+              </DataTable>
             ))}
           {tab === "runs" && (runs.length === 0
-            ? <p className="hint">{runCount ? "No run matches." : "No runs yet. Every process that uses or publishes artifacts is one (cairn.init)."}</p>
+            ? <Hint>{runCount ? "No run matches." : "No runs yet. Every process that uses or publishes artifacts is one (cairn.init)."}</Hint>
             : (
-              <Table head={["Run", "Latest completed", "Config", "Versions", "Updated"]}>
+              <DataTable head={["Run", "Latest completed", "Config", "Versions", "Updated"]}>
                 {runs.map(a => {
                   const config = a.metadata.config && typeof a.metadata.config === "object" ? Object.keys(a.metadata.config).slice(0, 4).join(", ") : "";
                   return (
@@ -91,7 +90,7 @@ export function ProjectPage() {
                     </tr>
                   );
                 })}
-              </Table>
+              </DataTable>
             ))}
         </>
       )}

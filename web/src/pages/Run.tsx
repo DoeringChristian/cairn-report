@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { paths, usePoll, type Row, type RunData, type Tail } from "../api";
-import { Pill, Table } from "../components";
+import { Hint, KeyValueTable, Loading, Section, StatusPill, SubHeading, TextBlock } from "../components";
 import { when } from "../util";
 
 const REFRESH = 5000;
@@ -62,7 +62,7 @@ function Chart({ title, points, xLabel }: { title: string; points: Point[]; xLab
 function Charts({ rows, empty, preferSteps }: { rows: Row[]; empty: string; preferSteps: boolean }) {
   const bySteps = preferSteps && rows.some(row => typeof row.step === "number");
   const found = series(bySteps ? rows.filter(row => typeof row.step === "number") : rows, bySteps);
-  if (!found.size) return <p className="hint">{empty}</p>;
+  if (!found.size) return <Hint>{empty}</Hint>;
   return (
     <div className="run-charts">
       {[...found.entries()].map(([key, points]) => <Chart key={key} title={key} points={points} xLabel={bySteps ? "step" : "s"} />)}
@@ -77,7 +77,7 @@ function LogTail({ title, tail, follow }: { title: string; tail: Tail | null; fo
   return (
     <div className="run-log">
       <p className="run-log-title"><span className="mono">{title}</span>{tail.truncated && <span className="muted"> the last {Math.round(tail.text.length / 1024)} KB of {Math.round(tail.size / 1024)} KB</span>}</p>
-      {tail.text ? <pre ref={box} className="preview-text">{tail.text}</pre> : <p className="hint">Empty.</p>}
+      {tail.text ? <TextBlock ref={box}>{tail.text}</TextBlock> : <Hint>Empty.</Hint>}
     </div>
   );
 }
@@ -95,11 +95,7 @@ function Info({ info, sweep }: { info: Record<string, any> | null; sweep: Record
   if (info?.started) rows.push(["Started", when(info.started)]);
   if (sweep?.label && sweep?.num !== undefined) rows.push(["Sweep", `trial ${sweep.num} of ${sweep.label}`]);
   if (Array.isArray(sweep?.trials)) rows.push(["Sweep", `${sweep.trials.length} trials: ${sweep.trials.map((t: any) => `${t.trial} ${t.status}`).join(", ")}`]);
-  return (
-    <Table head={["", ""]}>
-      {rows.map(([key, value]) => <tr key={key}><td className="nowrap"><strong>{key}</strong></td><td className="mono wrap-any">{value}</td></tr>)}
-    </Table>
-  );
+  return <KeyValueTable rows={rows} />;
 }
 
 /** The Run panel of a version of kind "run": its metrics, the machine's, the output, and where it ran. While the
@@ -110,29 +106,25 @@ export function RunPanel({ project, name, sel, status }: { project: string; name
   const data = run.data;
   const live = data ? data.status === "running" : running;
   return (
-    <section className="app-section run-panel" aria-label="Run">
-      <div className="section-head">
-        <h2>Run</h2>
-        <span className="muted">{data && <Pill status={data.status} />} {live ? `refreshing every ${REFRESH / 1000} s` : ""}</span>
-      </div>
-      {run.error && <p className="hint">Run data unavailable: {run.error.message}</p>}
-      {!data && !run.error && <p className="hint state-note">Loading the run…</p>}
+    <Section title="Run" label="Run" className="run-panel" actions={<span className="muted">{data && <StatusPill status={data.status} />} {live ? `refreshing every ${REFRESH / 1000} s` : ""}</span>}>
+      {run.error && <Hint>Run data unavailable: {run.error.message}</Hint>}
+      {!data && !run.error && <Loading what="Loading the run" />}
       {data && (
         <>
           {data.error && <LogTail title="logs/error.txt" tail={data.error} follow={false} />}
-          <h3>Metrics</h3>
+          <SubHeading>Metrics</SubHeading>
           <Charts rows={data.metrics.rows} preferSteps empty={live ? "No metrics synced yet (run.add({...}))." : "This run logged no metrics (run.add({...}))."} />
-          {data.metrics.total > data.metrics.rows.length && <p className="hint">{data.metrics.rows.length} of {data.metrics.total} entries shown, evenly thinned.</p>}
-          <h3>System</h3>
+          {data.metrics.total > data.metrics.rows.length && <Hint>{data.metrics.rows.length} of {data.metrics.total} entries shown, evenly thinned.</Hint>}
+          <SubHeading>System</SubHeading>
           <Charts rows={data.system.rows} preferSteps={false} empty="No system metrics (system/metrics.jsonl)." />
-          <h3>Output</h3>
-          {!data.stdout && !data.stderr && <p className="hint">No captured output (logs/stdout.txt, logs/stderr.txt).</p>}
+          <SubHeading>Output</SubHeading>
+          {!data.stdout && !data.stderr && <Hint>No captured output (logs/stdout.txt, logs/stderr.txt).</Hint>}
           <LogTail title="logs/stdout.txt" tail={data.stdout} follow={live} />
           <LogTail title="logs/stderr.txt" tail={data.stderr} follow={live} />
-          <h3>Where it ran</h3>
+          <SubHeading>Where it ran</SubHeading>
           <Info info={data.info} sweep={data.sweep} />
         </>
       )}
-    </section>
+    </Section>
   );
 }

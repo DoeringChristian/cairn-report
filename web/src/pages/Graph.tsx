@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, paths, type Lineage, type LineageNode } from "../api";
+import { Button, Card, Hint, Loading, ToggleGroup } from "../components";
 import { artifactHref, parseRef } from "../util";
 
 const W = 210, H = 46, GAP_X = 84, GAP_Y = 14, PAD = 16, PAD_X = 26;
@@ -127,10 +128,10 @@ export function Graph({ root, project }: { root: string; project: string }) {
   const hasRuns = useMemo(() => Object.entries(info).some(([ref, node]) => ref !== root && node.kind === "run"), [info, root]);
   const view = useMemo(() => (dataOnly ? collapse(info, root) : info), [info, root, dataOnly]);
   const model = useMemo(() => (view[root] ? layout(root, view) : null), [view, root]);
-  if (error) return <p className="hint">Lineage unavailable: {error}</p>;
-  if (!model) return <p className="hint state-note">Loading lineage…</p>;
+  if (error) return <Hint>Lineage unavailable: {error}</Hint>;
+  if (!model) return <Loading what="Loading lineage" />;
   const { placed, edges, width, height } = model;
-  if (edges.length === 0) return <p className="hint">This version has no inputs and no consumers.</p>;
+  if (edges.length === 0) return <Hint>This version has no inputs and no consumers.</Hint>;
 
   const expandable = (p: Placed) => {
     if (p.col === 0) return false;
@@ -140,21 +141,18 @@ export function Graph({ root, project }: { root: string; project: string }) {
   const anyExpandable = Object.values(placed).some(expandable);
 
   return (
-    <div className="graph-card">
-      <div className="graph-bar">
-        <span className="muted">Inputs on the left, consumers on the right. Click a node to open it, + to expand one more level.</span>
-        {hasRuns && (
-          <span className="graph-toggle" role="group" aria-label="Runs in the graph">
-            <button className="action-button small" aria-pressed={!dataOnly} onClick={() => setDataOnly(false)}>Show runs</button>
-            <button className="action-button small" aria-pressed={dataOnly} onClick={() => setDataOnly(true)}>Data only</button>
-          </span>
-        )}
-        <button className="action-button" disabled={busy || !anyExpandable} onClick={async () => {
-          setBusy(true);
-          try { merge(await api<Lineage>(paths.lineage(root, 3))); } catch (e) { setError((e as Error).message); }
-          setBusy(false);
-        }}>Expand all (3 levels)</button>
-      </div>
+    <Card className="graph-card" bar={<>
+      <span className="muted">Inputs on the left, consumers on the right. Click a node to open it, + to expand one more level.</span>
+      {hasRuns && (
+        <ToggleGroup label="Runs in the graph" value={dataOnly ? "data" : "runs"} onChange={v => setDataOnly(v === "data")}
+          options={[{ value: "runs", label: "Show runs" }, { value: "data", label: "Data only" }]} />
+      )}
+      <Button disabled={busy || !anyExpandable} onClick={async () => {
+        setBusy(true);
+        try { merge(await api<Lineage>(paths.lineage(root, 3))); } catch (e) { setError((e as Error).message); }
+        setBusy(false);
+      }}>Expand all (3 levels)</Button>
+    </>}>
       <div className="graph-scroll">
         <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Lineage graph">
           {edges.map(([a, b]) => {
@@ -188,7 +186,7 @@ export function Graph({ root, project }: { root: string; project: string }) {
           })}
         </svg>
       </div>
-      {truncated && <p className="hint">The graph was capped; open a node to continue from there.</p>}
-    </div>
+      {truncated && <Hint>The graph was capped; open a node to continue from there.</Hint>}
+    </Card>
   );
 }
