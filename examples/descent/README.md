@@ -6,7 +6,6 @@ recorded. No server is needed; everything lives in the project's repo, `.cairn/`
 
 ```text
 descent/
-├── cairn.toml                     what makes the folder a project (a repo without a remote)
 ├── data/quadratic/problem.json    the dataset (a matrix and a start point)
 ├── descent.py                     the experiment: a run of runs/descent that publishes the result `descent`
 ├── reports/descent-study/report.md   the report: declares its inputs, reads only them
@@ -16,7 +15,8 @@ Run it with Cairn installed (`pip install "cairn[ui] @ git+https://github.com/Do
 plus matplotlib):
 
 ```bash
-cd examples/descent                                      # its own repo: examples/descent/.cairn/
+cd examples/descent
+cairn init                                               # its own repo: examples/descent/.cairn/ (no remote)
 cairn publish data/quadratic datasets/quadratic          # datasets/quadratic@v1
 python descent.py                                        # runs/descent@v1 and its result descent@v1
 cairn publish reports/descent-study                      # reports/descent-study@v1, pinned to its inputs
@@ -26,8 +26,8 @@ cairn show 3f9a2c1                                       # the same version by i
 cairn ui                                                 # runs (charts, logs), versions, files, lineage, the report
 ```
 
-Run these from this folder: Cairn uses the repo of the folder it runs in (the nearest `.cairn/` or
-`cairn.toml` upward), so from elsewhere the commands would use another repo.
+Run these from this folder: Cairn uses the repo of the folder it runs in (the nearest `.cairn/`
+upward), so from elsewhere the commands would use another repo.
 
 `descent.py` is a run: `cairn.init` makes the process a version of `runs/descent` (running until the
 script exits), `cairn.use` records the dataset's exact version as the run's input, `cairn.run.add` logs the
@@ -65,8 +65,8 @@ Things to try:
 - **Strictness.** Add `open("data/quadratic/problem.json")` to a `python exec` block of the report:
   the build fails, because the report did not declare that file as an input.
 - **A remote.** `cairn server ~/cairn-remote` in another terminal (it prints a token and starts the
-  UI), then add `remote = "http://127.0.0.1:8800/descent-example"` under `[repo]` here (a remote is
-  `<server>/<project>`; the first sync with the owner token makes the project), put the token in
+  UI), then `cairn remote set http://127.0.0.1:8800/descent-example` here (a remote is
+  `<server>/<project>`; the first sync makes the project), copy the server's token file to
   `.cairn/token` (or `export CAIRN_TOKEN=<token>`), and run again: the versions this repo numbered itself are sent first (the remote numbers them), and the run is
   synced while it runs, so the remote's UI shows it live. Stop the server and run again: everything still
   works, the new versions wait as pending (`cairn status`) and are sent by the next command once the server

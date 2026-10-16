@@ -33,7 +33,7 @@ cairn server                        # or: serve the repo to other machines (the 
 
 Nothing needs to run: the repo is a folder. `cairn ui` creates it if needed, prints a one-time login
 link and opens it in the browser. `cairn server` serves the same folder to other machines, which name its
-project as their remote (`[repo] remote = "http://host:8800/my-project"`); the project's own scripts and commands keep
+project as their remote (`cairn remote set http://host:8800/my-project`); the project's own scripts and commands keep
 opening the folder directly, whether the server runs or not. In Python a job is a run that uses some
 versions and publishes others (see "Runs: the Python API"):
 
@@ -80,7 +80,7 @@ The design is fixed in [`docs/architecture.md`](docs/architecture.md); in short:
   directly: scripts, CLI commands, `cairn ui`, and `cairn server`, which is just another such process.
   Any number of processes may read and write at once; each write is one SQLite transaction, so a version
   is stored whole or not at all, and numbers are contiguous however many processes publish.
-- **A project has one repo and at most one remote** (`[repo] remote = "https://host/my-study"`: the
+- **A project has one repo and at most one remote** (`cairn remote set https://host/my-study`: the
   project `my-study` on a `cairn server`). Locally there are no projects: the repo holds its project only,
   and references name artifacts without one (`descent@v3`, `datasets/crops@best`). A server hosts many
   projects in one repo folder, each at `<server>/<project>` as if it were its own repo; they share its one
@@ -113,7 +113,7 @@ The design is fixed in [`docs/architecture.md`](docs/architecture.md); in short:
  laptop                         server machine                       cluster (shared filesystem)
  project/.cairn   ── sync ──▶   cairn server: the remote, a   ◀── sync ──  /work/me/study/.cairn
  database, blobs, ◀── copies ── repo on its local disk         ── copies ─▶ outbox + blobs, no database;
- outbox                         (+ tokens, + its UI)                     jobs write the outbox, the
+ outbox                         (+ its token, + its UI)                   jobs write the outbox, the
                                                                          login node sends it
                                                                          (cairn sync --watch)
 ```
@@ -125,12 +125,11 @@ reports that recorded them stay valid).
 ### New in 0.14: the repo layout
 
 0.14 introduces this design. Cairn was not in use before it, so there is no migration and no
-compatibility code: a project starts a fresh repo in `.cairn/`. `[store]` in `cairn.toml` is an unknown
-key (use `[repo]`), the environment variable `CAIRN_STORE_TOKEN` is now `CAIRN_TOKEN`, and the old
+compatibility code: a project starts a fresh repo in `.cairn/`, whose `config.toml` holds every setting
+(`cairn.toml` is gone), the environment variable `CAIRN_STORE_TOKEN` is now `CAIRN_TOKEN`, and the old
 `.cairn/store`, `.cairn/pending`, and `.cairn/cache` folders are not read. The hub importer
 (`cairn migrate`) is gone. For the names inherited from cairn-report: the distribution and the command
-are `cairn` (also `python -m cairn`), the configuration file is `cairn.toml`, and `cairn server` /
-`cairn token` replace `cairn-report store serve` / `store token`. The old Cairn tracker (cairn-track) cannot be installed in the same environment.
+are `cairn` (also `python -m cairn`), and `cairn server` replaces `cairn-report store serve`. The old Cairn tracker (cairn-track) cannot be installed in the same environment.
 
 ## Install
 
@@ -246,8 +245,8 @@ table = read_csv(inputs["crops"] / "tables" / "cases.csv")
 
 Images use `input:descent/figures/trajectory.png`. The lightbox of such a figure
 shows the input reference (`descent@v3//figures/trajectory.png`) and the exact
-artifact version. The repo is the project's (with its remote, if `[repo] remote`
-names one); the build does not touch `.cairn-inputs.jsonl`: a report records its inputs in its
+artifact version. The repo is the project's (with its remote, if it has
+one); the build does not touch `.cairn-inputs.jsonl`: a report records its inputs in its
 own manifest instead.
 
 **Strict.** A report may read only its own folder and its declared inputs.
@@ -554,10 +553,10 @@ metadata as readable JSON Lines, for backups and inspection.
 
 To share a repo with other machines, serve it over HTTP; other machines name one of its projects as their
 remote, `<server>/<project>` (the last path segment is the project, also behind a path prefix:
-`https://host/prefix/my-study`). The first sync with the owner token creates a project the server does not
-have; a project-scoped token only reaches its existing project. The two halves are separate:
+`https://host/prefix/my-study`). The first sync creates a project the server does not have. The two
+halves are separate:
 
-- the **server** (`cairn server`) serves a repo: a JSON API and file downloads, bearer tokens, no pages;
+- the **server** (`cairn server`) serves a repo: a JSON API and file downloads, one bearer token, no pages;
 - the **UI** (`cairn ui`) is a separate process that explores a repo in a browser: the project's (which
   reads through its remote, if it has one; one project), a repo folder or a server (their projects), or one
   project on a server (`--remote <server>/<project>`), so it can run on a laptop against a remote on a cluster.
@@ -569,17 +568,20 @@ cairn server /srv/cairn --no-ui [--port 8800] [--max-blob-gb 50]     # the serve
 ```
 
 Without a folder, `cairn server` serves the project's repo, creating it if needed, with its project at
-`<server>/<project folder name>`; a project with `[repo] remote` is refused (its repo is a copy of that
+`<server>/<project folder name>`; a project with a remote is refused (its repo is a copy of that
 remote's). A server's own repo folder (`cairn server /srv/cairn`) has no project of its own: its projects are
 the ones clients sync to it. The server is just one more process
 that opens the repo: the project's scripts and commands on the same machine keep opening the folder
 directly while it runs, and starting or stopping it changes nothing for them. One server per repo
-(`server.lock`). A taken port is an error, never a silent move, because clients' `[repo] remote` names it.
+(`server.lock`). A taken port is an error, never a silent move, because clients' remote URL names it.
 
 The first `cairn server` run on a new folder creates it with a random owner token (owner-only, in
 `<repo>/token`); every launch prints `Repo: <url>`, `UI: <url>`, a one-time `Log in:` link (a random
-code that works once within 10 minutes, never the token) and `Token: <owner token>` to the terminal.
-Binding to a non-local `--host` warns: the server speaks plain HTTP. By default `cairn server` also starts
+code that works once, never the token), `Token: <owner token>`, and what other machines run
+(`cairn remote set http://<machine>:<port>/<project>`, plus where to put the token). Binding to a
+non-local `--host` warns: the server speaks plain HTTP (fine over a VPN such as Tailscale, or an SSH
+tunnel; else put an HTTPS reverse proxy in front). The block always ends with `Serving; Ctrl-C stops it.`
+By default `cairn server` also starts
 `cairn ui` as a child process (own port: `--ui-port`, default `--port` + 1; same `--host`) pointed at this
 server. The child gets the owner token only in its environment, never on its command line, and stops with
 the server; if the UI dies, the server keeps running and prints a warning. `--no-ui` starts the server alone.
@@ -604,42 +606,32 @@ taskpolicy -b python bench/bench_store.py --json out.json     # macOS: backgroun
 nice python bench/bench_store.py --size-mb 1024 --clients 32   # elsewhere; see --help
 ```
 
+That token is the only credential: it reaches every project and creates one on its first sync.
+To use a remote in a project:
+
 ```bash
-cairn token create /srv/cairn --project my-study --write --name cluster   # printed once; makes the project if new
-cairn token list /srv/cairn       # names, projects, access: never token values
-cairn token revoke /srv/cairn cluster
+cairn remote set https://cairn.example.org/my-study   # <server>/<project>: the source of truth from now on
+cairn remote                                          # prints it (or "no remote")
+cairn remote remove                                   # the repo is the source of truth again
 ```
 
-The owner token can do everything. A scoped token reads one project, and publishes to it only
-with `--write`; everything else is 403 and a scoped token only sees its own project. Scoped
-tokens are stored hashed (`tokens.jsonl`); revoking one takes effect immediately, also for
-UI sessions.
+`cairn remote set` checks the URL and writes `[remote] url` into `.cairn/config.toml` (see
+"Configuration"); the next command syncs, and the versions this repo numbered itself are adopted (sent
+oldest first and numbered by the remote). After `cairn remote remove` versions keep their numbers and
+pending ones stay pending. Plain HTTP to another machine works; each process warns once that the token
+is sent unencrypted.
 
-In a project that uses a remote:
-
-```toml
-[repo]
-remote = "https://cairn.example.org/my-study"     # <server>/<project>: the source of truth (omit: the repo is)
-token_file = "secrets/cairn-token"                # optional (chmod 600): see "The token" below
-allow_http = false                                # plain HTTP to a non-local remote (default: refused)
-exclude = [".submitit/**/*.pkl"]                  # never published: gitignore-style globs on project paths
-interval = 30                                     # seconds between live syncs of a running version
-heartbeat_timeout = 600                           # seconds without a heartbeat before a running version is failed
-allow_network_fs = false                          # see "Clusters"
-```
-
-**The token.** A client looks for its token in four places, and the first one found wins:
+**The token.** A client looks for its token in three places, and the first one found wins:
 
 1. `$CAIRN_TOKEN`;
-2. `[repo] token_file` (relative to the project folder);
-3. the repo's `token` file, `.cairn/token`;
-4. `~/.config/cairn/token`.
+2. the repo's `token` file, `.cairn/token`;
+3. `~/.config/cairn/token`.
 
-So copying the token file into the project's `.cairn/` (or into `~/.config/cairn/` for every project of a
-user) is all a machine needs. A token file other users can read is used with a warning (`chmod 600`). When
-the remote refuses a token (401, 403), the message says where it came from, e.g. `the token from
+So copying the server's `<repo>/token` into the project's `.cairn/` (or into `~/.config/cairn/` for every
+project of a user) is all a machine needs. A token file other users can read is used with a warning
+(`chmod 600`). When the remote refuses a token, the message says where it came from, e.g. `the token from
 /work/me/study/.cairn/token was refused by https://cairn.example.org/my-study`, never the token itself;
-with none found, it lists the four places. (`.cairn/token` is also the owner token of a repo that
+with none found, it lists the three places. (`.cairn/token` is also the owner token of a repo that
 `cairn server` serves; the server only ever reads its own repo's `token`.)
 
 ### Commands
@@ -655,6 +647,7 @@ cairn pull x@latest --into DIR [--no-record]               # copy it into DIR in
 
 ```bash
 cairn init [FOLDER]                                        # create a repo (see "Finding the repo")
+cairn remote [set URL | remove]                            # the remote: show, set, or drop it
 cairn artifacts [--prefix reports/]                        # latest version, version count, aliases
 cairn versions datasets/crops                              # number (or pending), short id, status, label, created, uid, size
 cairn show datasets/crops@paper                            # short id, metadata, files, inputs, consumers
@@ -686,7 +679,7 @@ is exempt: it publishes a running job by design.
 
 ### The Python API
 
-`cairn.connect()` opens the project's repo, with its remote if `[repo] remote` names one. For an admin or a
+`cairn.connect()` opens the project's repo, with its remote if it has one. For an admin or a
 test, `cairn.connect("path/to/.cairn")` opens another repo folder and `cairn.connect("https://host/other",
 token=...)` another remote project; what they pull never becomes an input of this project's runs. Objects
 are thin and lazy: they fetch on first access and keep what they fetched.
@@ -752,7 +745,7 @@ into the repo; they need the remote to answer.
 ```bash
 cairn delete datasets/crops@v3 --reason "wrong crop size"   # one version (also @uid, @alias, @label)
 cairn delete --artifact scratch/tmp                          # every version of an artifact (all or none)
-cairn delete datasets/crops@v1 --force                       # a protected version too (the owner token on a remote)
+cairn delete datasets/crops@v1 --force                       # a protected version too
 ```
 
 A deleted version becomes a **tombstone**: it stays in the version list (status `deleted`, with
@@ -795,8 +788,7 @@ that removes it, while a publish checks its blobs inside
 its own transaction: a publish racing a sweep either finds its blobs kept, or is answered "upload these
 blobs first" (409 with `missing`), and the client uploads them and sends the version again, so it ends
 complete and downloadable. Stale temporary uploads (untouched for the grace period, at least an hour)
-go too. A dry run changes nothing. On a remote, deleting needs a write token for the project,
-while `--force` and `gc` need the owner token.
+go too. A dry run changes nothing.
 
 The same in Python: `version.delete(reason=..., force=False)`, `artifact.delete()`,
 `repo.retention = [{"prefix": "runs/", "keep_last": 5}]` (or `repo.set_retention("runs/",
@@ -874,7 +866,7 @@ repo has versions of; `cairn sync --watch` keeps doing so every `[repo] interval
 a remote, it hands them to the outbox (oldest first, their inputs named by uid, their aliases along) and
 they leave its database; the remote numbers them as they are sent, and they come back as copies with the
 remote's numbers. Until then they count as pending (uids, no numbers). A repo has one remote: if
-`[repo] remote` later names a different one, sync stops with a message.
+`cairn remote set` later names a different one, sync stops with a message.
 
 ### Integrity
 
@@ -928,7 +920,7 @@ The object API returns the same as a report: `cairn.connect().verify(ref=None, r
 The safe setup:
 
 - run `cairn server` on a machine with a local disk (not on a compute node, and with its repo not on a
-  shared filesystem), behind HTTPS, and set `[repo] remote = "https://host/my-study"` in the project;
+  shared filesystem), behind HTTPS (or a VPN), and `cairn remote set https://host/my-study` in the project;
 - the project lives on persistent storage, so its repo `.cairn/` is there too. On a network filesystem
   (NFS, Lustre, GPFS, ...) the repo has no database: jobs keep each version in its own outbox folder
   (one writer each) and the blobs it needs (written once and renamed into place, safe on NFS), and read
@@ -972,8 +964,8 @@ cairn ui --repo /srv/cairn                 # a repo folder on this machine (a se
 cairn ui --no-browser                      # print the login link without opening it
 ```
 
-For the project's repo, `cairn ui` creates it if it is new and opens it directly (it writes no token: the
-login link carries one that lives only as long as that `cairn ui`),
+For the project's repo, `cairn ui` creates it if it is new and opens it directly (it writes no `token`, which
+is a client's token for the remote: without one it logs in with `.cairn/ui-token`, made once),
 whether a `cairn server` serves it or not; with a remote it reads through the remote and shows the
 versions still waiting for it as **pending** (a `pending` badge, their uid instead of `vN`). It prints a
 one-time `Log in:` link and opens it in the browser, so there is no token to paste; for a remote the link
@@ -1012,7 +1004,7 @@ needed) in the look of the reports (their stylesheet, tokens and class names):
   while it is sent: nothing is held in memory or written to disk.
 
 The app talks to the UI process through `/ui-api/` (GET unless noted), a session-scoped passthrough
-to the repo interface: `me` (scope: `owner`, `project`, or `remote` when a remote decides; `mode`: `local`
+to the repo interface: `me` (`auth`; `mode`: `local`
 for one project, named `home`, or `server` for many),
 `projects`, `projects/<p>`, `projects/<p>/artifacts/<name>` (summary, versions, aliases),
 `projects/<p>/artifacts/<name>/versions/<n>` (manifest with files, consumers; `<n>` may also be a uid,
@@ -1023,20 +1015,18 @@ system rows, numbers only, thinned to 2000; the last 64 KB of the logs; info.jso
 one-level lookups, capped at 200 nodes), and `POST login`. Every call needs the session and the
 header `X-Cairn: 1` (a cross-site request cannot send it); a name may be one URL-encoded segment.
 
-**Login.** Besides the one-time link, the UI takes a token on `/login` (the owner token or a scoped one)
-and checks it: a remote is asked with it; for a repo on this machine its owner token file and
-`tokens.jsonl` are checked. The app's login page posts the token to `/ui-api/login`; it stays in the UI process, in an in-memory session table; the
-browser gets only a random session id (HttpOnly, SameSite=Strict cookie; `Secure` exactly when the
-browser uses HTTPS, which a reverse proxy says in `X-Forwarded-Proto: https`: over plain HTTP, to this
-machine, through an SSH tunnel or a VPN such as Tailscale, a browser would drop a `Secure` cookie), and the
-token is never in a URL or a page. Each
-session acts with its own token, so a scoped token sees only its project, and a revoked token ends
-its session. Sessions last 30 days and are forgotten when the UI restarts.
+**Login.** The one-time link works once and does not expire (every launch prints a new one). The UI also
+takes the token on `/login` (the app posts it to `/ui-api/login`) and checks it: a remote is asked with it;
+a repo on this machine compares it with its token file. The token stays in the UI process; the browser gets
+only the session id, an HMAC of the token with a fixed label (HttpOnly, SameSite=Strict cookie, Max-Age ten
+years; `Secure` exactly when the browser uses HTTPS, which a reverse proxy says in `X-Forwarded-Proto:
+https`: over plain HTTP, to this machine, through an SSH tunnel or a VPN such as Tailscale, a browser would
+drop a `Secure` cookie). So a session survives restarts of the UI and ends exactly when the token changes;
+`/logout` clears the cookie. The token is never in a URL or a page.
 
-`--no-auth` (loopback `--host` only) has no login: the UI uses `CAIRN_TOKEN` or
-`[repo] token_file` against a remote (none against a `--no-auth` server), or the owner's full
-access to a repo on this machine. `--allow-http` permits plain HTTP to a non-local remote, as for `publish`.
-A report page runs in the UI's origin: give write tokens to people whose reports you trust.
+`--no-auth` (loopback `--host` only) has no login: the UI uses the client's token (see "The token")
+against a remote (none against a `--no-auth` server), or direct access to a repo on this machine.
+A report page runs in the UI's origin: publish only reports you trust.
 
 #### Developing the UI
 
@@ -1065,13 +1055,15 @@ never edited. The repo is private to its owner (mode 700).
 <project>/.cairn/                the repo
 ├── .gitignore                   "*"
 ├── repo.json                    the repo's uid, its layout version, and its remote's uid once learned
+├── config.toml                  the project's settings (see "Configuration")
 ├── metadata.sqlite3             versions, aliases, lineage (WAL); not on a network filesystem
 ├── blobs/<aa>/<sha256>          file contents, written once (temporary file, then rename), shared by all versions
 ├── outbox/<uid>/                versions on their way to the remote (manifest, state, heartbeat); only with a remote
 ├── versions/<uid>/files/        read-only folders that pulls return (made from the blobs; `cairn prune` trims them)
 ├── drafts/                      open and kept drafts and runs: <name>/<uid>/ and <name>/<uid>.draft.json (`cairn drafts`)
 ├── build/  share/               built report pages, `cairn share` pages
-├── token  tokens.jsonl          the owner token and scoped tokens (`cairn server`); a client's token for the remote
+├── token                        the owner token (`cairn server`), or a client's token for the remote
+├── ui-token                     the login of the project's own `cairn ui` when there is no `token`
 ├── heartbeats/<uid>             running versions' heartbeats (without a remote)
 ├── server.lock                  held by the one `cairn server` serving this repo
 └── tmp/                         uploads in progress, the hash cache
@@ -1082,15 +1074,15 @@ holds its projects side by side in the one database and the one `blobs/`.
 
 | What | Resolution |
 | --- | --- |
-| the repo | `$CAIRN_DIR`, else `[cairn] dir` in `cairn.toml` (relative to the project root), else `<project root>/.cairn` |
-| built pages | `output_dir` in `cairn.toml`, else `<repo>/build` |
+| the repo | `$CAIRN_DIR`, else `<project root>/.cairn` |
+| the settings | `<repo>/config.toml` |
+| built pages | `[reports] output_dir`, else `<repo>/build` |
 
 **Finding the repo** is one rule, the same for every command and script:
 
-1. `$CAIRN_DIR` set: that folder is the repo.
+1. `$CAIRN_DIR` set: that folder is the repo, and its `config.toml` the settings.
 2. Otherwise Cairn walks from the working directory upward. The first folder that holds `.cairn/repo.json`
-   (an existing repo, the way git finds `.git`) or a `cairn.toml` is the
-   project root; its repo is `[cairn] dir`, else `<root>/.cairn`.
+   (the way git finds `.git`) is the project root; its repo is `<root>/.cairn`.
 3. Nothing found: whatever opens the repo (`cairn.init`, `use`, `draft`, `publish`, `cairn ui`, `cairn server`
    without a folder) creates `.cairn/` in the working directory and says so in one line on stderr. Commands that
    only look at a repo (`cairn status`, `verify`, `prune`, `sync`) say "no repo here (run `cairn init`)" and
@@ -1102,33 +1094,34 @@ holds its projects side by side in the one database and the one `blobs/`.
 cairn init [FOLDER]     # create FOLDER/.cairn (default: here; $CAIRN_DIR if set); an existing repo is left as it is
 ```
 
-`cairn init` writes only the repo (`repo.json`, its `.gitignore` of `*`, mode 700): never a `cairn.toml`, never
-the project's own `.gitignore`. Source snapshots (a run's `code/`, a Hydra job's `provenance/`) skip `.cairn`.
+`cairn init` writes only the repo (`repo.json`, its `.gitignore` of `*`, a commented `config.toml`, mode 700),
+never the project's own `.gitignore`. Source snapshots (a run's `code/`, a Hydra job's `provenance/`) skip `.cairn`.
 
 ## Configuration
 
-Everything has a default; `cairn.toml` at the project root changes it:
+Everything has a default; the repo's `config.toml` (`.cairn/config.toml`) changes it. Paths are relative to
+the project root (the folder holding `.cairn/`); the token never goes here (see "The token"):
 
 ```toml
-reports_dir = "reports"            # holds one folder per report
-output_dir = ".cairn/build"        # the built site (default: <repo>/build)
-
-[cairn]
-dir = ".cairn"                     # the repo (default; or CAIRN_DIR)
+[remote]
+url = "https://cairn.example.org/my-study"  # the source of truth, <server>/<project>; `cairn remote set|remove`
 
 [repo]
-remote = "https://cairn.example.org/my-study"  # optional: the source of truth, <server>/<project>
-token_file = "secrets/cairn-token"    # optional; the token is looked for in $CAIRN_TOKEN, this, .cairn/token, ~/.config/cairn/token
-allow_http = false                    # plain HTTP to a non-local remote
-interval = 30                         # seconds between live syncs of a running version
-heartbeat_timeout = 600               # seconds without a heartbeat before a running version is failed
-allow_network_fs = false              # one process on one host writes a repo on a network filesystem
-exclude = ["*.pkl"]                   # never published: gitignore-style globs on project paths
+exclude = ["*.pkl"]                # never published: gitignore-style globs on project paths
+interval = 30                      # seconds between live syncs of a running version
+heartbeat_timeout = 600            # seconds without a heartbeat before a running version is failed
+allow_network_fs = false           # one process on one host writes a repo on a network filesystem
+
+[reports]
+dir = "reports"                    # holds one folder per report
+output_dir = ".cairn/build"        # the built site (default: <repo>/build)
 
 [style]
 css = ["style.css"]                # extra stylesheets, loaded after the default style
 template_dir = "template"          # replaces index.html, report.css, report-extra.css, report.js by name
 ```
+
+Unknown keys are errors.
 
 ## Development
 

@@ -1,6 +1,8 @@
 # Cairn architecture: a repo, an optional remote, automatic sync
 
-Decided 2026-10-15 with the owner; projects, short ids and errors added 2026-10-16. Fixed: later work fits this design; it does not change it.
+Decided 2026-10-15 with the owner; projects, short ids and errors added 2026-10-16; simplified for its one user the
+same day (settings in `.cairn/config.toml` and `cairn remote`, one token, logins without timeouts, plain HTTP with a
+warning). Fixed: later work fits this design; it does not change it.
 
 ## The rules
 
@@ -22,8 +24,9 @@ Decided 2026-10-15 with the owner; projects, short ids and errors added 2026-10-
 
 | term | meaning |
 |---|---|
-| repo | the folder `.cairn/` (`[cairn] dir`, `CAIRN_DIR`): metadata, blobs, outbox, drafts, report builds |
-| remote | a project on a `cairn server`: `[repo] remote = "https://host/<project>"`, like a git remote URL |
+| repo | the folder `.cairn/` (or `CAIRN_DIR`): settings, metadata, blobs, outbox, drafts, report builds |
+| project root | the nearest folder upward that holds `.cairn/repo.json`, as git finds `.git` |
+| remote | a project on a `cairn server`: `[remote] url = "https://host/<project>"` (`cairn remote set`), like a git remote |
 | project | what a repo holds: locally exactly one (unnamed), on a server many, each at `<server>/<project>` |
 | source of truth | the remote if configured, else the repo |
 | outbox | `<repo>/outbox/<uid>/`: one version on its way to the remote (manifest + state); one writer |
@@ -34,12 +37,14 @@ Decided 2026-10-15 with the owner; projects, short ids and errors added 2026-10-
 ```text
 .cairn/                      the repo (self-ignoring: .gitignore = "*")
 ├── repo.json                uid of this repo, layout version
+├── config.toml              the project's settings (see Configuration)
 ├── metadata.sqlite3         versions, aliases, lineage (WAL)   — not on a network filesystem
 ├── blobs/<aa>/<sha256>      content-addressed files, written once (temp + rename), shared by all versions
 ├── outbox/<uid>/            versions not yet on the remote (manifest, state); only with a remote
 ├── drafts/                  folders that become versions (runs, `cairn.draft`)
 ├── build/  share/  reviews/ report builds, shared pages, review state
-├── token  tokens.jsonl      owner token and scoped tokens, for `cairn server`
+├── token                    the one token: `cairn server`'s, or a client's for the remote
+├── ui-token                 the login of the project's own `cairn ui` when there is no `token`
 ├── heartbeats/<uid>         running versions' heartbeats
 ├── server.lock              held by the one `cairn server` serving this repo
 └── tmp/
@@ -56,7 +61,7 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
   content-addressed `blobs/`, so a file published by several projects is stored once.
 - **The remote URL names the project:** its last path segment (`https://host/my-study`, or
   `https://host/prefix/my-study` behind a path prefix). Syncing to a project the server does not have
-  creates it when the token is the owner's; a project-scoped token only reaches its existing project.
+  creates it.
 - **There is no cross-project access.** A reference has no project prefix, a run's inputs and a report's
   inputs come from its own project, and the public functions take no `store=` pointing elsewhere. A dataset
   several projects need is published in each of them; the server stores its files once (content-addressed
@@ -127,8 +132,16 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
 ## Access
 
 - On the repo's machine: file permissions (the repo is private to its owner, mode 700).
-- Over HTTP: the owner token or project-scoped tokens (`cairn token`), never in a URL. The UI logs in with
-  a one-time link (a random code valid once for 10 minutes).
+- Over HTTP: one token, the owner's, in the server's `<repo>/token` (made on the first launch), never in a URL.
+  It reaches every project. A client takes the first of `$CAIRN_TOKEN`, `<repo>/token` (the project's
+  `.cairn/token`), `~/.config/cairn/token`; a refusal names where the token came from, and no token lists the
+  three places. The token is never in the config.
+- Plain HTTP to a non-local host works; each process warns once on stderr that the token is sent unencrypted
+  (fine over a VPN such as Tailscale, or an SSH tunnel). For anything else, an HTTPS reverse proxy.
+- The UI logs in with a one-time link (a random code that works once and does not expire; every launch prints
+  a new one) or the token on its login page. The browser's cookie holds only the session id, an HMAC of the
+  token with a fixed label (HttpOnly, SameSite=Strict, Secure behind HTTPS, Max-Age ten years): a session
+  survives restarts of the UI and ends exactly when the token changes; logging out clears the cookie.
 
 ## SSH access (planned for the release after 0.14.0)
 
@@ -137,39 +150,53 @@ a browser talking to a server's UI stays on HTTP(S) with a login.
 
 - **Remote:** `ssh://[user@]host[:port]/<project>` (or scp-like `[user@]host:<project>`). The URL names
   only the project; which repo folder serves it is the server's business, fixed by the key's command.
-- **Keys:** on the server's account, `cairn key add <name> <public key> (--project P [--write] | --owner)`
-  adds the key to that account's `~/.ssh/authorized_keys`, inside a block Cairn marks and owns, as
+- **Keys:** on the server's account, `cairn key add <name> <public key>` adds the key to that account's
+  `~/.ssh/authorized_keys`, inside a block Cairn marks and owns, as
   `command="<absolute path of this cairn> ssh-serve <repo> --key <name>",restrict <key>`. `cairn key list`
-  and `cairn key remove` manage it; lines outside the block are never touched. A key's permissions are a
-  scoped token's (one project, read or write) or the owner's; the owner's key creates a project on first sync.
+  and `cairn key remove` manage it; lines outside the block are never touched. A key is the owner's
+  credential, as the token is: it reaches every project and creates one on first sync.
 - **A forced command applies to its key only**, so the server's account is either dedicated (like GitHub's
   `git` user) or the key is one made for Cairn; a key used for a normal shell login stays unregistered.
 - **The connection:** the client runs `ssh -T` with that key (batch mode, no password prompts) and speaks
-  the same HTTP API over it; `ssh-serve` opens the repo directly (rule 1), answers only within the key's
-  permissions, and ends with the connection. No `cairn server` needs to run; one may run beside it.
+  the same HTTP API over it; `ssh-serve` opens the repo directly (rule 1), answers, and ends with the connection. No `cairn server` needs to run; one may run beside it.
 - **`cairn ui --remote ssh://...`** runs the UI on the client and reads through SSH, with no token.
 
 ## Configuration
 
+Every setting lives in the repo's `config.toml` (`.cairn/config.toml`; with `CAIRN_DIR`, that folder's). All keys
+are optional; paths are relative to the project root, the folder containing `.cairn/`:
+
 ```toml
-[cairn]
-dir = ".cairn"                        # the repo (default; or CAIRN_DIR)
+[remote]
+url = "https://cairn.example.org/my-study"   # the source of truth (<server>/<project>); `cairn remote set|remove`
 
 [repo]
-remote = "https://cairn.example.org/my-study"  # optional: the source of truth (<server>/<project>)
-token_file = "~/.config/cairn/token"  # or CAIRN_TOKEN
-allow_http = false                    # plain HTTP to a non-local remote
+exclude = ["*.pkl"]                   # files never published (gitignore-style)
 interval = 30                         # seconds between live syncs of a running version
 heartbeat_timeout = 600
 allow_network_fs = false
-exclude = ["*.pkl"]
+
+[reports]
+dir = "reports"
+output_dir = ".cairn/build"           # default: <repo>/build
+
+[style]
+css = ["reports/style.css"]
+template_dir = "reports/template"
 ```
 
-There is no migration and no compatibility code: Cairn was not in use before this design, so 0.14 starts
-with fresh repos (`[store]` is an unknown key like any other).
+`cairn init` writes it as a commented template. There is no other config file, no `[cairn] dir` (the repo is
+`.cairn/` or `CAIRN_DIR`), and no token in it. There is no migration and no compatibility code: Cairn was not
+in use before this design, so 0.14 starts with fresh repos (unknown keys are errors).
 
 ## Commands
 
+- `cairn init [path]` makes `.cairn/` (with its config template); other writing commands make it in the working
+  directory when no repo is found, and read-only ones refuse.
+- `cairn remote` prints the remote (or "no remote"); `cairn remote set <url>` checks and writes it (the next
+  command syncs, and versions the repo numbered itself are adopted); `cairn remote remove` drops it (versions
+  keep their numbers; pending ones stay pending).
+- `cairn sync [--watch]`, `cairn status`, `cairn prune`, `cairn verify` work on the repo and its remote.
 - `cairn server [repo]` serves a repo (default: the project's) to other machines; `cairn ui` explores the
   project's repo (or `--remote URL`: a server lists its projects, `<server>/<project>` opens one); both print
   a one-time login link.
@@ -180,4 +207,3 @@ Cairn's own errors (an unknown artifact, a refused alias, a remote that does not
 from the public function or method the caller called, so the traceback ends at the caller's line and that
 one call, followed by a message that names what was looked for and where (the repo folder or remote).
 Unexpected failures keep their full traceback.
-- `cairn sync [--watch]`, `cairn status`, `cairn prune`, `cairn verify` work on the repo and its remote.
