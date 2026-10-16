@@ -9,9 +9,9 @@ command exits 0, or when watching is stopped without a command, and fails otherw
 moves to a broken run.
 
 Without a remote both write the repo directly: a running version is a row of its database, with a heartbeat
-(`<repo>/heartbeats/<uid>`); opening the repo fails it once its process is dead or the heartbeat is old
+(`<repo>/heartbeats/<id>`); opening the repo fails it once its process is dead or the heartbeat is old
 (LocalRepo.reap), so a killed job never stays `running`. With a remote both go through the outbox (outbox.py,
-sync.py): a running version is an outbox entry first (sync `running`) and is created on the remote (under its uid)
+sync.py): a running version is an outbox entry first (sync `running`) and is created on the remote (under its id)
 as soon as the remote answers, so a job starts and finishes while the remote is down; its completion or failure
 turns it pending and it is sent like any publish. While it runs, a heartbeat thread rewrites its outbox
 `heartbeat` (time, host, pid) every few seconds; a sender on any host fails the version once the heartbeat is
@@ -97,7 +97,7 @@ def publish(
     `run.json` is not `completed` is refused unless `allow_incomplete` (then `metadata.run_status` records it). When nothing
     changed since the latest version, no version is created and its number is returned. None means the
     remote did not answer: the version is pending in the repo's outbox (`cairn status`), usable here
-    by its uid, and sent later.
+    by its id, and sent later.
     """
     repo = open_repo(config)
     repo.resume()
@@ -137,7 +137,7 @@ class Publication:
         aliases=(),
         label: str | None = None,
         inputs=None,
-        uid: str | None = None,
+        id: str | None = None,
         _repo=None,
     ):
         from .open import heartbeat_timeout
@@ -148,14 +148,15 @@ class Publication:
         self.config = load_config()
         self.exclude = self.config.repo.get("exclude", [])
         self.label, self.metadata, self.aliases, self.inputs = (
-            label or self.local.name,
+            label or refs.default_label(self.local.name),
             metadata,
             tuple(aliases),
             inputs,
         )
         self.version: int | None = None  # the number; None while the source of truth has not numbered the version
-        self.uid: str | None = uid  # the version's uid (default: a new one, made when it starts)
+        self.id: str | None = id  # the version's id (default: a new one, made when it starts)
         self.queued = False  # pending: the remote has not taken it yet
+        self.manifest: dict | None = None  # the version as the last start or completion answered it
         self.started = False
         self._sent: dict[str, tuple] = {}
         self._beating: threading.Event | None = None
@@ -167,24 +168,25 @@ class Publication:
 
     @property
     def ref(self) -> str:
-        """`name@v<n>`, or `name@<uid>` while it has no number yet."""
-        return refs.exact(self.name, self.version) if self.version is not None else f"{self.name}@{self.uid}"
+        """`name@v<n>`, or the id while it has no number yet."""
+        return refs.exact(self.name, self.version) if self.version is not None else self.id
 
     def _apply(self, manifest: dict) -> None:
-        self.version, self.uid = manifest.get("version"), manifest["uid"]
+        self.manifest = manifest
+        self.version, self.id = manifest.get("version"), manifest["id"]
         self.queued = bool(manifest.get("pending"))
 
     def _start_beating(self) -> None:
         """A daemon thread that rewrites the heartbeat while the version runs (it stops with the process)."""
         stop = self._beating = threading.Event()
         every = max(0.05, min(60.0, self.timeout / 5))
-        uid, beat = self.uid, self.store.beat
+        id, beat = self.id, self.store.beat
 
         def loop():
             while not stop.wait(every):
-                beat(uid)
+                beat(id)
 
-        threading.Thread(target=loop, name=f"cairn-heartbeat {uid}", daemon=True).start()
+        threading.Thread(target=loop, name=f"cairn-heartbeat {id[: refs.SHORT]}", daemon=True).start()
 
     def _stop_beating(self) -> None:
         if self._beating is not None:
@@ -194,13 +196,13 @@ class Publication:
     def start(self) -> int | None:
         """Start the running version (in the repo first; with a remote it is created there too as soon as it answers)."""
         if not self.started:
-            from ..store.uids import new_uid
+            from ..store.ids import new_id
 
-            self.uid = self.uid or new_uid()
-            manifest = self.store.start_version(self.name, self.label, self.metadata, self.source, uid=self.uid)
+            self.id = self.id or new_id()
+            manifest = self.store.start_version(self.name, self.label, self.metadata, self.source, id=self.id)
             self.started = True
             self._apply(manifest)
-            # a version started before (the same uid) mirrors the folder too: what it has counts as sent
+            # a version started before (the same id) mirrors the folder too: what it has counts as sent
             self._sent = {
                 entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in manifest.get("files", [])
             }
@@ -219,7 +221,7 @@ class Publication:
             present = {entry["path"] for entry in entries}
             removed = [{"path": path, "removed": True} for path in sorted(self._sent) if path not in present]
             try:
-                self.store.add_files(self.name, self.uid, removed + fresh)
+                self.store.add_files(self.name, self.id, removed + fresh)
                 break
             except (
                 MissingBlobs
@@ -233,14 +235,14 @@ class Publication:
         for entry in removed:
             del self._sent[entry["path"]]
         self._sent.update({entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in fresh})
-        self._apply(self.store.get_version(self.name, self.uid))
+        self._apply(self.store.get_version(self.name, self.id))
         return len(fresh) + len(removed)
 
     def set_metadata(self, metadata: dict) -> None:
         """Replace the metadata of the running version (not once it completed or failed)."""
         self.metadata = metadata
         if self.started:
-            self.store.set_metadata(self.name, self.uid, metadata)
+            self.store.set_metadata(self.name, self.id, metadata)
 
     def complete(self) -> int | None:
         """Sync a last time, freeze the version, move `latest`, and apply the aliases. While the remote does not answer,
@@ -248,13 +250,13 @@ class Publication:
         self.sync()
         merged = [*read_inputs(self.local), *(str(item) for item in self.inputs or [])]
         self._stop_beating()
-        self._apply(self.store.complete_version(self.name, self.uid, merged, self.aliases))
+        self._apply(self.store.complete_version(self.name, self.id, merged, self.aliases))
         return self.version
 
     def fail(self) -> None:
         if self.started:
             self._stop_beating()
-            self.store.fail_version(self.name, self.uid)
+            self.store.fail_version(self.name, self.id)
 
     def __enter__(self) -> "Publication":
         self.start()
@@ -285,10 +287,9 @@ def describe(version: dict) -> str:
     return files_text(version["files"])
 
 
-def published(name: str, version: dict, before: int = 0, why: str | None = None) -> str:
+def published(name: str, version: dict, short: str, before: int = 0, why: str | None = None) -> str:
     """The line a publish prints: `published descent@v3 (3f9a2c1, 2 files, 12 KB)`, `unchanged descent@v3 (3f9a2c1)`,
-    or `pending descent (3f9a2c1): remote not reachable` while the remote does not answer."""
-    short = refs.short_of(version)
+    or `pending descent (3f9a2c1): remote not reachable` while the remote does not answer (`short`: the short id)."""
     if version.get("version") is None:
         return f"pending {name} ({short}): {why or 'remote not reachable'}\n" + hint("run `cairn sync` to send it now")
     if version["version"] <= before:
@@ -323,8 +324,8 @@ def publish_folder(
         config=config,
         allow_incomplete=allow_incomplete,
     )
-    why = getattr(store, "pending_reasons", {}).get(version.manifest.get("uid"))
-    print(published(target, version.manifest, before, why), flush=True)
+    why = getattr(store, "pending_reasons", {}).get(version.manifest.get("id"))
+    print(published(target, version.manifest, version.short_id, before, why), flush=True)
 
 
 def signature(folder: Path, config: Config) -> dict:
@@ -369,7 +370,7 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
                 raise
             warn(f"could not start the version ({error}); retrying", once=False)
             time.sleep(1)
-    short = refs.default_short_id(pub.uid)
+    short = pub.store.short_id(pub.id)
     if pub.version is None:
         print(
             f"following {short_path(folder)} as {pub.name} ({short}, running, pending) every {interval:g} s", flush=True
@@ -439,7 +440,7 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
                         flush=True,
                     )
                 else:
-                    print(published(pub.name, pub.store.get_version(pub.name, pub.uid)), flush=True)
+                    print(published(pub.name, pub.store.get_version(pub.name, pub.id), short), flush=True)
             return code
         except (StoreError, OSError) as error:
             if "can no longer change" in str(error):

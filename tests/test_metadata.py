@@ -19,7 +19,7 @@ from cairn.server import make_server
 from cairn.store.errors import Conflict
 from cairn.client.http import Client
 from cairn.store.tokens import init_root, read_token
-from cairn.store.uids import new_uid
+from cairn.store.ids import new_id
 
 
 def blob(root, text: str) -> dict:
@@ -53,7 +53,12 @@ def test_export_metadata(tmp_path, capsys):
     projects = [json.loads(line) for line in (tmp_path / "out" / "projects.jsonl").read_text().splitlines()]
     assert [p["name"] for p in projects] == ["data", "models"]
     consumers = [json.loads(line) for line in (tmp_path / "out" / "consumers.jsonl").read_text().splitlines()]
-    assert [(c["project"], c["input"], c["consumer"]) for c in consumers] == [("data", "sets/crops@v2", "fit@v1")]
+    crops, fit = store.get_version("data", "sets/crops", 2)["id"], store.get_version("data", "fit", 1)["id"]
+    assert [(c["project"], c["input"], c["consumer"]) for c in consumers] == [("data", crops, fit)]  # by id
+    aliases = [json.loads(line) for line in (tmp_path / "out" / "aliases.jsonl").read_text().splitlines()]
+    assert {(a["project"], a["name"], a["alias"], a["id"]) for a in aliases} >= {
+        ("data", "sets/crops", "latest", crops)
+    }
     with pytest.raises(SystemExit):
         main(["export-metadata", str(tmp_path / "nothing"), str(tmp_path / "out2")])
 
@@ -101,15 +106,15 @@ def test_a_process_killed_inside_a_publish_stores_none_of_it(tmp_path):
     assert again.publish("p", "x", entries, metadata={"n": 2}) == 2
 
 
-def test_a_uid_names_one_version_in_the_whole_store(tmp_path):
+def test_an_id_names_one_version_in_the_whole_store(tmp_path):
     store, entries = fresh(tmp_path)
-    uid = new_uid()
-    assert store.publish("p", "x", entries, uid=uid) == 1
-    assert store.publish("p", "x", entries, uid=uid) == 1  # sent again: the same version
+    version_id = new_id()
+    assert store.publish("p", "x", entries, id=version_id) == 1
+    assert store.publish("p", "x", entries, id=version_id) == 1  # sent again: the same version
     with pytest.raises(Conflict):
-        store.publish("p", "y", entries, uid=uid)
+        store.publish("p", "y", entries, id=version_id)
     with pytest.raises(Conflict):
-        store.start_version("p", "y", uid=uid)
+        store.start_version("p", "y", id=version_id)
 
 
 def test_processes_on_the_host_write_a_served_root_directly(tmp_path, capsys):

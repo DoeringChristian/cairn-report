@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "build": "node scripts/refs-conformance.mjs && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test:refs": "node scripts/refs-conformance.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

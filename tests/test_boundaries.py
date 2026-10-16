@@ -126,8 +126,8 @@ def targets_of(node):
 
 CLIENT = PACKAGE / "client"
 CLIENT_LAYERS = {  # module -> the cairn modules it may import (anything in store/ is `store`)
-    "http": {"term"},
-    "remote": {"store", "term", "client.http"},
+    "http": {"term", "_version"},  # _version: the API version the paths carry (/api/v3)
+    "remote": {"store", "term", "client.http", "_version"},  # and the handshake checks
     "sync": {"store", "term"},
     "repo": {"store", "ranges", "term", "client.http", "client.remote", "client.sync"},
     "open": {"config", "store", "term", "client.http", "client.remote", "client.repo"},
@@ -262,7 +262,7 @@ def test_local_project_and_remote_implement_the_repo_interface():
     from cairn.store.project import LocalProject
 
     for cls in (LocalProject, Remote):
-        missing = [name for name in METHODS if name != "uid" and not callable(getattr(cls, name, None))]
+        missing = [name for name in METHODS if name != "id" and not callable(getattr(cls, name, None))]
         assert not missing, f"{cls.__name__} lacks {missing}"
 
 
@@ -286,3 +286,70 @@ def test_only_the_policy_module_parses_a_remote_url():
         if name in ("client/open.py", "client/http.py", "ui/backends.py"):
             continue
         assert "split_remote" not in _code(path), f"{name} parses a remote URL (client/open.py does)"
+
+
+# The one parser of references (docs/architecture.md, invariant 6): store/refs.py takes references apart, nothing else.
+# store/upgrade.py reads Cairn 0.14's references (`name@<uid>`, `name@v<n>`) once, to convert them: the one piece of
+# compatibility code. Each allowed `isdigit` below is about something that is not a reference (a pid, a trial number,
+# an octal escape in /proc/mounts).
+PARSER = {"store/refs.py", "store/upgrade.py"}
+ALLOWED_ISDIGIT = {
+    "store/fs.py": 1,  # an octal escape in a mount table
+    "runs/hydra.py": 6,  # multirun trial folders and their numbers (0, 1, ...)
+    "ui/server.py": 1,  # the parent's pid in CAIRN_UI_PARENT
+}
+SELECTOR_PARSING = [
+    (r"""\.(r?split|r?partition|index|find|rfind|rindex)\(\s*["']@["']""", "takes a reference apart at '@'"),
+    (r"""["']@["']\s+in\b""", "looks for '@' in a reference"),
+    (r"\b(VERSION|ID|HEX|UID|NUMBERED|PREFIX|WORD|LABEL)\.(full)?match\(", "matches a reference's parts itself"),
+    (r"""\bint\(\s*\w*(sel|selector|number|segment|text|ref)\w*\s*\[\s*1\s*:\s*\]""", "reads v<n> itself"),
+    (r"""f["'][^"']*@v\{int\(""", "turns digits into v<n>"),
+]
+
+
+def test_only_refs_takes_a_reference_apart():
+    """No module but store/refs.py splits a reference at '@', matches its parts with the reference patterns, turns
+    `v<n>` or digits into a number, or reads digits as a version (`isdigit`): one parser, no shortcut."""
+    import re
+
+    for path in MODULES:
+        name = str(path.relative_to(PACKAGE))
+        if name in PARSER or name.startswith("store/ids.py"):
+            continue
+        code = _code(path)
+        for pattern, what in SELECTOR_PARSING:
+            found = re.search(pattern, code)
+            assert not found, f"{name} {what}: {found.group(0)!r} (store/refs.py is the one parser)"
+        count = code.count("isdigit(")
+        assert count <= ALLOWED_ISDIGIT.get(name, 0), f"{name} calls isdigit {count} times: digits are never a version"
+
+
+WEB = PACKAGE.parent.parent / "web" / "src"
+WEB_PARSER = "refs.ts"
+WEB_PARSING = [
+    (r"""\.(split|indexOf|lastIndexOf|partition)\(\s*["'`]@["'`]""", "takes a reference apart at '@'"),
+    (r"""/[^/\n]*\[\^[^\]]*@[^\]]*\][^/\n]*/""", "matches a reference with a regex"),
+    (r"""/[^/\n*]*@\(?v\\d""", "reads @v<n> with a regex"),
+    (r"""/\^?\\d\+\$/""", "reads digits as a number"),
+]
+
+
+def _web_sources() -> list[Path]:
+    files = sorted(WEB.rglob("*.ts")) + sorted(WEB.rglob("*.tsx"))
+    return [*files, PACKAGE / "reports" / "template" / "report.js"]
+
+
+def test_only_one_web_module_takes_a_reference_apart():
+    """The web code has one module that parses references (web/src/refs.ts, mirroring store/refs.py); the app's other
+    modules and the report page's script build URLs from fields, never from a reference's text."""
+    import re
+
+    sources = _web_sources()
+    assert any(path.name == WEB_PARSER for path in sources), f"web/src/{WEB_PARSER} is missing"
+    for path in sources:
+        if path.name == WEB_PARSER:
+            continue
+        code = path.read_text()
+        for pattern, what in WEB_PARSING:
+            found = re.search(pattern, code)
+            assert not found, f"{path.name} {what}: {found.group(0)!r} (web/src/{WEB_PARSER} is the one parser)"

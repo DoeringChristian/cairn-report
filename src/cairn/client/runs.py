@@ -11,7 +11,7 @@ A `Run` is a draft (cairn/client/drafts.py) of the artifact `runs/<name>`, with 
 `metadata.config`. The name defaults to the script's stem (`python -m pkg.mod`: the module's name; an interactive
 session: `interactive`). There is one current run per process: a second `init()` returns it (adding its `config` and `metadata`, and refusing another
 name), and `cairn.run` is it from anywhere (with none, using it raises). Its version is created at once (running), so the outputs published while
-it runs name it by its uid; with a remote it is synced every `[repo] interval` seconds (`watch`, the default
+it runs name it by its id; with a remote it is synced every `[repo] interval` seconds (`watch`, the default
 there) with a heartbeat, so the UI shows it live; without one it is written when it ends (`watch=True` to follow it).
 
 Its folder gets, besides what the job writes with `run.add(...)` and `run.add_*`:
@@ -52,7 +52,7 @@ import traceback
 from pathlib import Path
 
 from ..api import public, surface
-from ..store import INPUTS_ENV, INPUTS_FILE, StoreError
+from ..store import INPUTS_ENV, INPUTS_FILE, StoreError, refs
 from ..store.inputs import close_sink, open_sink
 from . import logger as _logger
 from .drafts import _ACTIVE, Draft, reserve
@@ -62,7 +62,7 @@ from .http import budget
 START_BUDGET = 3.0  # seconds a run's start may wait for the remote, in all (the version is pending after that)
 END_BUDGET = 4.0  # seconds a run's end (its drafts, then itself) may wait for the remote, in all
 
-RUN_ENV = "CAIRN_RUN"  # the exact uid reference of the run a process belongs to, for its subprocesses
+RUN_ENV = "CAIRN_RUN"  # the id of the run a process belongs to, for its subprocesses
 RUNS = "runs"
 SYSTEM_INTERVAL = 10.0
 CAPTURE_DEFAULT = True  # tests turn it off for the runs pytest itself starts
@@ -79,7 +79,13 @@ def _slug(text: str) -> str:
 
 
 def default_name() -> str:
-    """The script's stem; for `python -m pkg.mod` the module's name; for an interactive session `interactive`."""
+    """The script's stem; for `python -m pkg.mod` the module's name; for an interactive session `interactive` (a stem
+    of 4 or more hex digits alone, the shape of an id, gets `-run`)."""
+    name = _default_name()
+    return f"{name}-run" if refs.hex_alone(name) else name
+
+
+def _default_name() -> str:
     main = sys.modules.get("__main__")
     spec = getattr(main, "__spec__", None)
     if spec is not None and getattr(spec, "name", None) and spec.name != "__main__":
@@ -123,10 +129,15 @@ class Run(Draft):
         _repo=None,
     ):
         self.run_name = _slug(name or default_name())
+        if refs.hex_alone(self.run_name):  # `runs/<name>` is a name, but the run's own name is never an id's shape
+            raise refs.InvalidRef(
+                f"invalid run name {self.run_name!r}: 4 or more hex digits alone are an id, never a name "
+                f"(e.g. '{self.run_name}-run')"
+            )
         meta = {"kind": "run", **(metadata or {})}
         if config is not None:
             meta["config"] = config
-        if adopt is not None:  # a folder reserved earlier (Hydra's ${cairn.run:}): its uid and label stay
+        if adopt is not None:  # a folder reserved earlier (Hydra's ${cairn.run:}): its id and label stay
             record = adopt.record
             record.update(
                 metadata={**(record.get("metadata") or {}), **meta},
@@ -354,7 +365,9 @@ def init(
         if _CURRENT is not None:
             run = _CURRENT
             if name is not None and _slug(name) != run.run_name:
-                raise StoreError(f"this process's run is {run.name}@{run.uid}: one run per process (finish() it first)")
+                raise StoreError(
+                    f"this process's run is {run.name} ({run.id[:7]}): one run per process (finish() it first)"
+                )
             if config is not None or metadata:  # e.g. the run was started by the first cairn.use(): complete it now
                 run.set_metadata(**({"config": config} if config is not None else {}), **(metadata or {}))
             return run
@@ -404,7 +417,7 @@ def input_for(draft: Draft) -> str | None:
     if run is None:
         return os.environ.get(RUN_ENV)
     if not _same_store(run.store, draft.store):
-        warn(f"{draft.name} ({draft.short_id}) goes to another repo than the run {run.ref}: it gets no run input")
+        warn(f"{draft.name} ({draft.short_id}) goes to another repo than the run {run.name}: it gets no run input")
         return None
     return run.ref
 

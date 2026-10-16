@@ -17,9 +17,9 @@ and the object API and shortcuts:
 
     repo = cairn.connect()                         # the project's repo (.cairn/), with its remote if [remote] url names one
     crops = repo.artifact("datasets/crops")
-    v3 = crops.version(3)                          # or "v3", an alias, a label, a uid, a short id; crops.latest
+    v3 = crops.version(3)                          # or "v3", an alias, a label, an id (a prefix); crops.latest
     v3.files, v3.metadata, v3.inputs, v3.consumers, v3.upstream(), v3.downstream(), v3.open("a.txt"), v3.pull()
-    v3.short_id                                    # "3f9a2c1": `datasets/crops@3f9a2c1`, or a bare `3f9a2c1`, names it
+    v3.id, v3.short_id                             # 64 hex digits, and its shortest unique prefix: `3f9a2c1` names it
     crops.publish("data/crops", metadata={"n": 3}, aliases=["paper"])   # -> Version
     cairn.pull("datasets/crops@v3")                # a read-only local copy (a Path), recorded like use()
     cairn.publish("models/denoiser", "checkpoints/best", metadata={"psnr": 31.2}, aliases=["best"])
@@ -31,14 +31,15 @@ Everything works on the project's repo: the folder `.cairn/` (or `$CAIRN_DIR`), 
 (one, so references name no project: `descent@v3`). Every write goes to the repo first. Without a remote the repo is
 the source of truth and numbers its versions. With a remote (`cairn remote set <server>/<project>`, a project on a
 `cairn server`; the token from `$CAIRN_TOKEN`, `.cairn/token`, or `~/.config/cairn/token`) the remote is: versions wait in the repo's outbox
-(pending: a uid, no number) until the remote takes them, which happens at once when it answers and otherwise
+(pending: an id, no number) until the remote takes them, which happens at once when it answers and otherwise
 automatically later (`cairn status`, `cairn sync`); versions used from the remote are copied into the repo. The run
 (cairn/client/runs.py) points `$CAIRN_INPUTS` at its folder, so what the process and its plain subprocesses pull are
-its inputs; outside a run every pull appends the exact version to `$CAIRN_INPUTS`, else to `.cairn-inputs.jsonl` in
+its inputs; outside a run every pull appends the version's id to `$CAIRN_INPUTS`, else to `.cairn-inputs.jsonl` in
 the working directory, and `publish` carries a folder's `.cairn-inputs.jsonl` along as the version's `inputs`.
 
-Every version has a uid (UUIDv7), and `name@<uid>` names it as exactly as `name@v<n>`; its short id (the first 7 hex
-digits of the SHA-256 of the uid) names it too, by any unique prefix of 4 or more digits.
+Every version has an id (64 hex digits, random), its only identity, as a commit's hash is in git. A reference has one of
+four forms (cairn/store/refs.py): an id, or any unique prefix of 4 or more of its digits (`3f9a2c1`); a name (its
+latest); `name@v<n>`; `name@<alias or label>`. Names, aliases, and labels are never 4 or more hex digits alone.
 
 Cairn's own errors (StoreError: NotFound, Conflict, Unreachable, ...) are raised from the function or method called
 (cairn/api.py): the traceback ends at the caller's line and that one call, then the message.
@@ -235,7 +236,7 @@ def _start_run() -> None:
 
 @public("cairn.use")
 def use(ref: str, *, offline: bool = False) -> "Version":
-    """The exact version a reference names (`name@v3`, `name@best`, `name@3f9a2c1`, a bare short id), resolved now in
+    """The exact version a reference names (`name@v3`, `name@best`, `name`, or an id such as `3f9a2c1`), resolved now in
     the project's repo, as an input of this process's run (started if needed).
 
     Returns the `Version` (its files are listed lazily; `.path` is its read-only local folder, materialized on
@@ -247,7 +248,7 @@ def use(ref: str, *, offline: bool = False) -> "Version":
         raise StoreError(f"{version.ref} is {version.status}: only a completed version can be used")
     from .store import record_input
 
-    record_input(version.ref, version.uid)
+    record_input(version.id, version.ref)
     return version
 
 
@@ -279,14 +280,20 @@ def versions(name: str) -> list[dict]:
 
 @public("cairn.lineage")
 def lineage(ref: str, *, through_runs: bool = True) -> dict[str, list[str]]:
-    """One level up (`inputs`) and down (`consumers`) from a version, as exact references.
+    """One level up (`inputs`) and down (`consumers`) from a version, as exact references (`name@v<n>`, or the id of
+    a pending version; `Version.inputs` and `Version.consumers` are the ids).
 
     With `through_runs` (the default) a run in between is looked through: an output's inputs are the data its run
     used, a dataset's consumers are the outputs of the runs that used it, and `runs` lists the runs passed. With
     `through_runs=False` the direct edges, run versions included."""
-    version = _repo().version(ref)
+    repo = _repo()
+    version = repo.version(ref)
     if not through_runs:
-        return {"inputs": version.inputs, "consumers": version.consumers}
+
+        def exact(ids: list[str]) -> list[str]:
+            return [found.ref if (found := repo._exact_version(id)) is not None else id for id in ids]
+
+        return {"inputs": exact(version.inputs), "consumers": exact(version.consumers)}
     passed: list[str] = []
     upstream = [item.ref for item in version.upstream(_runs=passed)]
     downstream = [item.ref for item in version.downstream(_runs=passed)]

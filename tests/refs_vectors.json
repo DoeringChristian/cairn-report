@@ -1,0 +1,8306 @@
+[
+ {
+  "text": "",
+  "error": true
+ },
+ {
+  "text": "@",
+  "error": true
+ },
+ {
+  "text": "@v1",
+  "error": true
+ },
+ {
+  "text": "//x",
+  "error": true
+ },
+ {
+  "text": "//",
+  "error": true
+ },
+ {
+  "text": "a@",
+  "error": true
+ },
+ {
+  "text": "a@@b",
+  "error": true
+ },
+ {
+  "text": "a@v1@v2",
+  "error": true
+ },
+ {
+  "text": "p:data",
+  "error": true
+ },
+ {
+  "text": "p:data@v1",
+  "error": true
+ },
+ {
+  "text": "a@v1//",
+  "error": true
+ },
+ {
+  "text": "abcd//",
+  "error": true
+ },
+ {
+  "text": "a//b//c",
+  "error": true
+ },
+ {
+  "text": "abcd//a//b",
+  "error": true
+ },
+ {
+  "text": "a@v1///x",
+  "error": true
+ },
+ {
+  "text": "\u00a0",
+  "error": true
+ },
+ {
+  "text": " ",
+  "error": true
+ },
+ {
+  "text": "data@v1//a\u2003",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v1",
+  "path": "a\u2003"
+ },
+ {
+  "text": "\u540d\u524d@v1",
+  "error": true
+ },
+ {
+  "text": "data@\u540d\u524d",
+  "error": true
+ },
+ {
+  "text": "1234",
+  "form": "id",
+  "id": "1234",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "1234//x",
+  "form": "id",
+  "id": "1234",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "1234//figures/a.png",
+  "form": "id",
+  "id": "1234",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "1234@v1",
+  "error": true
+ },
+ {
+  "text": "data@1234",
+  "error": true
+ },
+ {
+  "text": "123",
+  "form": "latest",
+  "id": null,
+  "name": "123",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "123//x",
+  "form": "latest",
+  "id": null,
+  "name": "123",
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "123//figures/a.png",
+  "form": "latest",
+  "id": null,
+  "name": "123",
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "123@v1",
+  "form": "version",
+  "id": null,
+  "name": "123",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "data@123",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "123",
+  "path": null
+ },
+ {
+  "text": "1234567",
+  "form": "id",
+  "id": "1234567",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "1234567//x",
+  "form": "id",
+  "id": "1234567",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "1234567//figures/a.png",
+  "form": "id",
+  "id": "1234567",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "1234567@v1",
+  "error": true
+ },
+ {
+  "text": "data@1234567",
+  "error": true
+ },
+ {
+  "text": "abcdef0",
+  "form": "id",
+  "id": "abcdef0",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "abcdef0//x",
+  "form": "id",
+  "id": "abcdef0",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "abcdef0//figures/a.png",
+  "form": "id",
+  "id": "abcdef0",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "abcdef0@v1",
+  "error": true
+ },
+ {
+  "text": "data@abcdef0",
+  "error": true
+ },
+ {
+  "text": "ABCDEF1",
+  "form": "id",
+  "id": "abcdef1",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "ABCDEF1//x",
+  "form": "id",
+  "id": "abcdef1",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "ABCDEF1//figures/a.png",
+  "form": "id",
+  "id": "abcdef1",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "ABCDEF1@v1",
+  "error": true
+ },
+ {
+  "text": "data@ABCDEF1",
+  "error": true
+ },
+ {
+  "text": "AbCd",
+  "form": "id",
+  "id": "abcd",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "AbCd//x",
+  "form": "id",
+  "id": "abcd",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "AbCd//figures/a.png",
+  "form": "id",
+  "id": "abcd",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "AbCd@v1",
+  "error": true
+ },
+ {
+  "text": "data@AbCd",
+  "error": true
+ },
+ {
+  "text": "0000000000000000000000000000000000000000000000000000000000000000",
+  "form": "id",
+  "id": "0000000000000000000000000000000000000000000000000000000000000000",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "0000000000000000000000000000000000000000000000000000000000000000//x",
+  "form": "id",
+  "id": "0000000000000000000000000000000000000000000000000000000000000000",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "0000000000000000000000000000000000000000000000000000000000000000//figures/a.png",
+  "form": "id",
+  "id": "0000000000000000000000000000000000000000000000000000000000000000",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "0000000000000000000000000000000000000000000000000000000000000000@v1",
+  "error": true
+ },
+ {
+  "text": "data@0000000000000000000000000000000000000000000000000000000000000000",
+  "error": true
+ },
+ {
+  "text": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "form": "id",
+  "id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff//x",
+  "form": "id",
+  "id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff//figures/a.png",
+  "form": "id",
+  "id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff@v1",
+  "error": true
+ },
+ {
+  "text": "data@ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "error": true
+ },
+ {
+  "text": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+  "form": "id",
+  "id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF//x",
+  "form": "id",
+  "id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF//figures/a.png",
+  "form": "id",
+  "id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF@v1",
+  "error": true
+ },
+ {
+  "text": "data@FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+  "error": true
+ },
+ {
+  "text": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "error": true
+ },
+ {
+  "text": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff//x",
+  "error": true
+ },
+ {
+  "text": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff//figures/a.png",
+  "error": true
+ },
+ {
+  "text": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff@v1",
+  "error": true
+ },
+ {
+  "text": "data@fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "error": true
+ },
+ {
+  "text": "000000000000000000000000000000000000000000000000000000000000000",
+  "form": "id",
+  "id": "000000000000000000000000000000000000000000000000000000000000000",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "000000000000000000000000000000000000000000000000000000000000000//x",
+  "form": "id",
+  "id": "000000000000000000000000000000000000000000000000000000000000000",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "000000000000000000000000000000000000000000000000000000000000000//figures/a.png",
+  "form": "id",
+  "id": "000000000000000000000000000000000000000000000000000000000000000",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "000000000000000000000000000000000000000000000000000000000000000@v1",
+  "error": true
+ },
+ {
+  "text": "data@000000000000000000000000000000000000000000000000000000000000000",
+  "error": true
+ },
+ {
+  "text": "cafe",
+  "form": "id",
+  "id": "cafe",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "cafe//x",
+  "form": "id",
+  "id": "cafe",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "cafe//figures/a.png",
+  "form": "id",
+  "id": "cafe",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "cafe@v1",
+  "error": true
+ },
+ {
+  "text": "data@cafe",
+  "error": true
+ },
+ {
+  "text": "abcdef0123450000000000000000000000000000000000000000000000000000",
+  "form": "id",
+  "id": "abcdef0123450000000000000000000000000000000000000000000000000000",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "abcdef0123450000000000000000000000000000000000000000000000000000//x",
+  "form": "id",
+  "id": "abcdef0123450000000000000000000000000000000000000000000000000000",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "abcdef0123450000000000000000000000000000000000000000000000000000//figures/a.png",
+  "form": "id",
+  "id": "abcdef0123450000000000000000000000000000000000000000000000000000",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "abcdef0123450000000000000000000000000000000000000000000000000000@v1",
+  "error": true
+ },
+ {
+  "text": "data@abcdef0123450000000000000000000000000000000000000000000000000000",
+  "error": true
+ },
+ {
+  "text": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1",
+  "form": "id",
+  "id": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1//x",
+  "form": "id",
+  "id": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1//figures/a.png",
+  "form": "id",
+  "id": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1@v1",
+  "error": true
+ },
+ {
+  "text": "data@ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1",
+  "error": true
+ },
+ {
+  "text": "1234567999999999999999999999999999999999999999999999999999999999",
+  "form": "id",
+  "id": "1234567999999999999999999999999999999999999999999999999999999999",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "1234567999999999999999999999999999999999999999999999999999999999//x",
+  "form": "id",
+  "id": "1234567999999999999999999999999999999999999999999999999999999999",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "1234567999999999999999999999999999999999999999999999999999999999//figures/a.png",
+  "form": "id",
+  "id": "1234567999999999999999999999999999999999999999999999999999999999",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "1234567999999999999999999999999999999999999999999999999999999999@v1",
+  "error": true
+ },
+ {
+  "text": "data@1234567999999999999999999999999999999999999999999999999999999999",
+  "error": true
+ },
+ {
+  "text": "12345678901234567890",
+  "form": "id",
+  "id": "12345678901234567890",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "12345678901234567890//x",
+  "form": "id",
+  "id": "12345678901234567890",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "12345678901234567890//figures/a.png",
+  "form": "id",
+  "id": "12345678901234567890",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "12345678901234567890@v1",
+  "error": true
+ },
+ {
+  "text": "data@12345678901234567890",
+  "error": true
+ },
+ {
+  "text": "deadbeef",
+  "form": "id",
+  "id": "deadbeef",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "deadbeef//x",
+  "form": "id",
+  "id": "deadbeef",
+  "name": null,
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "deadbeef//figures/a.png",
+  "form": "id",
+  "id": "deadbeef",
+  "name": null,
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "deadbeef@v1",
+  "error": true
+ },
+ {
+  "text": "data@deadbeef",
+  "error": true
+ },
+ {
+  "text": "g123",
+  "form": "latest",
+  "id": null,
+  "name": "g123",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "g123//x",
+  "form": "latest",
+  "id": null,
+  "name": "g123",
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "g123//figures/a.png",
+  "form": "latest",
+  "id": null,
+  "name": "g123",
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "g123@v1",
+  "form": "version",
+  "id": null,
+  "name": "g123",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "data@g123",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "g123",
+  "path": null
+ },
+ {
+  "text": "data",
+  "form": "latest",
+  "id": null,
+  "name": "data",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "data@",
+  "error": true
+ },
+ {
+  "text": "data@v0",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "data@v1",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "data@v12",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "data@v01",
+  "error": true
+ },
+ {
+  "text": "data@v00",
+  "error": true
+ },
+ {
+  "text": "data@v-1",
+  "error": true
+ },
+ {
+  "text": "data@v+1",
+  "error": true
+ },
+ {
+  "text": "data@V3",
+  "error": true
+ },
+ {
+  "text": "data@V0",
+  "error": true
+ },
+ {
+  "text": "data@v3x",
+  "error": true
+ },
+ {
+  "text": "data@v3.zip",
+  "error": true
+ },
+ {
+  "text": "data@v2-final",
+  "error": true
+ },
+ {
+  "text": "data@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "data@val",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "data@v",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "data@V",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "data@latest",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "data@best",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "data@abc",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "data@a@b",
+  "error": true
+ },
+ {
+  "text": "data@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "data@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "data@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "data@x/v1",
+  "error": true
+ },
+ {
+  "text": "data@x/V2",
+  "error": true
+ },
+ {
+  "text": "data@x/",
+  "error": true
+ },
+ {
+  "text": "data@/x",
+  "error": true
+ },
+ {
+  "text": "data@a b",
+  "error": true
+ },
+ {
+  "text": "data@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "data@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "data@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "data@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "data@\u00fc",
+  "error": true
+ },
+ {
+  "text": "data@-x",
+  "error": true
+ },
+ {
+  "text": "data@.x",
+  "error": true
+ },
+ {
+  "text": "data@x/v-1",
+  "error": true
+ },
+ {
+  "text": "data@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "data@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "data@abc:d",
+  "error": true
+ },
+ {
+  "text": "data@x\n",
+  "error": true
+ },
+ {
+  "text": "datasets/crops",
+  "form": "latest",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "datasets/crops@",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@v0",
+  "form": "version",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@v1",
+  "form": "version",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@v12",
+  "form": "version",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@v01",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@v00",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@v-1",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@v+1",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@V3",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@V0",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@v3x",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@v3.zip",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@v2-final",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@val",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@v",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@V",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@latest",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@best",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@1234",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@cafe",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@abc",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@a@b",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@x/v1",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@x/V2",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@x/",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@/x",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@a b",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@\u00fc",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@-x",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@.x",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@x/v-1",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@deadbeef",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "datasets/crops@abc:d",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@x\n",
+  "error": true
+ },
+ {
+  "text": "a",
+  "form": "latest",
+  "id": null,
+  "name": "a",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "a@v0",
+  "form": "version",
+  "id": null,
+  "name": "a",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "a@v1",
+  "form": "version",
+  "id": null,
+  "name": "a",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "a@v12",
+  "form": "version",
+  "id": null,
+  "name": "a",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "a@v01",
+  "error": true
+ },
+ {
+  "text": "a@v00",
+  "error": true
+ },
+ {
+  "text": "a@v-1",
+  "error": true
+ },
+ {
+  "text": "a@v+1",
+  "error": true
+ },
+ {
+  "text": "a@V3",
+  "error": true
+ },
+ {
+  "text": "a@V0",
+  "error": true
+ },
+ {
+  "text": "a@v3x",
+  "error": true
+ },
+ {
+  "text": "a@v3.zip",
+  "error": true
+ },
+ {
+  "text": "a@v2-final",
+  "error": true
+ },
+ {
+  "text": "a@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "a@val",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "a@v",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "a@V",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "a@latest",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "a@best",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "a@1234",
+  "error": true
+ },
+ {
+  "text": "a@cafe",
+  "error": true
+ },
+ {
+  "text": "a@abc",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "a@a@b",
+  "error": true
+ },
+ {
+  "text": "a@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "a@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "a@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "a@x/v1",
+  "error": true
+ },
+ {
+  "text": "a@x/V2",
+  "error": true
+ },
+ {
+  "text": "a@x/",
+  "error": true
+ },
+ {
+  "text": "a@/x",
+  "error": true
+ },
+ {
+  "text": "a@a b",
+  "error": true
+ },
+ {
+  "text": "a@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "a@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "a@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "a@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a@\u00fc",
+  "error": true
+ },
+ {
+  "text": "a@-x",
+  "error": true
+ },
+ {
+  "text": "a@.x",
+  "error": true
+ },
+ {
+  "text": "a@x/v-1",
+  "error": true
+ },
+ {
+  "text": "a@deadbeef",
+  "error": true
+ },
+ {
+  "text": "a@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "a@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "a",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "a@abc:d",
+  "error": true
+ },
+ {
+  "text": "a@x\n",
+  "error": true
+ },
+ {
+  "text": "runs/x",
+  "form": "latest",
+  "id": null,
+  "name": "runs/x",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "runs/x@",
+  "error": true
+ },
+ {
+  "text": "runs/x@v0",
+  "form": "version",
+  "id": null,
+  "name": "runs/x",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "runs/x@v1",
+  "form": "version",
+  "id": null,
+  "name": "runs/x",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "runs/x@v12",
+  "form": "version",
+  "id": null,
+  "name": "runs/x",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "runs/x@v01",
+  "error": true
+ },
+ {
+  "text": "runs/x@v00",
+  "error": true
+ },
+ {
+  "text": "runs/x@v-1",
+  "error": true
+ },
+ {
+  "text": "runs/x@v+1",
+  "error": true
+ },
+ {
+  "text": "runs/x@V3",
+  "error": true
+ },
+ {
+  "text": "runs/x@V0",
+  "error": true
+ },
+ {
+  "text": "runs/x@v3x",
+  "error": true
+ },
+ {
+  "text": "runs/x@v3.zip",
+  "error": true
+ },
+ {
+  "text": "runs/x@v2-final",
+  "error": true
+ },
+ {
+  "text": "runs/x@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "runs/x@val",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "runs/x@v",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "runs/x@V",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "runs/x@latest",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "runs/x@best",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "runs/x@1234",
+  "error": true
+ },
+ {
+  "text": "runs/x@cafe",
+  "error": true
+ },
+ {
+  "text": "runs/x@abc",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "runs/x@a@b",
+  "error": true
+ },
+ {
+  "text": "runs/x@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "runs/x@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "runs/x@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "runs/x@x/v1",
+  "error": true
+ },
+ {
+  "text": "runs/x@x/V2",
+  "error": true
+ },
+ {
+  "text": "runs/x@x/",
+  "error": true
+ },
+ {
+  "text": "runs/x@/x",
+  "error": true
+ },
+ {
+  "text": "runs/x@a b",
+  "error": true
+ },
+ {
+  "text": "runs/x@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "runs/x@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "runs/x@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "runs/x@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "runs/x@\u00fc",
+  "error": true
+ },
+ {
+  "text": "runs/x@-x",
+  "error": true
+ },
+ {
+  "text": "runs/x@.x",
+  "error": true
+ },
+ {
+  "text": "runs/x@x/v-1",
+  "error": true
+ },
+ {
+  "text": "runs/x@deadbeef",
+  "error": true
+ },
+ {
+  "text": "runs/x@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "runs/x@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "runs/x",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "runs/x@abc:d",
+  "error": true
+ },
+ {
+  "text": "runs/x@x\n",
+  "error": true
+ },
+ {
+  "text": "v3",
+  "form": "latest",
+  "id": null,
+  "name": "v3",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "v3@",
+  "error": true
+ },
+ {
+  "text": "v3@v0",
+  "form": "version",
+  "id": null,
+  "name": "v3",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "v3@v1",
+  "form": "version",
+  "id": null,
+  "name": "v3",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "v3@v12",
+  "form": "version",
+  "id": null,
+  "name": "v3",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "v3@v01",
+  "error": true
+ },
+ {
+  "text": "v3@v00",
+  "error": true
+ },
+ {
+  "text": "v3@v-1",
+  "error": true
+ },
+ {
+  "text": "v3@v+1",
+  "error": true
+ },
+ {
+  "text": "v3@V3",
+  "error": true
+ },
+ {
+  "text": "v3@V0",
+  "error": true
+ },
+ {
+  "text": "v3@v3x",
+  "error": true
+ },
+ {
+  "text": "v3@v3.zip",
+  "error": true
+ },
+ {
+  "text": "v3@v2-final",
+  "error": true
+ },
+ {
+  "text": "v3@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "v3@val",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "v3@v",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "v3@V",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "v3@latest",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "v3@best",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "v3@1234",
+  "error": true
+ },
+ {
+  "text": "v3@cafe",
+  "error": true
+ },
+ {
+  "text": "v3@abc",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "v3@a@b",
+  "error": true
+ },
+ {
+  "text": "v3@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "v3@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "v3@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "v3@x/v1",
+  "error": true
+ },
+ {
+  "text": "v3@x/V2",
+  "error": true
+ },
+ {
+  "text": "v3@x/",
+  "error": true
+ },
+ {
+  "text": "v3@/x",
+  "error": true
+ },
+ {
+  "text": "v3@a b",
+  "error": true
+ },
+ {
+  "text": "v3@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "v3@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "v3@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "v3@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "v3@\u00fc",
+  "error": true
+ },
+ {
+  "text": "v3@-x",
+  "error": true
+ },
+ {
+  "text": "v3@.x",
+  "error": true
+ },
+ {
+  "text": "v3@x/v-1",
+  "error": true
+ },
+ {
+  "text": "v3@deadbeef",
+  "error": true
+ },
+ {
+  "text": "v3@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "v3@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "v3",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "v3@abc:d",
+  "error": true
+ },
+ {
+  "text": "v3@x\n",
+  "error": true
+ },
+ {
+  "text": "V3",
+  "error": true
+ },
+ {
+  "text": "V3@",
+  "error": true
+ },
+ {
+  "text": "V3@v0",
+  "error": true
+ },
+ {
+  "text": "V3@v1",
+  "error": true
+ },
+ {
+  "text": "V3@v12",
+  "error": true
+ },
+ {
+  "text": "V3@v01",
+  "error": true
+ },
+ {
+  "text": "V3@v00",
+  "error": true
+ },
+ {
+  "text": "V3@v-1",
+  "error": true
+ },
+ {
+  "text": "V3@v+1",
+  "error": true
+ },
+ {
+  "text": "V3@V3",
+  "error": true
+ },
+ {
+  "text": "V3@V0",
+  "error": true
+ },
+ {
+  "text": "V3@v3x",
+  "error": true
+ },
+ {
+  "text": "V3@v3.zip",
+  "error": true
+ },
+ {
+  "text": "V3@v2-final",
+  "error": true
+ },
+ {
+  "text": "V3@vfoo",
+  "error": true
+ },
+ {
+  "text": "V3@val",
+  "error": true
+ },
+ {
+  "text": "V3@v",
+  "error": true
+ },
+ {
+  "text": "V3@V",
+  "error": true
+ },
+ {
+  "text": "V3@latest",
+  "error": true
+ },
+ {
+  "text": "V3@best",
+  "error": true
+ },
+ {
+  "text": "V3@1234",
+  "error": true
+ },
+ {
+  "text": "V3@cafe",
+  "error": true
+ },
+ {
+  "text": "V3@abc",
+  "error": true
+ },
+ {
+  "text": "V3@a@b",
+  "error": true
+ },
+ {
+  "text": "V3@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "V3@sweep/3",
+  "error": true
+ },
+ {
+  "text": "V3@cafe/1",
+  "error": true
+ },
+ {
+  "text": "V3@x/v1",
+  "error": true
+ },
+ {
+  "text": "V3@x/V2",
+  "error": true
+ },
+ {
+  "text": "V3@x/",
+  "error": true
+ },
+ {
+  "text": "V3@/x",
+  "error": true
+ },
+ {
+  "text": "V3@a b",
+  "error": true
+ },
+ {
+  "text": "V3@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "V3@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "V3@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "V3@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "V3@\u00fc",
+  "error": true
+ },
+ {
+  "text": "V3@-x",
+  "error": true
+ },
+ {
+  "text": "V3@.x",
+  "error": true
+ },
+ {
+  "text": "V3@x/v-1",
+  "error": true
+ },
+ {
+  "text": "V3@deadbeef",
+  "error": true
+ },
+ {
+  "text": "V3@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "V3@beef-1",
+  "error": true
+ },
+ {
+  "text": "V3@abc:d",
+  "error": true
+ },
+ {
+  "text": "V3@x\n",
+  "error": true
+ },
+ {
+  "text": "x/1234",
+  "form": "latest",
+  "id": null,
+  "name": "x/1234",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "x/1234@",
+  "error": true
+ },
+ {
+  "text": "x/1234@v0",
+  "form": "version",
+  "id": null,
+  "name": "x/1234",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "x/1234@v1",
+  "form": "version",
+  "id": null,
+  "name": "x/1234",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "x/1234@v12",
+  "form": "version",
+  "id": null,
+  "name": "x/1234",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "x/1234@v01",
+  "error": true
+ },
+ {
+  "text": "x/1234@v00",
+  "error": true
+ },
+ {
+  "text": "x/1234@v-1",
+  "error": true
+ },
+ {
+  "text": "x/1234@v+1",
+  "error": true
+ },
+ {
+  "text": "x/1234@V3",
+  "error": true
+ },
+ {
+  "text": "x/1234@V0",
+  "error": true
+ },
+ {
+  "text": "x/1234@v3x",
+  "error": true
+ },
+ {
+  "text": "x/1234@v3.zip",
+  "error": true
+ },
+ {
+  "text": "x/1234@v2-final",
+  "error": true
+ },
+ {
+  "text": "x/1234@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "x/1234@val",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "x/1234@v",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "x/1234@V",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "x/1234@latest",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "x/1234@best",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "x/1234@1234",
+  "error": true
+ },
+ {
+  "text": "x/1234@cafe",
+  "error": true
+ },
+ {
+  "text": "x/1234@abc",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "x/1234@a@b",
+  "error": true
+ },
+ {
+  "text": "x/1234@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "x/1234@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "x/1234@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "x/1234@x/v1",
+  "error": true
+ },
+ {
+  "text": "x/1234@x/V2",
+  "error": true
+ },
+ {
+  "text": "x/1234@x/",
+  "error": true
+ },
+ {
+  "text": "x/1234@/x",
+  "error": true
+ },
+ {
+  "text": "x/1234@a b",
+  "error": true
+ },
+ {
+  "text": "x/1234@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "x/1234@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "x/1234@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "x/1234@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "x/1234@\u00fc",
+  "error": true
+ },
+ {
+  "text": "x/1234@-x",
+  "error": true
+ },
+ {
+  "text": "x/1234@.x",
+  "error": true
+ },
+ {
+  "text": "x/1234@x/v-1",
+  "error": true
+ },
+ {
+  "text": "x/1234@deadbeef",
+  "error": true
+ },
+ {
+  "text": "x/1234@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "x/1234@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "x/1234",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "x/1234@abc:d",
+  "error": true
+ },
+ {
+  "text": "x/1234@x\n",
+  "error": true
+ },
+ {
+  "text": "1234/x",
+  "form": "latest",
+  "id": null,
+  "name": "1234/x",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "1234/x@",
+  "error": true
+ },
+ {
+  "text": "1234/x@v0",
+  "form": "version",
+  "id": null,
+  "name": "1234/x",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "1234/x@v1",
+  "form": "version",
+  "id": null,
+  "name": "1234/x",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "1234/x@v12",
+  "form": "version",
+  "id": null,
+  "name": "1234/x",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "1234/x@v01",
+  "error": true
+ },
+ {
+  "text": "1234/x@v00",
+  "error": true
+ },
+ {
+  "text": "1234/x@v-1",
+  "error": true
+ },
+ {
+  "text": "1234/x@v+1",
+  "error": true
+ },
+ {
+  "text": "1234/x@V3",
+  "error": true
+ },
+ {
+  "text": "1234/x@V0",
+  "error": true
+ },
+ {
+  "text": "1234/x@v3x",
+  "error": true
+ },
+ {
+  "text": "1234/x@v3.zip",
+  "error": true
+ },
+ {
+  "text": "1234/x@v2-final",
+  "error": true
+ },
+ {
+  "text": "1234/x@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "1234/x@val",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "1234/x@v",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "1234/x@V",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "1234/x@latest",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "1234/x@best",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "1234/x@1234",
+  "error": true
+ },
+ {
+  "text": "1234/x@cafe",
+  "error": true
+ },
+ {
+  "text": "1234/x@abc",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "1234/x@a@b",
+  "error": true
+ },
+ {
+  "text": "1234/x@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "1234/x@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "1234/x@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "1234/x@x/v1",
+  "error": true
+ },
+ {
+  "text": "1234/x@x/V2",
+  "error": true
+ },
+ {
+  "text": "1234/x@x/",
+  "error": true
+ },
+ {
+  "text": "1234/x@/x",
+  "error": true
+ },
+ {
+  "text": "1234/x@a b",
+  "error": true
+ },
+ {
+  "text": "1234/x@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "1234/x@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "1234/x@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "1234/x@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "1234/x@\u00fc",
+  "error": true
+ },
+ {
+  "text": "1234/x@-x",
+  "error": true
+ },
+ {
+  "text": "1234/x@.x",
+  "error": true
+ },
+ {
+  "text": "1234/x@x/v-1",
+  "error": true
+ },
+ {
+  "text": "1234/x@deadbeef",
+  "error": true
+ },
+ {
+  "text": "1234/x@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "1234/x@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "1234/x",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "1234/x@abc:d",
+  "error": true
+ },
+ {
+  "text": "1234/x@x\n",
+  "error": true
+ },
+ {
+  "text": "data-1234",
+  "form": "latest",
+  "id": null,
+  "name": "data-1234",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "data-1234@",
+  "error": true
+ },
+ {
+  "text": "data-1234@v0",
+  "form": "version",
+  "id": null,
+  "name": "data-1234",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "data-1234@v1",
+  "form": "version",
+  "id": null,
+  "name": "data-1234",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "data-1234@v12",
+  "form": "version",
+  "id": null,
+  "name": "data-1234",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "data-1234@v01",
+  "error": true
+ },
+ {
+  "text": "data-1234@v00",
+  "error": true
+ },
+ {
+  "text": "data-1234@v-1",
+  "error": true
+ },
+ {
+  "text": "data-1234@v+1",
+  "error": true
+ },
+ {
+  "text": "data-1234@V3",
+  "error": true
+ },
+ {
+  "text": "data-1234@V0",
+  "error": true
+ },
+ {
+  "text": "data-1234@v3x",
+  "error": true
+ },
+ {
+  "text": "data-1234@v3.zip",
+  "error": true
+ },
+ {
+  "text": "data-1234@v2-final",
+  "error": true
+ },
+ {
+  "text": "data-1234@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "data-1234@val",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "data-1234@v",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "data-1234@V",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "data-1234@latest",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "data-1234@best",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "data-1234@1234",
+  "error": true
+ },
+ {
+  "text": "data-1234@cafe",
+  "error": true
+ },
+ {
+  "text": "data-1234@abc",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "data-1234@a@b",
+  "error": true
+ },
+ {
+  "text": "data-1234@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "data-1234@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "data-1234@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "data-1234@x/v1",
+  "error": true
+ },
+ {
+  "text": "data-1234@x/V2",
+  "error": true
+ },
+ {
+  "text": "data-1234@x/",
+  "error": true
+ },
+ {
+  "text": "data-1234@/x",
+  "error": true
+ },
+ {
+  "text": "data-1234@a b",
+  "error": true
+ },
+ {
+  "text": "data-1234@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "data-1234@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "data-1234@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "data-1234@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "data-1234@\u00fc",
+  "error": true
+ },
+ {
+  "text": "data-1234@-x",
+  "error": true
+ },
+ {
+  "text": "data-1234@.x",
+  "error": true
+ },
+ {
+  "text": "data-1234@x/v-1",
+  "error": true
+ },
+ {
+  "text": "data-1234@deadbeef",
+  "error": true
+ },
+ {
+  "text": "data-1234@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "data-1234@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "data-1234",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "data-1234@abc:d",
+  "error": true
+ },
+ {
+  "text": "data-1234@x\n",
+  "error": true
+ },
+ {
+  "text": "Name",
+  "error": true
+ },
+ {
+  "text": "Name@",
+  "error": true
+ },
+ {
+  "text": "Name@v0",
+  "error": true
+ },
+ {
+  "text": "Name@v1",
+  "error": true
+ },
+ {
+  "text": "Name@v12",
+  "error": true
+ },
+ {
+  "text": "Name@v01",
+  "error": true
+ },
+ {
+  "text": "Name@v00",
+  "error": true
+ },
+ {
+  "text": "Name@v-1",
+  "error": true
+ },
+ {
+  "text": "Name@v+1",
+  "error": true
+ },
+ {
+  "text": "Name@V3",
+  "error": true
+ },
+ {
+  "text": "Name@V0",
+  "error": true
+ },
+ {
+  "text": "Name@v3x",
+  "error": true
+ },
+ {
+  "text": "Name@v3.zip",
+  "error": true
+ },
+ {
+  "text": "Name@v2-final",
+  "error": true
+ },
+ {
+  "text": "Name@vfoo",
+  "error": true
+ },
+ {
+  "text": "Name@val",
+  "error": true
+ },
+ {
+  "text": "Name@v",
+  "error": true
+ },
+ {
+  "text": "Name@V",
+  "error": true
+ },
+ {
+  "text": "Name@latest",
+  "error": true
+ },
+ {
+  "text": "Name@best",
+  "error": true
+ },
+ {
+  "text": "Name@1234",
+  "error": true
+ },
+ {
+  "text": "Name@cafe",
+  "error": true
+ },
+ {
+  "text": "Name@abc",
+  "error": true
+ },
+ {
+  "text": "Name@a@b",
+  "error": true
+ },
+ {
+  "text": "Name@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "Name@sweep/3",
+  "error": true
+ },
+ {
+  "text": "Name@cafe/1",
+  "error": true
+ },
+ {
+  "text": "Name@x/v1",
+  "error": true
+ },
+ {
+  "text": "Name@x/V2",
+  "error": true
+ },
+ {
+  "text": "Name@x/",
+  "error": true
+ },
+ {
+  "text": "Name@/x",
+  "error": true
+ },
+ {
+  "text": "Name@a b",
+  "error": true
+ },
+ {
+  "text": "Name@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "Name@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "Name@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "Name@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "Name@\u00fc",
+  "error": true
+ },
+ {
+  "text": "Name@-x",
+  "error": true
+ },
+ {
+  "text": "Name@.x",
+  "error": true
+ },
+ {
+  "text": "Name@x/v-1",
+  "error": true
+ },
+ {
+  "text": "Name@deadbeef",
+  "error": true
+ },
+ {
+  "text": "Name@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "Name@beef-1",
+  "error": true
+ },
+ {
+  "text": "Name@abc:d",
+  "error": true
+ },
+ {
+  "text": "Name@x\n",
+  "error": true
+ },
+ {
+  "text": "a..b",
+  "error": true
+ },
+ {
+  "text": "a..b@",
+  "error": true
+ },
+ {
+  "text": "a..b@v0",
+  "error": true
+ },
+ {
+  "text": "a..b@v1",
+  "error": true
+ },
+ {
+  "text": "a..b@v12",
+  "error": true
+ },
+ {
+  "text": "a..b@v01",
+  "error": true
+ },
+ {
+  "text": "a..b@v00",
+  "error": true
+ },
+ {
+  "text": "a..b@v-1",
+  "error": true
+ },
+ {
+  "text": "a..b@v+1",
+  "error": true
+ },
+ {
+  "text": "a..b@V3",
+  "error": true
+ },
+ {
+  "text": "a..b@V0",
+  "error": true
+ },
+ {
+  "text": "a..b@v3x",
+  "error": true
+ },
+ {
+  "text": "a..b@v3.zip",
+  "error": true
+ },
+ {
+  "text": "a..b@v2-final",
+  "error": true
+ },
+ {
+  "text": "a..b@vfoo",
+  "error": true
+ },
+ {
+  "text": "a..b@val",
+  "error": true
+ },
+ {
+  "text": "a..b@v",
+  "error": true
+ },
+ {
+  "text": "a..b@V",
+  "error": true
+ },
+ {
+  "text": "a..b@latest",
+  "error": true
+ },
+ {
+  "text": "a..b@best",
+  "error": true
+ },
+ {
+  "text": "a..b@1234",
+  "error": true
+ },
+ {
+  "text": "a..b@cafe",
+  "error": true
+ },
+ {
+  "text": "a..b@abc",
+  "error": true
+ },
+ {
+  "text": "a..b@a@b",
+  "error": true
+ },
+ {
+  "text": "a..b@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "a..b@sweep/3",
+  "error": true
+ },
+ {
+  "text": "a..b@cafe/1",
+  "error": true
+ },
+ {
+  "text": "a..b@x/v1",
+  "error": true
+ },
+ {
+  "text": "a..b@x/V2",
+  "error": true
+ },
+ {
+  "text": "a..b@x/",
+  "error": true
+ },
+ {
+  "text": "a..b@/x",
+  "error": true
+ },
+ {
+  "text": "a..b@a b",
+  "error": true
+ },
+ {
+  "text": "a..b@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "a..b@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "a..b@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a..b@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a..b@\u00fc",
+  "error": true
+ },
+ {
+  "text": "a..b@-x",
+  "error": true
+ },
+ {
+  "text": "a..b@.x",
+  "error": true
+ },
+ {
+  "text": "a..b@x/v-1",
+  "error": true
+ },
+ {
+  "text": "a..b@deadbeef",
+  "error": true
+ },
+ {
+  "text": "a..b@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "a..b@beef-1",
+  "error": true
+ },
+ {
+  "text": "a..b@abc:d",
+  "error": true
+ },
+ {
+  "text": "a..b@x\n",
+  "error": true
+ },
+ {
+  "text": "a/../b",
+  "error": true
+ },
+ {
+  "text": "a/../b@",
+  "error": true
+ },
+ {
+  "text": "a/../b@v0",
+  "error": true
+ },
+ {
+  "text": "a/../b@v1",
+  "error": true
+ },
+ {
+  "text": "a/../b@v12",
+  "error": true
+ },
+ {
+  "text": "a/../b@v01",
+  "error": true
+ },
+ {
+  "text": "a/../b@v00",
+  "error": true
+ },
+ {
+  "text": "a/../b@v-1",
+  "error": true
+ },
+ {
+  "text": "a/../b@v+1",
+  "error": true
+ },
+ {
+  "text": "a/../b@V3",
+  "error": true
+ },
+ {
+  "text": "a/../b@V0",
+  "error": true
+ },
+ {
+  "text": "a/../b@v3x",
+  "error": true
+ },
+ {
+  "text": "a/../b@v3.zip",
+  "error": true
+ },
+ {
+  "text": "a/../b@v2-final",
+  "error": true
+ },
+ {
+  "text": "a/../b@vfoo",
+  "error": true
+ },
+ {
+  "text": "a/../b@val",
+  "error": true
+ },
+ {
+  "text": "a/../b@v",
+  "error": true
+ },
+ {
+  "text": "a/../b@V",
+  "error": true
+ },
+ {
+  "text": "a/../b@latest",
+  "error": true
+ },
+ {
+  "text": "a/../b@best",
+  "error": true
+ },
+ {
+  "text": "a/../b@1234",
+  "error": true
+ },
+ {
+  "text": "a/../b@cafe",
+  "error": true
+ },
+ {
+  "text": "a/../b@abc",
+  "error": true
+ },
+ {
+  "text": "a/../b@a@b",
+  "error": true
+ },
+ {
+  "text": "a/../b@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "a/../b@sweep/3",
+  "error": true
+ },
+ {
+  "text": "a/../b@cafe/1",
+  "error": true
+ },
+ {
+  "text": "a/../b@x/v1",
+  "error": true
+ },
+ {
+  "text": "a/../b@x/V2",
+  "error": true
+ },
+ {
+  "text": "a/../b@x/",
+  "error": true
+ },
+ {
+  "text": "a/../b@/x",
+  "error": true
+ },
+ {
+  "text": "a/../b@a b",
+  "error": true
+ },
+ {
+  "text": "a/../b@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "a/../b@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "a/../b@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a/../b@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a/../b@\u00fc",
+  "error": true
+ },
+ {
+  "text": "a/../b@-x",
+  "error": true
+ },
+ {
+  "text": "a/../b@.x",
+  "error": true
+ },
+ {
+  "text": "a/../b@x/v-1",
+  "error": true
+ },
+ {
+  "text": "a/../b@deadbeef",
+  "error": true
+ },
+ {
+  "text": "a/../b@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "a/../b@beef-1",
+  "error": true
+ },
+ {
+  "text": "a/../b@abc:d",
+  "error": true
+ },
+ {
+  "text": "a/../b@x\n",
+  "error": true
+ },
+ {
+  "text": "a/",
+  "error": true
+ },
+ {
+  "text": "a/@",
+  "error": true
+ },
+ {
+  "text": "a/@v0",
+  "error": true
+ },
+ {
+  "text": "a/@v1",
+  "error": true
+ },
+ {
+  "text": "a/@v12",
+  "error": true
+ },
+ {
+  "text": "a/@v01",
+  "error": true
+ },
+ {
+  "text": "a/@v00",
+  "error": true
+ },
+ {
+  "text": "a/@v-1",
+  "error": true
+ },
+ {
+  "text": "a/@v+1",
+  "error": true
+ },
+ {
+  "text": "a/@V3",
+  "error": true
+ },
+ {
+  "text": "a/@V0",
+  "error": true
+ },
+ {
+  "text": "a/@v3x",
+  "error": true
+ },
+ {
+  "text": "a/@v3.zip",
+  "error": true
+ },
+ {
+  "text": "a/@v2-final",
+  "error": true
+ },
+ {
+  "text": "a/@vfoo",
+  "error": true
+ },
+ {
+  "text": "a/@val",
+  "error": true
+ },
+ {
+  "text": "a/@v",
+  "error": true
+ },
+ {
+  "text": "a/@V",
+  "error": true
+ },
+ {
+  "text": "a/@latest",
+  "error": true
+ },
+ {
+  "text": "a/@best",
+  "error": true
+ },
+ {
+  "text": "a/@1234",
+  "error": true
+ },
+ {
+  "text": "a/@cafe",
+  "error": true
+ },
+ {
+  "text": "a/@abc",
+  "error": true
+ },
+ {
+  "text": "a/@a@b",
+  "error": true
+ },
+ {
+  "text": "a/@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "a/@sweep/3",
+  "error": true
+ },
+ {
+  "text": "a/@cafe/1",
+  "error": true
+ },
+ {
+  "text": "a/@x/v1",
+  "error": true
+ },
+ {
+  "text": "a/@x/V2",
+  "error": true
+ },
+ {
+  "text": "a/@x/",
+  "error": true
+ },
+ {
+  "text": "a/@/x",
+  "error": true
+ },
+ {
+  "text": "a/@a b",
+  "error": true
+ },
+ {
+  "text": "a/@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "a/@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "a/@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a/@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a/@\u00fc",
+  "error": true
+ },
+ {
+  "text": "a/@-x",
+  "error": true
+ },
+ {
+  "text": "a/@.x",
+  "error": true
+ },
+ {
+  "text": "a/@x/v-1",
+  "error": true
+ },
+ {
+  "text": "a/@deadbeef",
+  "error": true
+ },
+ {
+  "text": "a/@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "a/@beef-1",
+  "error": true
+ },
+ {
+  "text": "a/@abc:d",
+  "error": true
+ },
+ {
+  "text": "a/@x\n",
+  "error": true
+ },
+ {
+  "text": "/a",
+  "error": true
+ },
+ {
+  "text": "/a@",
+  "error": true
+ },
+ {
+  "text": "/a@v0",
+  "error": true
+ },
+ {
+  "text": "/a@v1",
+  "error": true
+ },
+ {
+  "text": "/a@v12",
+  "error": true
+ },
+ {
+  "text": "/a@v01",
+  "error": true
+ },
+ {
+  "text": "/a@v00",
+  "error": true
+ },
+ {
+  "text": "/a@v-1",
+  "error": true
+ },
+ {
+  "text": "/a@v+1",
+  "error": true
+ },
+ {
+  "text": "/a@V3",
+  "error": true
+ },
+ {
+  "text": "/a@V0",
+  "error": true
+ },
+ {
+  "text": "/a@v3x",
+  "error": true
+ },
+ {
+  "text": "/a@v3.zip",
+  "error": true
+ },
+ {
+  "text": "/a@v2-final",
+  "error": true
+ },
+ {
+  "text": "/a@vfoo",
+  "error": true
+ },
+ {
+  "text": "/a@val",
+  "error": true
+ },
+ {
+  "text": "/a@v",
+  "error": true
+ },
+ {
+  "text": "/a@V",
+  "error": true
+ },
+ {
+  "text": "/a@latest",
+  "error": true
+ },
+ {
+  "text": "/a@best",
+  "error": true
+ },
+ {
+  "text": "/a@1234",
+  "error": true
+ },
+ {
+  "text": "/a@cafe",
+  "error": true
+ },
+ {
+  "text": "/a@abc",
+  "error": true
+ },
+ {
+  "text": "/a@a@b",
+  "error": true
+ },
+ {
+  "text": "/a@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "/a@sweep/3",
+  "error": true
+ },
+ {
+  "text": "/a@cafe/1",
+  "error": true
+ },
+ {
+  "text": "/a@x/v1",
+  "error": true
+ },
+ {
+  "text": "/a@x/V2",
+  "error": true
+ },
+ {
+  "text": "/a@x/",
+  "error": true
+ },
+ {
+  "text": "/a@/x",
+  "error": true
+ },
+ {
+  "text": "/a@a b",
+  "error": true
+ },
+ {
+  "text": "/a@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "/a@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "/a@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "/a@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "/a@\u00fc",
+  "error": true
+ },
+ {
+  "text": "/a@-x",
+  "error": true
+ },
+ {
+  "text": "/a@.x",
+  "error": true
+ },
+ {
+  "text": "/a@x/v-1",
+  "error": true
+ },
+ {
+  "text": "/a@deadbeef",
+  "error": true
+ },
+ {
+  "text": "/a@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "/a@beef-1",
+  "error": true
+ },
+ {
+  "text": "/a@abc:d",
+  "error": true
+ },
+ {
+  "text": "/a@x\n",
+  "error": true
+ },
+ {
+  "text": "-a",
+  "error": true
+ },
+ {
+  "text": "-a@",
+  "error": true
+ },
+ {
+  "text": "-a@v0",
+  "error": true
+ },
+ {
+  "text": "-a@v1",
+  "error": true
+ },
+ {
+  "text": "-a@v12",
+  "error": true
+ },
+ {
+  "text": "-a@v01",
+  "error": true
+ },
+ {
+  "text": "-a@v00",
+  "error": true
+ },
+ {
+  "text": "-a@v-1",
+  "error": true
+ },
+ {
+  "text": "-a@v+1",
+  "error": true
+ },
+ {
+  "text": "-a@V3",
+  "error": true
+ },
+ {
+  "text": "-a@V0",
+  "error": true
+ },
+ {
+  "text": "-a@v3x",
+  "error": true
+ },
+ {
+  "text": "-a@v3.zip",
+  "error": true
+ },
+ {
+  "text": "-a@v2-final",
+  "error": true
+ },
+ {
+  "text": "-a@vfoo",
+  "error": true
+ },
+ {
+  "text": "-a@val",
+  "error": true
+ },
+ {
+  "text": "-a@v",
+  "error": true
+ },
+ {
+  "text": "-a@V",
+  "error": true
+ },
+ {
+  "text": "-a@latest",
+  "error": true
+ },
+ {
+  "text": "-a@best",
+  "error": true
+ },
+ {
+  "text": "-a@1234",
+  "error": true
+ },
+ {
+  "text": "-a@cafe",
+  "error": true
+ },
+ {
+  "text": "-a@abc",
+  "error": true
+ },
+ {
+  "text": "-a@a@b",
+  "error": true
+ },
+ {
+  "text": "-a@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "-a@sweep/3",
+  "error": true
+ },
+ {
+  "text": "-a@cafe/1",
+  "error": true
+ },
+ {
+  "text": "-a@x/v1",
+  "error": true
+ },
+ {
+  "text": "-a@x/V2",
+  "error": true
+ },
+ {
+  "text": "-a@x/",
+  "error": true
+ },
+ {
+  "text": "-a@/x",
+  "error": true
+ },
+ {
+  "text": "-a@a b",
+  "error": true
+ },
+ {
+  "text": "-a@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "-a@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "-a@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "-a@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "-a@\u00fc",
+  "error": true
+ },
+ {
+  "text": "-a@-x",
+  "error": true
+ },
+ {
+  "text": "-a@.x",
+  "error": true
+ },
+ {
+  "text": "-a@x/v-1",
+  "error": true
+ },
+ {
+  "text": "-a@deadbeef",
+  "error": true
+ },
+ {
+  "text": "-a@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "-a@beef-1",
+  "error": true
+ },
+ {
+  "text": "-a@abc:d",
+  "error": true
+ },
+ {
+  "text": "-a@x\n",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d",
+  "form": "latest",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@v0",
+  "form": "version",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@v1",
+  "form": "version",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@v12",
+  "form": "version",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@v01",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@v00",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@v-1",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@v+1",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@V3",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@V0",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@v3x",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@v3.zip",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@v2-final",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@val",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@v",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@V",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@latest",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@best",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@1234",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@cafe",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@abc",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@a@b",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@x/v1",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@x/V2",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@x/",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@/x",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@a b",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@\u00fc",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@-x",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@.x",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@x/v-1",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@deadbeef",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "a_b.c-d",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "a_b.c-d@abc:d",
+  "error": true
+ },
+ {
+  "text": "a_b.c-d@x\n",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study",
+  "form": "latest",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@v0",
+  "form": "version",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@v1",
+  "form": "version",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@v12",
+  "form": "version",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@v01",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@v00",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@v-1",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@v+1",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@V3",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@V0",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@v3x",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@v3.zip",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@v2-final",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@val",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@v",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@V",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@latest",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@best",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@1234",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@cafe",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@abc",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@a@b",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@x/v1",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@x/V2",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@x/",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@/x",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@a b",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@\u00fc",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@-x",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@.x",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@x/v-1",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@deadbeef",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "reports/descent-study",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "reports/descent-study@abc:d",
+  "error": true
+ },
+ {
+  "text": "reports/descent-study@x\n",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v0",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v1",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v12",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v01",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v00",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v-1",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v+1",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@V3",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@V0",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v3x",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v3.zip",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v2-final",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@vfoo",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@val",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@v",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@V",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@latest",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@best",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@1234",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@cafe",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@abc",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@a@b",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@sweep/3",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@cafe/1",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@x/v1",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@x/V2",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@x/",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@/x",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@a b",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@\u00fc",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@-x",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@.x",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@x/v-1",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@deadbeef",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@beef-1",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@abc:d",
+  "error": true
+ },
+ {
+  "text": "d\u00e4t\u00e4@x\n",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v0",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v12",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v01",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v00",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v-1",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v+1",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@V3",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@V0",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v3x",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v3.zip",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v2-final",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@vfoo",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@val",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@v",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@V",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@latest",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@best",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@1234",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@cafe",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@abc",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@a@b",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@sweep/3",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@cafe/1",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@x/v1",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@x/V2",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@x/",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@/x",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@a b",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@\u00fc",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@-x",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@.x",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@x/v-1",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@deadbeef",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@beef-1",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@abc:d",
+  "error": true
+ },
+ {
+  "text": "\u540d\u524d@x\n",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "form": "latest",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v0",
+  "form": "version",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v1",
+  "form": "version",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v12",
+  "form": "version",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v01",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v00",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v-1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v+1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@V3",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@V0",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v3x",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v3.zip",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v2-final",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@val",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@V",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@latest",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@best",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@1234",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@cafe",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@abc",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@a@b",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x/v1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x/V2",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x/",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@/x",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@a b",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@\u00fc",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@-x",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@.x",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x/v-1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@deadbeef",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@abc:d",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x\n",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v0",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v12",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v01",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v00",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v-1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v+1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@V3",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@V0",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v3x",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v3.zip",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v2-final",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@vfoo",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@val",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@v",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@V",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@latest",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@best",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@1234",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@cafe",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@abc",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@a@b",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@sweep/3",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@cafe/1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x/v1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x/V2",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x/",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@/x",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@a b",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@\u00fc",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@-x",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@.x",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x/v-1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@deadbeef",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@beef-1",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@abc:d",
+  "error": true
+ },
+ {
+  "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@x\n",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v0",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v1",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v12",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v01",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v00",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v-1",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v+1",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@V3",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@V0",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v3x",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v3.zip",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v2-final",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@vfoo",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@val",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@v",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@V",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@latest",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@best",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@1234",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@cafe",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@abc",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@a@b",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@sweep/3",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@cafe/1",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@x/v1",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@x/V2",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@x/",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@/x",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@a b",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@\u00fc",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@-x",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@.x",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@x/v-1",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@deadbeef",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@beef-1",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@abc:d",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2@x\n",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v0",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v1",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v12",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v01",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v00",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v-1",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v+1",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@V3",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@V0",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v3x",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v3.zip",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v2-final",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@vfoo",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@val",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@v",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@V",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@latest",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@best",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@1234",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@cafe",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@abc",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@a@b",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@sweep/3",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@cafe/1",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@x/v1",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@x/V2",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@x/",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@/x",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@a b",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@\u00fc",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@-x",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@.x",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@x/v-1",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@deadbeef",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@beef-1",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@abc:d",
+  "error": true
+ },
+ {
+  "text": "01A144EF-BD78-72E6-A221-1439C21F9EA2@x\n",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "form": "latest",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v0",
+  "form": "version",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v1",
+  "form": "version",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v12",
+  "form": "version",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v01",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v00",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v-1",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v+1",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@V3",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@V0",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v3x",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v3.zip",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v2-final",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@val",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@v",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@V",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@latest",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@best",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@1234",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@cafe",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@abc",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@a@b",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@x/v1",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@x/V2",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@x/",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@/x",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@a b",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@\u00fc",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@-x",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@.x",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@x/v-1",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@deadbeef",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@abc:d",
+  "error": true
+ },
+ {
+  "text": "x/01a144ef-bd78-72e6-a221-1439c21f9ea2@x\n",
+  "error": true
+ },
+ {
+  "text": "cafe/x",
+  "form": "latest",
+  "id": null,
+  "name": "cafe/x",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "cafe/x@",
+  "error": true
+ },
+ {
+  "text": "cafe/x@v0",
+  "form": "version",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "cafe/x@v1",
+  "form": "version",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "cafe/x@v12",
+  "form": "version",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "cafe/x@v01",
+  "error": true
+ },
+ {
+  "text": "cafe/x@v00",
+  "error": true
+ },
+ {
+  "text": "cafe/x@v-1",
+  "error": true
+ },
+ {
+  "text": "cafe/x@v+1",
+  "error": true
+ },
+ {
+  "text": "cafe/x@V3",
+  "error": true
+ },
+ {
+  "text": "cafe/x@V0",
+  "error": true
+ },
+ {
+  "text": "cafe/x@v3x",
+  "error": true
+ },
+ {
+  "text": "cafe/x@v3.zip",
+  "error": true
+ },
+ {
+  "text": "cafe/x@v2-final",
+  "error": true
+ },
+ {
+  "text": "cafe/x@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "cafe/x@val",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "cafe/x@v",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "cafe/x@V",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "cafe/x@latest",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "cafe/x@best",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "cafe/x@1234",
+  "error": true
+ },
+ {
+  "text": "cafe/x@cafe",
+  "error": true
+ },
+ {
+  "text": "cafe/x@abc",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "cafe/x@a@b",
+  "error": true
+ },
+ {
+  "text": "cafe/x@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "cafe/x@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "cafe/x@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "cafe/x@x/v1",
+  "error": true
+ },
+ {
+  "text": "cafe/x@x/V2",
+  "error": true
+ },
+ {
+  "text": "cafe/x@x/",
+  "error": true
+ },
+ {
+  "text": "cafe/x@/x",
+  "error": true
+ },
+ {
+  "text": "cafe/x@a b",
+  "error": true
+ },
+ {
+  "text": "cafe/x@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "cafe/x@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "cafe/x@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "cafe/x@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "cafe/x@\u00fc",
+  "error": true
+ },
+ {
+  "text": "cafe/x@-x",
+  "error": true
+ },
+ {
+  "text": "cafe/x@.x",
+  "error": true
+ },
+ {
+  "text": "cafe/x@x/v-1",
+  "error": true
+ },
+ {
+  "text": "cafe/x@deadbeef",
+  "error": true
+ },
+ {
+  "text": "cafe/x@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "cafe/x@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "cafe/x",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "cafe/x@abc:d",
+  "error": true
+ },
+ {
+  "text": "cafe/x@x\n",
+  "error": true
+ },
+ {
+  "text": "beef",
+  "form": "id",
+  "id": "beef",
+  "name": null,
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "beef@",
+  "error": true
+ },
+ {
+  "text": "beef@v0",
+  "error": true
+ },
+ {
+  "text": "beef@v1",
+  "error": true
+ },
+ {
+  "text": "beef@v12",
+  "error": true
+ },
+ {
+  "text": "beef@v01",
+  "error": true
+ },
+ {
+  "text": "beef@v00",
+  "error": true
+ },
+ {
+  "text": "beef@v-1",
+  "error": true
+ },
+ {
+  "text": "beef@v+1",
+  "error": true
+ },
+ {
+  "text": "beef@V3",
+  "error": true
+ },
+ {
+  "text": "beef@V0",
+  "error": true
+ },
+ {
+  "text": "beef@v3x",
+  "error": true
+ },
+ {
+  "text": "beef@v3.zip",
+  "error": true
+ },
+ {
+  "text": "beef@v2-final",
+  "error": true
+ },
+ {
+  "text": "beef@vfoo",
+  "error": true
+ },
+ {
+  "text": "beef@val",
+  "error": true
+ },
+ {
+  "text": "beef@v",
+  "error": true
+ },
+ {
+  "text": "beef@V",
+  "error": true
+ },
+ {
+  "text": "beef@latest",
+  "error": true
+ },
+ {
+  "text": "beef@best",
+  "error": true
+ },
+ {
+  "text": "beef@1234",
+  "error": true
+ },
+ {
+  "text": "beef@cafe",
+  "error": true
+ },
+ {
+  "text": "beef@abc",
+  "error": true
+ },
+ {
+  "text": "beef@a@b",
+  "error": true
+ },
+ {
+  "text": "beef@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "beef@sweep/3",
+  "error": true
+ },
+ {
+  "text": "beef@cafe/1",
+  "error": true
+ },
+ {
+  "text": "beef@x/v1",
+  "error": true
+ },
+ {
+  "text": "beef@x/V2",
+  "error": true
+ },
+ {
+  "text": "beef@x/",
+  "error": true
+ },
+ {
+  "text": "beef@/x",
+  "error": true
+ },
+ {
+  "text": "beef@a b",
+  "error": true
+ },
+ {
+  "text": "beef@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "beef@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "beef@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "beef@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "beef@\u00fc",
+  "error": true
+ },
+ {
+  "text": "beef@-x",
+  "error": true
+ },
+ {
+  "text": "beef@.x",
+  "error": true
+ },
+ {
+  "text": "beef@x/v-1",
+  "error": true
+ },
+ {
+  "text": "beef@deadbeef",
+  "error": true
+ },
+ {
+  "text": "beef@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "beef@beef-1",
+  "error": true
+ },
+ {
+  "text": "beef@abc:d",
+  "error": true
+ },
+ {
+  "text": "beef@x\n",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1",
+  "form": "latest",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@v0",
+  "form": "version",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@v1",
+  "form": "version",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@v12",
+  "form": "version",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@v01",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@v00",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@v-1",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@v+1",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@V3",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@V0",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@v3x",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@v3.zip",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@v2-final",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@val",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@v",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@V",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@latest",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@best",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@1234",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@cafe",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@abc",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@a@b",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@x/v1",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@x/V2",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@x/",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@/x",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@a b",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@\u00fc",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@-x",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@.x",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@x/v-1",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@deadbeef",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "deadbeef-1",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "deadbeef-1@abc:d",
+  "error": true
+ },
+ {
+  "text": "deadbeef-1@x\n",
+  "error": true
+ },
+ {
+  "text": "v-1",
+  "form": "latest",
+  "id": null,
+  "name": "v-1",
+  "selector": null,
+  "path": null
+ },
+ {
+  "text": "v-1@",
+  "error": true
+ },
+ {
+  "text": "v-1@v0",
+  "form": "version",
+  "id": null,
+  "name": "v-1",
+  "selector": "v0",
+  "path": null
+ },
+ {
+  "text": "v-1@v1",
+  "form": "version",
+  "id": null,
+  "name": "v-1",
+  "selector": "v1",
+  "path": null
+ },
+ {
+  "text": "v-1@v12",
+  "form": "version",
+  "id": null,
+  "name": "v-1",
+  "selector": "v12",
+  "path": null
+ },
+ {
+  "text": "v-1@v01",
+  "error": true
+ },
+ {
+  "text": "v-1@v00",
+  "error": true
+ },
+ {
+  "text": "v-1@v-1",
+  "error": true
+ },
+ {
+  "text": "v-1@v+1",
+  "error": true
+ },
+ {
+  "text": "v-1@V3",
+  "error": true
+ },
+ {
+  "text": "v-1@V0",
+  "error": true
+ },
+ {
+  "text": "v-1@v3x",
+  "error": true
+ },
+ {
+  "text": "v-1@v3.zip",
+  "error": true
+ },
+ {
+  "text": "v-1@v2-final",
+  "error": true
+ },
+ {
+  "text": "v-1@vfoo",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "vfoo",
+  "path": null
+ },
+ {
+  "text": "v-1@val",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "val",
+  "path": null
+ },
+ {
+  "text": "v-1@v",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "v",
+  "path": null
+ },
+ {
+  "text": "v-1@V",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "V",
+  "path": null
+ },
+ {
+  "text": "v-1@latest",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "latest",
+  "path": null
+ },
+ {
+  "text": "v-1@best",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "best",
+  "path": null
+ },
+ {
+  "text": "v-1@1234",
+  "error": true
+ },
+ {
+  "text": "v-1@cafe",
+  "error": true
+ },
+ {
+  "text": "v-1@abc",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "abc",
+  "path": null
+ },
+ {
+  "text": "v-1@a@b",
+  "error": true
+ },
+ {
+  "text": "v-1@2026-10-16_12-00-00",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "2026-10-16_12-00-00",
+  "path": null
+ },
+ {
+  "text": "v-1@sweep/3",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "sweep/3",
+  "path": null
+ },
+ {
+  "text": "v-1@cafe/1",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "cafe/1",
+  "path": null
+ },
+ {
+  "text": "v-1@x/v1",
+  "error": true
+ },
+ {
+  "text": "v-1@x/V2",
+  "error": true
+ },
+ {
+  "text": "v-1@x/",
+  "error": true
+ },
+ {
+  "text": "v-1@/x",
+  "error": true
+ },
+ {
+  "text": "v-1@a b",
+  "error": true
+ },
+ {
+  "text": "v-1@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "v-1@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "v-1@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "path": null
+ },
+ {
+  "text": "v-1@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "v-1@\u00fc",
+  "error": true
+ },
+ {
+  "text": "v-1@-x",
+  "error": true
+ },
+ {
+  "text": "v-1@.x",
+  "error": true
+ },
+ {
+  "text": "v-1@x/v-1",
+  "error": true
+ },
+ {
+  "text": "v-1@deadbeef",
+  "error": true
+ },
+ {
+  "text": "v-1@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "v-1@beef-1",
+  "form": "word",
+  "id": null,
+  "name": "v-1",
+  "selector": "beef-1",
+  "path": null
+ },
+ {
+  "text": "v-1@abc:d",
+  "error": true
+ },
+ {
+  "text": "v-1@x\n",
+  "error": true
+ },
+ {
+  "text": "a b",
+  "error": true
+ },
+ {
+  "text": "a b@",
+  "error": true
+ },
+ {
+  "text": "a b@v0",
+  "error": true
+ },
+ {
+  "text": "a b@v1",
+  "error": true
+ },
+ {
+  "text": "a b@v12",
+  "error": true
+ },
+ {
+  "text": "a b@v01",
+  "error": true
+ },
+ {
+  "text": "a b@v00",
+  "error": true
+ },
+ {
+  "text": "a b@v-1",
+  "error": true
+ },
+ {
+  "text": "a b@v+1",
+  "error": true
+ },
+ {
+  "text": "a b@V3",
+  "error": true
+ },
+ {
+  "text": "a b@V0",
+  "error": true
+ },
+ {
+  "text": "a b@v3x",
+  "error": true
+ },
+ {
+  "text": "a b@v3.zip",
+  "error": true
+ },
+ {
+  "text": "a b@v2-final",
+  "error": true
+ },
+ {
+  "text": "a b@vfoo",
+  "error": true
+ },
+ {
+  "text": "a b@val",
+  "error": true
+ },
+ {
+  "text": "a b@v",
+  "error": true
+ },
+ {
+  "text": "a b@V",
+  "error": true
+ },
+ {
+  "text": "a b@latest",
+  "error": true
+ },
+ {
+  "text": "a b@best",
+  "error": true
+ },
+ {
+  "text": "a b@1234",
+  "error": true
+ },
+ {
+  "text": "a b@cafe",
+  "error": true
+ },
+ {
+  "text": "a b@abc",
+  "error": true
+ },
+ {
+  "text": "a b@a@b",
+  "error": true
+ },
+ {
+  "text": "a b@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "a b@sweep/3",
+  "error": true
+ },
+ {
+  "text": "a b@cafe/1",
+  "error": true
+ },
+ {
+  "text": "a b@x/v1",
+  "error": true
+ },
+ {
+  "text": "a b@x/V2",
+  "error": true
+ },
+ {
+  "text": "a b@x/",
+  "error": true
+ },
+ {
+  "text": "a b@/x",
+  "error": true
+ },
+ {
+  "text": "a b@a b",
+  "error": true
+ },
+ {
+  "text": "a b@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "a b@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "a b@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a b@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a b@\u00fc",
+  "error": true
+ },
+ {
+  "text": "a b@-x",
+  "error": true
+ },
+ {
+  "text": "a b@.x",
+  "error": true
+ },
+ {
+  "text": "a b@x/v-1",
+  "error": true
+ },
+ {
+  "text": "a b@deadbeef",
+  "error": true
+ },
+ {
+  "text": "a b@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "a b@beef-1",
+  "error": true
+ },
+ {
+  "text": "a b@abc:d",
+  "error": true
+ },
+ {
+  "text": "a b@x\n",
+  "error": true
+ },
+ {
+  "text": "a\tb",
+  "error": true
+ },
+ {
+  "text": "a\tb@",
+  "error": true
+ },
+ {
+  "text": "a\tb@v0",
+  "error": true
+ },
+ {
+  "text": "a\tb@v1",
+  "error": true
+ },
+ {
+  "text": "a\tb@v12",
+  "error": true
+ },
+ {
+  "text": "a\tb@v01",
+  "error": true
+ },
+ {
+  "text": "a\tb@v00",
+  "error": true
+ },
+ {
+  "text": "a\tb@v-1",
+  "error": true
+ },
+ {
+  "text": "a\tb@v+1",
+  "error": true
+ },
+ {
+  "text": "a\tb@V3",
+  "error": true
+ },
+ {
+  "text": "a\tb@V0",
+  "error": true
+ },
+ {
+  "text": "a\tb@v3x",
+  "error": true
+ },
+ {
+  "text": "a\tb@v3.zip",
+  "error": true
+ },
+ {
+  "text": "a\tb@v2-final",
+  "error": true
+ },
+ {
+  "text": "a\tb@vfoo",
+  "error": true
+ },
+ {
+  "text": "a\tb@val",
+  "error": true
+ },
+ {
+  "text": "a\tb@v",
+  "error": true
+ },
+ {
+  "text": "a\tb@V",
+  "error": true
+ },
+ {
+  "text": "a\tb@latest",
+  "error": true
+ },
+ {
+  "text": "a\tb@best",
+  "error": true
+ },
+ {
+  "text": "a\tb@1234",
+  "error": true
+ },
+ {
+  "text": "a\tb@cafe",
+  "error": true
+ },
+ {
+  "text": "a\tb@abc",
+  "error": true
+ },
+ {
+  "text": "a\tb@a@b",
+  "error": true
+ },
+ {
+  "text": "a\tb@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "a\tb@sweep/3",
+  "error": true
+ },
+ {
+  "text": "a\tb@cafe/1",
+  "error": true
+ },
+ {
+  "text": "a\tb@x/v1",
+  "error": true
+ },
+ {
+  "text": "a\tb@x/V2",
+  "error": true
+ },
+ {
+  "text": "a\tb@x/",
+  "error": true
+ },
+ {
+  "text": "a\tb@/x",
+  "error": true
+ },
+ {
+  "text": "a\tb@a b",
+  "error": true
+ },
+ {
+  "text": "a\tb@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "a\tb@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "a\tb@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a\tb@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "a\tb@\u00fc",
+  "error": true
+ },
+ {
+  "text": "a\tb@-x",
+  "error": true
+ },
+ {
+  "text": "a\tb@.x",
+  "error": true
+ },
+ {
+  "text": "a\tb@x/v-1",
+  "error": true
+ },
+ {
+  "text": "a\tb@deadbeef",
+  "error": true
+ },
+ {
+  "text": "a\tb@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "a\tb@beef-1",
+  "error": true
+ },
+ {
+  "text": "a\tb@abc:d",
+  "error": true
+ },
+ {
+  "text": "a\tb@x\n",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v0",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v1",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v12",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v01",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v00",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v-1",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v+1",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@V3",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@V0",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v3x",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v3.zip",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v2-final",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@vfoo",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@val",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@v",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@V",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@latest",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@best",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@1234",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@cafe",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@abc",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@a@b",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@2026-10-16_12-00-00",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@sweep/3",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@cafe/1",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@x/v1",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@x/V2",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@x/",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@/x",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@a b",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@01a144ef-bd78-72e6-a221-1439c21f9ea2",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@01A144EF-BD78-72E6-A221-1439C21F9EA2",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@\u00fc",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@-x",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@.x",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@x/v-1",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@deadbeef",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@DEADBEEF",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@beef-1",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@abc:d",
+  "error": true
+ },
+ {
+  "text": "caf\u00e9@x\n",
+  "error": true
+ },
+ {
+  "text": "data@v3",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v3",
+  "path": null
+ },
+ {
+  "text": "data//x",
+  "form": "latest",
+  "id": null,
+  "name": "data",
+  "selector": null,
+  "path": "x"
+ },
+ {
+  "text": "data@v3//x",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v3",
+  "path": "x"
+ },
+ {
+  "text": "data@best//x",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "best",
+  "path": "x"
+ },
+ {
+  "text": "datasets/crops@sweep/3//x",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "sweep/3",
+  "path": "x"
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//x",
+  "error": true
+ },
+ {
+  "text": "data@v01//x",
+  "error": true
+ },
+ {
+  "text": "data//figures/a.png",
+  "form": "latest",
+  "id": null,
+  "name": "data",
+  "selector": null,
+  "path": "figures/a.png"
+ },
+ {
+  "text": "data@v3//figures/a.png",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v3",
+  "path": "figures/a.png"
+ },
+ {
+  "text": "data@best//figures/a.png",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "best",
+  "path": "figures/a.png"
+ },
+ {
+  "text": "datasets/crops@sweep/3//figures/a.png",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "sweep/3",
+  "path": "figures/a.png"
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//figures/a.png",
+  "error": true
+ },
+ {
+  "text": "data@v01//figures/a.png",
+  "error": true
+ },
+ {
+  "text": "data//",
+  "error": true
+ },
+ {
+  "text": "data@v3//",
+  "error": true
+ },
+ {
+  "text": "data@best//",
+  "error": true
+ },
+ {
+  "text": "abcdef0//",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@sweep/3//",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//",
+  "error": true
+ },
+ {
+  "text": "data@v01//",
+  "error": true
+ },
+ {
+  "text": "data//a//b",
+  "error": true
+ },
+ {
+  "text": "data@v3//a//b",
+  "error": true
+ },
+ {
+  "text": "data@best//a//b",
+  "error": true
+ },
+ {
+  "text": "abcdef0//a//b",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@sweep/3//a//b",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//a//b",
+  "error": true
+ },
+ {
+  "text": "data@v01//a//b",
+  "error": true
+ },
+ {
+  "text": "data//./a",
+  "error": true
+ },
+ {
+  "text": "data@v3//./a",
+  "error": true
+ },
+ {
+  "text": "data@best//./a",
+  "error": true
+ },
+ {
+  "text": "abcdef0//./a",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@sweep/3//./a",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//./a",
+  "error": true
+ },
+ {
+  "text": "data@v01//./a",
+  "error": true
+ },
+ {
+  "text": "data//a/..",
+  "error": true
+ },
+ {
+  "text": "data@v3//a/..",
+  "error": true
+ },
+ {
+  "text": "data@best//a/..",
+  "error": true
+ },
+ {
+  "text": "abcdef0//a/..",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@sweep/3//a/..",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//a/..",
+  "error": true
+ },
+ {
+  "text": "data@v01//a/..",
+  "error": true
+ },
+ {
+  "text": "data//a/./b",
+  "error": true
+ },
+ {
+  "text": "data@v3//a/./b",
+  "error": true
+ },
+ {
+  "text": "data@best//a/./b",
+  "error": true
+ },
+ {
+  "text": "abcdef0//a/./b",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@sweep/3//a/./b",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//a/./b",
+  "error": true
+ },
+ {
+  "text": "data@v01//a/./b",
+  "error": true
+ },
+ {
+  "text": "data//a\\b",
+  "error": true
+ },
+ {
+  "text": "data@v3//a\\b",
+  "error": true
+ },
+ {
+  "text": "data@best//a\\b",
+  "error": true
+ },
+ {
+  "text": "abcdef0//a\\b",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@sweep/3//a\\b",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//a\\b",
+  "error": true
+ },
+ {
+  "text": "data@v01//a\\b",
+  "error": true
+ },
+ {
+  "text": "data//a b.png",
+  "form": "latest",
+  "id": null,
+  "name": "data",
+  "selector": null,
+  "path": "a b.png"
+ },
+ {
+  "text": "data@v3//a b.png",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v3",
+  "path": "a b.png"
+ },
+ {
+  "text": "data@best//a b.png",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "best",
+  "path": "a b.png"
+ },
+ {
+  "text": "abcdef0//a b.png",
+  "form": "id",
+  "id": "abcdef0",
+  "name": null,
+  "selector": null,
+  "path": "a b.png"
+ },
+ {
+  "text": "datasets/crops@sweep/3//a b.png",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "sweep/3",
+  "path": "a b.png"
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//a b.png",
+  "error": true
+ },
+ {
+  "text": "data@v01//a b.png",
+  "error": true
+ },
+ {
+  "text": "data//\u00fc.png",
+  "form": "latest",
+  "id": null,
+  "name": "data",
+  "selector": null,
+  "path": "\u00fc.png"
+ },
+ {
+  "text": "data@v3//\u00fc.png",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v3",
+  "path": "\u00fc.png"
+ },
+ {
+  "text": "data@best//\u00fc.png",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "best",
+  "path": "\u00fc.png"
+ },
+ {
+  "text": "abcdef0//\u00fc.png",
+  "form": "id",
+  "id": "abcdef0",
+  "name": null,
+  "selector": null,
+  "path": "\u00fc.png"
+ },
+ {
+  "text": "datasets/crops@sweep/3//\u00fc.png",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "sweep/3",
+  "path": "\u00fc.png"
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//\u00fc.png",
+  "error": true
+ },
+ {
+  "text": "data@v01//\u00fc.png",
+  "error": true
+ },
+ {
+  "text": "data//a\u0001",
+  "error": true
+ },
+ {
+  "text": "data@v3//a\u0001",
+  "error": true
+ },
+ {
+  "text": "data@best//a\u0001",
+  "error": true
+ },
+ {
+  "text": "abcdef0//a\u0001",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@sweep/3//a\u0001",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//a\u0001",
+  "error": true
+ },
+ {
+  "text": "data@v01//a\u0001",
+  "error": true
+ },
+ {
+  "text": "data//a:b",
+  "form": "latest",
+  "id": null,
+  "name": "data",
+  "selector": null,
+  "path": "a:b"
+ },
+ {
+  "text": "data@v3//a:b",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v3",
+  "path": "a:b"
+ },
+ {
+  "text": "data@best//a:b",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "best",
+  "path": "a:b"
+ },
+ {
+  "text": "abcdef0//a:b",
+  "form": "id",
+  "id": "abcdef0",
+  "name": null,
+  "selector": null,
+  "path": "a:b"
+ },
+ {
+  "text": "datasets/crops@sweep/3//a:b",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "sweep/3",
+  "path": "a:b"
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//a:b",
+  "error": true
+ },
+ {
+  "text": "data@v01//a:b",
+  "error": true
+ },
+ {
+  "text": "data///a",
+  "error": true
+ },
+ {
+  "text": "data@v3///a",
+  "error": true
+ },
+ {
+  "text": "data@best///a",
+  "error": true
+ },
+ {
+  "text": "abcdef0///a",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@sweep/3///a",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2///a",
+  "error": true
+ },
+ {
+  "text": "data@v01///a",
+  "error": true
+ },
+ {
+  "text": "data//a/",
+  "error": true
+ },
+ {
+  "text": "data@v3//a/",
+  "error": true
+ },
+ {
+  "text": "data@best//a/",
+  "error": true
+ },
+ {
+  "text": "abcdef0//a/",
+  "error": true
+ },
+ {
+  "text": "datasets/crops@sweep/3//a/",
+  "error": true
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//a/",
+  "error": true
+ },
+ {
+  "text": "data@v01//a/",
+  "error": true
+ },
+ {
+  "text": "data//.hidden",
+  "form": "latest",
+  "id": null,
+  "name": "data",
+  "selector": null,
+  "path": ".hidden"
+ },
+ {
+  "text": "data@v3//.hidden",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v3",
+  "path": ".hidden"
+ },
+ {
+  "text": "data@best//.hidden",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "best",
+  "path": ".hidden"
+ },
+ {
+  "text": "abcdef0//.hidden",
+  "form": "id",
+  "id": "abcdef0",
+  "name": null,
+  "selector": null,
+  "path": ".hidden"
+ },
+ {
+  "text": "datasets/crops@sweep/3//.hidden",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "sweep/3",
+  "path": ".hidden"
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//.hidden",
+  "error": true
+ },
+ {
+  "text": "data@v01//.hidden",
+  "error": true
+ },
+ {
+  "text": "data//..x",
+  "form": "latest",
+  "id": null,
+  "name": "data",
+  "selector": null,
+  "path": "..x"
+ },
+ {
+  "text": "data@v3//..x",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v3",
+  "path": "..x"
+ },
+ {
+  "text": "data@best//..x",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "best",
+  "path": "..x"
+ },
+ {
+  "text": "abcdef0//..x",
+  "form": "id",
+  "id": "abcdef0",
+  "name": null,
+  "selector": null,
+  "path": "..x"
+ },
+ {
+  "text": "datasets/crops@sweep/3//..x",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "sweep/3",
+  "path": "..x"
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//..x",
+  "error": true
+ },
+ {
+  "text": "data@v01//..x",
+  "error": true
+ },
+ {
+  "text": "data//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "form": "latest",
+  "id": null,
+  "name": "data",
+  "selector": null,
+  "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ },
+ {
+  "text": "data@v3//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v3",
+  "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ },
+ {
+  "text": "data@best//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "form": "word",
+  "id": null,
+  "name": "data",
+  "selector": "best",
+  "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ },
+ {
+  "text": "abcdef0//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "form": "id",
+  "id": "abcdef0",
+  "name": null,
+  "selector": null,
+  "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ },
+ {
+  "text": "datasets/crops@sweep/3//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "form": "word",
+  "id": null,
+  "name": "datasets/crops",
+  "selector": "sweep/3",
+  "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+ },
+ {
+  "text": "01a144ef-bd78-72e6-a221-1439c21f9ea2//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "error": true
+ },
+ {
+  "text": "data@v01//xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "error": true
+ },
+ {
+  "text": " data",
+  "error": true
+ },
+ {
+  "text": "data ",
+  "error": true
+ },
+ {
+  "text": "da ta",
+  "error": true
+ },
+ {
+  "text": " abcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0 ",
+  "error": true
+ },
+ {
+  "text": "ab cdef0",
+  "error": true
+ },
+ {
+  "text": " data@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1 ",
+  "error": true
+ },
+ {
+  "text": "da ta@v1",
+  "error": true
+ },
+ {
+  "text": " data@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x ",
+  "error": true
+ },
+ {
+  "text": "da ta@v1//x",
+  "error": true
+ },
+ {
+  "text": "\tdata",
+  "error": true
+ },
+ {
+  "text": "data\t",
+  "error": true
+ },
+ {
+  "text": "da\tta",
+  "error": true
+ },
+ {
+  "text": "\tabcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0\t",
+  "error": true
+ },
+ {
+  "text": "ab\tcdef0",
+  "error": true
+ },
+ {
+  "text": "\tdata@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1\t",
+  "error": true
+ },
+ {
+  "text": "da\tta@v1",
+  "error": true
+ },
+ {
+  "text": "\tdata@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x\t",
+  "error": true
+ },
+ {
+  "text": "da\tta@v1//x",
+  "error": true
+ },
+ {
+  "text": "\ndata",
+  "error": true
+ },
+ {
+  "text": "data\n",
+  "error": true
+ },
+ {
+  "text": "da\nta",
+  "error": true
+ },
+ {
+  "text": "\nabcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0\n",
+  "error": true
+ },
+ {
+  "text": "ab\ncdef0",
+  "error": true
+ },
+ {
+  "text": "\ndata@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1\n",
+  "error": true
+ },
+ {
+  "text": "da\nta@v1",
+  "error": true
+ },
+ {
+  "text": "\ndata@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x\n",
+  "error": true
+ },
+ {
+  "text": "da\nta@v1//x",
+  "error": true
+ },
+ {
+  "text": "\rdata",
+  "error": true
+ },
+ {
+  "text": "data\r",
+  "error": true
+ },
+ {
+  "text": "da\rta",
+  "error": true
+ },
+ {
+  "text": "\rabcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0\r",
+  "error": true
+ },
+ {
+  "text": "ab\rcdef0",
+  "error": true
+ },
+ {
+  "text": "\rdata@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1\r",
+  "error": true
+ },
+ {
+  "text": "da\rta@v1",
+  "error": true
+ },
+ {
+  "text": "\rdata@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x\r",
+  "error": true
+ },
+ {
+  "text": "da\rta@v1//x",
+  "error": true
+ },
+ {
+  "text": "\u000bdata",
+  "error": true
+ },
+ {
+  "text": "data\u000b",
+  "error": true
+ },
+ {
+  "text": "da\u000bta",
+  "error": true
+ },
+ {
+  "text": "\u000babcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0\u000b",
+  "error": true
+ },
+ {
+  "text": "ab\u000bcdef0",
+  "error": true
+ },
+ {
+  "text": "\u000bdata@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1\u000b",
+  "error": true
+ },
+ {
+  "text": "da\u000bta@v1",
+  "error": true
+ },
+ {
+  "text": "\u000bdata@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x\u000b",
+  "error": true
+ },
+ {
+  "text": "da\u000bta@v1//x",
+  "error": true
+ },
+ {
+  "text": "\fdata",
+  "error": true
+ },
+ {
+  "text": "data\f",
+  "error": true
+ },
+ {
+  "text": "da\fta",
+  "error": true
+ },
+ {
+  "text": "\fabcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0\f",
+  "error": true
+ },
+ {
+  "text": "ab\fcdef0",
+  "error": true
+ },
+ {
+  "text": "\fdata@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1\f",
+  "error": true
+ },
+ {
+  "text": "da\fta@v1",
+  "error": true
+ },
+ {
+  "text": "\fdata@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x\f",
+  "error": true
+ },
+ {
+  "text": "da\fta@v1//x",
+  "error": true
+ },
+ {
+  "text": "\u00a0data",
+  "error": true
+ },
+ {
+  "text": "data\u00a0",
+  "error": true
+ },
+ {
+  "text": "da\u00a0ta",
+  "error": true
+ },
+ {
+  "text": "\u00a0abcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0\u00a0",
+  "error": true
+ },
+ {
+  "text": "ab\u00a0cdef0",
+  "error": true
+ },
+ {
+  "text": "\u00a0data@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1\u00a0",
+  "error": true
+ },
+ {
+  "text": "da\u00a0ta@v1",
+  "error": true
+ },
+ {
+  "text": "\u00a0data@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x\u00a0",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v1",
+  "path": "x\u00a0"
+ },
+ {
+  "text": "da\u00a0ta@v1//x",
+  "error": true
+ },
+ {
+  "text": "\u2003data",
+  "error": true
+ },
+ {
+  "text": "data\u2003",
+  "error": true
+ },
+ {
+  "text": "da\u2003ta",
+  "error": true
+ },
+ {
+  "text": "\u2003abcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0\u2003",
+  "error": true
+ },
+ {
+  "text": "ab\u2003cdef0",
+  "error": true
+ },
+ {
+  "text": "\u2003data@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1\u2003",
+  "error": true
+ },
+ {
+  "text": "da\u2003ta@v1",
+  "error": true
+ },
+ {
+  "text": "\u2003data@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x\u2003",
+  "form": "version",
+  "id": null,
+  "name": "data",
+  "selector": "v1",
+  "path": "x\u2003"
+ },
+ {
+  "text": "da\u2003ta@v1//x",
+  "error": true
+ },
+ {
+  "text": "\u0000data",
+  "error": true
+ },
+ {
+  "text": "data\u0000",
+  "error": true
+ },
+ {
+  "text": "da\u0000ta",
+  "error": true
+ },
+ {
+  "text": "\u0000abcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0\u0000",
+  "error": true
+ },
+ {
+  "text": "ab\u0000cdef0",
+  "error": true
+ },
+ {
+  "text": "\u0000data@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1\u0000",
+  "error": true
+ },
+ {
+  "text": "da\u0000ta@v1",
+  "error": true
+ },
+ {
+  "text": "\u0000data@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x\u0000",
+  "error": true
+ },
+ {
+  "text": "da\u0000ta@v1//x",
+  "error": true
+ },
+ {
+  "text": "\u001fdata",
+  "error": true
+ },
+ {
+  "text": "data\u001f",
+  "error": true
+ },
+ {
+  "text": "da\u001fta",
+  "error": true
+ },
+ {
+  "text": "\u001fabcdef0",
+  "error": true
+ },
+ {
+  "text": "abcdef0\u001f",
+  "error": true
+ },
+ {
+  "text": "ab\u001fcdef0",
+  "error": true
+ },
+ {
+  "text": "\u001fdata@v1",
+  "error": true
+ },
+ {
+  "text": "data@v1\u001f",
+  "error": true
+ },
+ {
+  "text": "da\u001fta@v1",
+  "error": true
+ },
+ {
+  "text": "\u001fdata@v1//x",
+  "error": true
+ },
+ {
+  "text": "data@v1//x\u001f",
+  "error": true
+ },
+ {
+  "text": "da\u001fta@v1//x",
+  "error": true
+ }
+]

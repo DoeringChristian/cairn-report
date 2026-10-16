@@ -3,10 +3,10 @@
 it, so the sync engine (client/sync.py) moves versions from one to the other through it alone, and tests can stand in
 fakes. Neither names a project in its calls: each is bound to one, as a repo holds one.
 
-Versions are named by number (`int`, the source of truth's name) or uid (a UUIDv7 text, the identity everywhere).
-Manifests are dicts: version, uid, short_id, label, status (running | completed | failed | deleted), created,
-completed, files (entries {path, sha256, size} or {path, link}), metadata, inputs (exact references `name@v<n>`),
-source, digest.
+Versions are named by number (`int`, the source of truth's name) or id (64 hex digits, the identity everywhere).
+References are parsed by store/refs.py alone. Manifests are dicts: version, id, label, status (running | completed |
+failed | deleted), created, completed, files (entries {path, sha256, size} or {path, link}), metadata, inputs (the ids
+of the versions it consumed), source, digest. A short id is not stored: `short_ids` computes it.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from .refs import Ref
 @runtime_checkable
 class Repository(Protocol):
     @property
-    def uid(self) -> str:
-        """The repo's uid (`repo.json`; on a remote, the server's repo), never changed."""
+    def id(self) -> str:
+        """The repo's id (`repo.json`; on a remote, the server's repo), never changed."""
 
     # ------------------------------------------------------------------ blobs
 
@@ -33,10 +33,11 @@ class Repository(Protocol):
         """Store `size` bytes from `stream` as blob `sha` (refused if they do not hash to it); False if it was there."""
 
     def blob_file(self, name: str, version: int | str, entry: dict, root) -> Path:
-        """A local file with the contents of a version's entry (for a remote: downloaded into the repo `root`)."""
+        """A local file with the contents of a version's entry (for a remote: downloaded into the repo `root`);
+        `version` is its number or id."""
 
-    def read_file(self, name: str, selector: str | None, path: str, range_header: str | None = None) -> FileRead:
-        """A file of a version, or a byte range of it (`selector`: `v<n>`, a uid, a short id, an alias, or a label)."""
+    def read_file(self, ref: Ref | str, range_header: str | None = None) -> FileRead:
+        """The file a reference with a path names (`name@v<n>//path`, `<id>//path`, ...), or a byte range of it."""
 
     # ------------------------------------------------------------------ the project
 
@@ -59,18 +60,25 @@ class Repository(Protocol):
         """Every manifest of an artifact, oldest first, whatever its status."""
 
     def get_version(self, name: str, version: int | str) -> dict:
-        """One manifest by number or uid, whatever its status (NotFound if there is none)."""
+        """One manifest by number or id, whatever its status (NotFound if there is none)."""
 
     def aliases(self, name: str) -> dict[str, int]: ...
 
     def resolve(self, ref: Ref | str) -> tuple[str, dict]:
-        """(name, manifest) of the completed version a reference names (no selector: `latest`)."""
+        """(name, manifest) of the completed version a reference names (a bare name: `latest`)."""
 
-    def ids(self, text: str, name: str | None = None) -> list[dict]:
-        """The versions a short id (or uid) may name: [{name, version, uid, short_id, status}] (refs.pick)."""
+    def find(self, ref: Ref | str) -> tuple[str, dict]:
+        """(name, manifest) of the version a reference names: any status for an id or `name@v<n>`."""
+
+    def ids(self, prefix: str, name: str | None = None) -> list[dict]:
+        """The versions whose id starts with `prefix`: [{name, version, id, short_id, status}] (refs.pick)."""
+
+    def short_ids(self, ids) -> dict[str, str]:
+        """{id: short id}: the shortest prefix of at least 7 digits that no other id of the project starts with."""
 
     def lineage(self, ref: Ref | str, marks: bool = False) -> dict[str, list[str]]:
-        """{inputs, consumers} as exact references (with `marks`: `deleted` and `nodes` {ref: {status, kind, short_id}})."""
+        """{id, inputs, consumers} as ids (with `marks`: `deleted` ids and `nodes` {id: {name, version, status, kind,
+        short_id}})."""
 
     # ------------------------------------------------------------------ writing
 
@@ -80,17 +88,17 @@ class Repository(Protocol):
         label: str | None = None,
         metadata: dict | None = None,
         source: dict | None = None,
-        uid: str | None = None,
+        id: str | None = None,
     ) -> int:
-        """Start a running version (idempotent by uid); returns its number."""
+        """Start a running version (idempotent by id); returns its number."""
 
-    def add_files(self, name: str, version: int, entries: list[dict]) -> None: ...
+    def add_files(self, name: str, version: int | str, entries: list[dict]) -> None: ...
 
-    def set_metadata(self, name: str, version: int, metadata: dict) -> None: ...
+    def set_metadata(self, name: str, version: int | str, metadata: dict) -> None: ...
 
-    def complete_version(self, name: str, version: int, inputs=None, digest: str | None = None) -> None: ...
+    def complete_version(self, name: str, version: int | str, inputs=None, digest: str | None = None) -> None: ...
 
-    def fail_version(self, name: str, version: int) -> None: ...
+    def fail_version(self, name: str, version: int | str) -> None: ...
 
     def publish(
         self,
@@ -101,10 +109,10 @@ class Repository(Protocol):
         inputs=None,
         aliases=(),
         source: dict | None = None,
-        uid: str | None = None,
+        id: str | None = None,
         digest: str | None = None,
     ) -> int:
-        """Start, fill, and complete a version in one step (idempotent by uid; no new version when nothing changed
+        """Start, fill, and complete a version in one step (idempotent by id; no new version when nothing changed
         since the latest); returns its number."""
 
     def set_alias(self, name: str, alias: str, version: int) -> None: ...
@@ -124,5 +132,5 @@ class Repository(Protocol):
 
 
 METHODS = [name for name in Repository.__dict__ if not name.startswith("_") and callable(getattr(Repository, name))] + [
-    "uid"
+    "id"
 ]

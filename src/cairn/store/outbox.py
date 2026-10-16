@@ -1,12 +1,13 @@
 """The outbox: versions on their way to the remote, one folder per version, in the repo.
 
-    <repo>/outbox/<uid>/manifest.json            the entry: everything the remote needs, and its sync state
-    <repo>/outbox/<uid>/heartbeat                a running version's owner: {"time", "host", "pid"}, rewritten while it runs
-    <repo>/outbox/<uid>/.flushing-<host>-<pid>   a sender's claim on it: {"time", "host", "pid"}
+    <repo>/outbox/<id>/manifest.json            the entry: everything the remote needs, and its sync state
+    <repo>/outbox/<id>/heartbeat                a running version's owner: {"time", "host", "pid"}, rewritten while it runs
+    <repo>/outbox/<id>/.flushing-<host>-<pid>   a sender's claim on it: {"time", "host", "pid"}
     <repo>/blobs/<aa>/<sha256>                   the contents the entries need (shared with the rest of the repo)
 
-An entry holds the artifact name, the manifest entries, label, metadata, inputs, aliases, and source, plus `url` (the
-remote it is for: `<server>/<project>`), `sync`
+An entry holds the version's `id`, the artifact name, the manifest entries, label, metadata, inputs (references: the
+ids of versions, or `name@v<n>` of the remote's), aliases, source, and `created`, plus `url` (the remote it is for:
+`<server>/<project>`), `sync`
 (pending | running | rejected), `status` (the version's own: completed | running | failed), `owner` (host, pid),
 `number` (None until the remote assigns it), and `error`. A version is pending from the moment its entry exists
 until the remote has it: then its number is written into the repo (a copy, store/local.py) and only after that is
@@ -48,8 +49,6 @@ def _put(path: Path, value) -> bool:
     return True
 
 
-from .refs import Ref
-
 OUTBOX = "outbox"
 HEARTBEAT = "heartbeat"
 CLAIM = ".flushing-"
@@ -66,9 +65,9 @@ def epoch(stamp: str | None) -> float:
 # ------------------------------------------------------------------ what an entry says
 
 
-def belongs(record: dict, url: str, uid: str | None) -> bool:
-    """Whether an entry is for the remote at `url` (or with repo uid `uid`)."""
-    return record.get("url") == url.rstrip("/") or bool(uid and record.get("store") == uid)
+def belongs(record: dict, url: str, id: str | None) -> bool:
+    """Whether an entry is for the remote at `url` (or with repo id `id`)."""
+    return record.get("url") == url.rstrip("/") or bool(id and record.get("store") == id)
 
 
 def manifest_of(record: dict) -> dict:
@@ -76,8 +75,7 @@ def manifest_of(record: dict) -> dict:
     status = "pending" if record["status"] == "completed" else record["status"]
     return {
         "version": record.get("number"),
-        "uid": record["uid"],
-        "short_id": refs.default_short_id(record["uid"]),
+        "id": record["id"],
         "label": record.get("label"),
         "status": status,
         "created": record["created"],
@@ -100,9 +98,15 @@ def usable(record: dict | None) -> bool:
 
 
 def exact_ref(name: str, manifest: dict) -> str:
-    """`name@v<n>`, or `name@<uid>` while the remote has not numbered the version."""
+    """The exact reference of a version: `name@v<n>`, or its id while the source of truth has not numbered it."""
     number = manifest.get("version")
-    return str(Ref(name, f"v{number}" if number is not None else manifest["uid"]))
+    return refs.exact(name, number) if number is not None else manifest["id"]
+
+
+def order(record: dict) -> tuple:
+    """The outbox's order: when each entry was made (`created`, strictly increasing within a process), then its name.
+    Never the id: ids carry no order."""
+    return (record.get("created") or "", record.get("name") or "")
 
 
 _PARSED: dict[str, tuple[tuple, dict]] = {}  # manifest path -> ((inode, size, mtime_ns), record): `Outbox.records`
@@ -139,24 +143,24 @@ class Outbox:
 
     # ------------------------------------------------------------------ entries
 
-    def folder_of(self, uid: str) -> Path:
-        return self.folder / uid
+    def folder_of(self, id: str) -> Path:
+        return self.folder / id
 
-    def load(self, uid: str) -> dict | None:
-        """The entry of a version uid (None if there is none: never made here, or sent)."""
-        record = read_record(self.folder_of(uid))
+    def load(self, id: str) -> dict | None:
+        """The entry of a version id (None if there is none: never made here, or sent)."""
+        record = read_record(self.folder_of(id))
         return record if record and record.get("sync") in ("pending", "running", "rejected") else None
 
     def save(self, record: dict) -> bool:
         """Rewrite an entry; False (and nothing written) when it is gone (sent and removed by another sender)."""
         return _put(
-            self.folder_of(record["uid"]) / RECORD,
+            self.folder_of(record["id"]) / RECORD,
             {key: value for key, value in record.items() if not key.startswith("_")},
         )
 
     def create(self, record: dict, running: bool) -> None:
         """Put a new entry in place in one step (built under a scratch name, then renamed): it exists whole or not at all."""
-        folder = self.folder_of(record["uid"])
+        folder = self.folder_of(record["id"])
         folder.parent.mkdir(parents=True, exist_ok=True)
         build = scratch(folder)
         build.mkdir()
@@ -170,7 +174,7 @@ class Outbox:
                 remove(build)
 
     def records(self) -> list[dict]:
-        """Every entry, oldest first (by uid, which is creation order). Each manifest is parsed once per process while
+        """Every entry, oldest first (`order`: by `created`). Each manifest is parsed once per process while
         its file stays the same (`_PARSED`, by inode, size and time): a listing rereads only the entries that changed,
         and sees a changed or removed one at once. The dicts are shallow copies: replace their values, do not edit
         their lists or dicts in place (`load` reads one entry afresh, for that)."""
@@ -183,9 +187,9 @@ class Outbox:
             if ".tmp-" in entry.name:
                 continue
             record = _parsed(os.path.join(entry.path, RECORD))
-            if record and record.get("uid") and record.get("sync") in ("pending", "running", "rejected"):
+            if record and record.get("id") and record.get("sync") in ("pending", "running", "rejected"):
                 found.append(dict(record))
-        return sorted(found, key=lambda record: record["uid"])
+        return sorted(found, key=order)
 
     def needed(self) -> set[str]:
         """The contents some entry still needs (never garbage, never pruned)."""
@@ -194,7 +198,7 @@ class Outbox:
     def remove(self, record: dict) -> None:
         """Forget an entry (the remote has the version, and the repo knows its number): marked done first, so a sender
         that reads it meanwhile skips it, then removed."""
-        folder = self.folder_of(record["uid"])
+        folder = self.folder_of(record["id"])
         if not folder.is_dir():
             return
         try:
@@ -211,17 +215,17 @@ class Outbox:
 
     # --------------------------------------------------------------- heartbeats
 
-    def beat(self, uid: str) -> None:
+    def beat(self, id: str) -> None:
         """The owner of a running version says it is alive (write-temp-and-rename; never fails, never makes the folder)."""
-        if not self.folder_of(uid).is_dir():
+        if not self.folder_of(id).is_dir():
             return
         try:
-            _put(self.folder_of(uid) / HEARTBEAT, {"time": time.time(), "host": hostname(), "pid": os.getpid()})
+            _put(self.folder_of(id) / HEARTBEAT, {"time": time.time(), "host": hostname(), "pid": os.getpid()})
         except OSError:
             pass
 
     def last_beat(self, record: dict) -> float:
-        beat = read_json(self.folder_of(record["uid"]) / HEARTBEAT) or {}
+        beat = read_json(self.folder_of(record["id"]) / HEARTBEAT) or {}
         return float(beat.get("time") or epoch(record.get("created")))
 
     def dead(self, record: dict, timeout: float) -> str | None:
@@ -257,13 +261,13 @@ class Outbox:
             return True
         return time.time() - float(claim.get("time", 0)) > timeout
 
-    def claim(self, uid: str, timeout: float) -> Path | None:
+    def claim(self, id: str, timeout: float) -> Path | None:
         """Claim an entry for sending: exclusively create `.flushing-<host>-<pid>` (a timestamp in it).
 
         None when another live claim exists (stale ones, older than `timeout` or of a dead pid on this host, are
         ignored) or the entry left. Two senders that claim at the same moment both see both claims and back off;
         the next sync sends it. A claim only saves double work: sending is idempotent anyway."""
-        folder = self.folder_of(uid)
+        folder = self.folder_of(id)
         mine = folder / self._claim_name()
         if not folder.is_dir():
             return None

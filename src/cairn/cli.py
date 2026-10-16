@@ -1,8 +1,10 @@
 """Command line: `cairn init | remote | build | serve | share | publish | pull | artifacts | versions | show | alias | delete |
-retention | gc | sync | status | prune | verify | server | ui | export-metadata | finalize-study | drafts`.
+retention | gc | sync | status | prune | verify | server | ui | export-metadata | finalize-study | drafts | upgrade`.
 
 A repo holds one project, so no command names one. Settings live in the repo's `.cairn/config.toml` (config.py).
-References are `name[@vN|@uid|@<short id>|@alias|@label]`, or a bare short id; versions are shown with their short id.
+A reference is an id (or a unique prefix of 4 or more of its digits), `name`, `name@v<n>`, or `name@<alias or label>`,
+parsed by store/refs.py; versions are shown with their short id. A repo made by Cairn 0.14 is refused by every command
+but `cairn upgrade`, which converts it.
 
 Every command that uses the repo first tries to send what waits for its remote, and once more at its end (quietly,
 and only when something is pending; nothing without a remote); `sync` does that by hand, says what happened, and
@@ -155,23 +157,23 @@ def _when(stamp) -> str:
 def cmd_versions(args) -> None:
     store = open_objects(args)
     versions = store.artifact(args.name).versions()
+    shorts = store.backend.short_ids([version.id for version in versions]) if versions else {}  # one request
     rows = []
     for version in versions:
         files = version.files
         rows.append(
             [
                 f"v{version.number}" if version.number is not None else "pending",
-                version.short_id,
+                shorts.get(version.id) or version.short_id,
                 version.status,
                 version.label or "",
                 _when(version.created),
                 term().plural(len(files), "file"),
                 term().size(sum(item.size for item in files)),
-                version.uid,
             ]
         )
     for line in (
-        term().table(["VERSION", "ID", "STATUS", "LABEL", "CREATED", "FILES", "SIZE", "UID"], rows, shrink=(7, 3))
+        term().table(["VERSION", "ID", "STATUS", "LABEL", "CREATED", "FILES", "SIZE"], rows, shrink=(3,))
         if rows
         else []
     ):
@@ -194,8 +196,8 @@ def cmd_show(args) -> None:
     )
     rows = [
         ("ref", version.ref),
-        ("id", version.short_id),
-        ("uid", version.uid),
+        ("short id", version.short_id),
+        ("id", version.id),
         ("status", version.status),
         ("digest", version.digest or "-"),
         ("label", version.label or ""),
@@ -215,20 +217,20 @@ def cmd_show(args) -> None:
         rows.append(
             ("overrides", " ".join(map(str, overrides)) if isinstance(overrides, list) else json.dumps(overrides))
         )
-    tail = [("inputs", ", ".join(version.inputs) or "-")]
+    tail = [("inputs", _named(store, version.inputs))]
     if not version.is_run:
         try:
             run = version.run
             if run is not None:
                 tail.append(("run", f"{run.ref} ({run.short_id}, {run.status})"))
-                tail.append(("data", ", ".join(item.ref for item in version.upstream()) or "-"))
+                tail.append(("data", ", ".join(f"{item.ref} ({item.short_id})" for item in version.upstream()) or "-"))
         except StoreError as error:
             tail.append(("run", f"(unknown: {error})"))
     try:
-        consumers = version.consumers
+        consumers = _named(store, version.consumers)
     except StoreError as error:
-        consumers = [f"(unknown: {error})"]
-    tail.append(("consumers", ", ".join(consumers) or "-"))
+        consumers = f"(unknown: {error})"
+    tail.append(("consumers", consumers))
     tail.append(("files", _size(version.files)))
     keys = rows + tail + [("overrides", "")]
     column = max(len(key) for key, _ in keys) + 4  # one value column for the whole block
@@ -243,6 +245,15 @@ def cmd_show(args) -> None:
     listed = [(f"  {item.path}", "-> " + item.link if item.link else term().size(item.size)) for item in version.files]
     for line in term().block(listed):
         print(line)
+
+
+def _named(store, ids: list[str]) -> str:
+    """Versions named by id, as a line shows them: `name@v<n> (short id)`, or the id's start when the repo cannot say."""
+    shown = []
+    for id in ids:
+        version = store._exact_version(id)
+        shown.append(f"{version.ref} ({version.short_id})" if version is not None and version.number else id[:12])
+    return ", ".join(shown) or "-"
 
 
 def _flatten(value, prefix: str = "") -> list[tuple[str, str]]:
@@ -270,7 +281,9 @@ def cmd_drafts(args) -> None:
         for row in rows:
             row[6] = term().short_path(row[6])
         for line in (
-            term().table(["NAME", "ID", "UID", "STATE", "AGE", "SIZE", "FOLDER"], rows, shrink=(2,)) if rows else []
+            term().table(["NAME", "SHORT ID", "ID", "STATE", "AGE", "SIZE", "FOLDER"], rows, shrink=(2,))
+            if rows
+            else []
         ):
             print(line)
         if not found:
@@ -396,12 +409,57 @@ def cmd_gc(args) -> None:
 def make_repo(repo: Path) -> None:
     """A new repo folder: `.gitignore`, `repo.json` (the folder becomes private to its owner), the config template."""
     from .config import protect, write_template
-    from .store.local import repo_uid
+    from .store.local import repo_id
 
     protect(repo)
     repo.mkdir(parents=True, exist_ok=True)
-    repo_uid(repo)
+    repo_id(repo)
     write_template(repo)
+
+
+def cmd_upgrade(args) -> None:
+    from .store import StoreError
+    from .store.upgrade import upgrade
+
+    root = args.root
+    if root is None:
+        root = Path(load_config(args.directory).cairn_dir)
+    try:
+        result = upgrade(root)
+    except StoreError as error:
+        raise SystemExit(f"cairn: {error}") from None
+    for line in result["notes"]:
+        print(f"note: {line}")
+    counted = ", ".join(f"{count} {what}" for what, count in result["counts"].items() if count)
+    backup = f"; the 0.14 database is kept in {term().short_path(result['backup'])}" if result["backup"] else ""
+    print(f"upgraded {term().short_path(root)} to Cairn {__version__}: {counted or 'nothing to convert'}{backup}")
+    print(result["report"].summary())
+
+
+def _refuse_old(args) -> None:
+    """Every command but `cairn upgrade` refuses a repo made by Cairn 0.14 (the project's, or a folder it names)."""
+    from .store.upgrade import OLD_LAYOUT, layout
+
+    folders = [getattr(args, name, None) for name in ("root", "repo")]
+    folders = [folder for folder in folders if isinstance(folder, Path)]
+    if not folders:
+        try:
+            folders = [Path(load_config(args.directory).cairn_dir)]
+        except (SystemExit, ValueError):
+            return
+    for folder in folders:
+        if layout(folder) == OLD_LAYOUT:
+            raise SystemExit(
+                f"cairn: {term().short_path(folder)}: this repo was made by Cairn 0.14: run `cairn upgrade`"
+                + (
+                    f" {term().short_path(folder)}"
+                    if folder in [getattr(args, "root", None), getattr(args, "repo", None)]
+                    else ""
+                )
+            )
+
+
+REF_HELP = "an id (or 4+ of its first digits, e.g. 3f9a2c1), name, name@vN, or name@<alias or label>"
 
 
 def cmd_init(args) -> None:
@@ -455,6 +513,7 @@ def _check_token(config, url: str) -> None:
 
     from .client.http import ClientError
     from .client.open import client, find_token, remote_parts
+    from .store.errors import Forbidden, StoreError, Unauthorized, Unreachable
 
     server = remote_parts(url)[0]
     token, source, _ = find_token(config)
@@ -462,14 +521,20 @@ def _check_token(config, url: str) -> None:
 
     def answer(candidate: str) -> str:
         try:
-            client(config, server, token=candidate, timeout=10).request("GET", "/api/v2/repo")
+            from .client.remote import handshake
+
+            handshake(client(config, server, token=candidate, timeout=10), url)
             return "ok"
-        except ClientError as error:
-            if error.unreachable:
+        except (Unreachable, ClientError) as error:  # handshake answers StoreErrors (client/remote.py, _translate)
+            if isinstance(error, Unreachable) or error.unreachable:
                 return "unreachable"
             if error.status in (401, 403):
                 return "refused"
             raise SystemExit(f"cairn: the remote answered {error.status}: {error}") from None
+        except (Unauthorized, Forbidden):
+            return "refused"
+        except StoreError as error:
+            raise SystemExit(f"cairn: {error}") from None
 
     def where(place) -> str:
         return place if place is None or place.startswith("$") else short(place)
@@ -545,7 +610,6 @@ def _age(seconds: float) -> str:
 def cmd_status(args) -> None:
     import time
 
-    from .store import refs
     from .store.outbox import epoch
 
     store = open_objects(args)
@@ -557,6 +621,7 @@ def cmd_status(args) -> None:
         return
     now = time.time()
     rows = []
+    shorts = store.backend.short_ids([row["id"] for row in status["entries"]], offline=True)
     for row in status["entries"]:
         files = row.get("files", [])
         number = row.get("number")
@@ -571,7 +636,7 @@ def cmd_status(args) -> None:
                 row["sync"],
                 row["name"],
                 f"v{number}" if number else "-",
-                refs.default_short_id(row["uid"]),
+                shorts.get(row["id"], row["id"][:7]),
                 row["status"],
                 host.split(".")[0],
                 _age(now - epoch(row.get("created"))),
@@ -759,13 +824,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     drafts.set_defaults(run=cmd_drafts)
     drafts_commands = drafts.add_subparsers(dest="drafts_command")
-    drafts_commands.add_parser("list", help="every draft: name, uid, state, age, size, path").set_defaults(
+    drafts_commands.add_parser("list", help="every draft: name, short id, id, state, age, size, path").set_defaults(
         run=cmd_drafts
     )
     drafts_publish = drafts_commands.add_parser(
         "publish", help="publish a kept draft as the next version of its artifact"
     )
-    drafts_publish.add_argument("draft", help="the draft's folder or uid (or a unique start of it)")
+    drafts_publish.add_argument("draft", help="the draft's folder, or its id (a unique prefix of 4 or more digits)")
     drafts_publish.add_argument(
         "--allow-incomplete",
         action="store_true",
@@ -773,7 +838,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     drafts_publish.set_defaults(run=cmd_drafts)
     drafts_discard = drafts_commands.add_parser("discard", help="delete a draft without publishing it")
-    drafts_discard.add_argument("draft", help="the draft's folder or uid (or a unique start of it)")
+    drafts_discard.add_argument("draft", help="the draft's folder, or its id (a unique prefix of 4 or more digits)")
     drafts_discard.set_defaults(run=cmd_drafts)
 
     publish = commands.add_parser(
@@ -800,9 +865,7 @@ def main(argv: list[str] | None = None) -> None:
     publish.set_defaults(run=cmd_publish)
 
     pull = commands.add_parser("pull", help="materialize an artifact version locally and print its path")
-    pull.add_argument(
-        "ref", help="name[@vN|@<short id>|@alias|@label][//file], or a bare short id, e.g. datasets/crops@v3"
-    )
+    pull.add_argument("ref", help=f"{REF_HELP}, maybe with //<file>, e.g. datasets/crops@v3 or 3f9a2c1//a.png")
     pull.add_argument("--into", type=Path, help="copy it into this folder instead of printing the read-only path")
     pull.add_argument(
         "--no-record",
@@ -820,24 +883,24 @@ def main(argv: list[str] | None = None) -> None:
     artifacts.add_argument("--prefix", help="only names starting with this, e.g. reports/")
     artifacts.set_defaults(run=cmd_artifacts)
     versions = commands.add_parser(
-        "versions", help="every version of an artifact: number, short id, status, label, created, uid, size"
+        "versions", help="every version of an artifact: number, short id, status, label, created, size"
     )
     versions.add_argument("name", help="the artifact name")
     versions.set_defaults(run=cmd_versions)
-    show = commands.add_parser("show", help="one version: short id, metadata, files, inputs, consumers")
-    show.add_argument("ref", help="name[@vN|@uid|@<short id>|@alias|@label], or a bare short id (3f9a2c1)")
+    show = commands.add_parser("show", help="one version: its id and short id, metadata, files, inputs, consumers")
+    show.add_argument("ref", help=REF_HELP)
     show.add_argument("--offline", action="store_true", help="do not ask the remote: answer from the repo only")
     show.set_defaults(run=cmd_show)
     alias = commands.add_parser(
         "alias", help="point an alias (best, paper, ...) at a completed version; latest moves by itself"
     )
-    alias.add_argument("ref", help="name@vN (or @uid, @<short id>, @label, @another-alias), or a bare short id")
+    alias.add_argument("ref", help=REF_HELP)
     alias.add_argument("alias", help="the alias to set or move")
     alias.set_defaults(run=cmd_alias)
     delete = commands.add_parser(
-        "delete", help="delete a version (a tombstone: its number and uid are never used again) or a whole artifact"
+        "delete", help="delete a version (a tombstone: its number and id are never used again) or a whole artifact"
     )
-    delete.add_argument("ref", nargs="?", help="name@vN (or @uid, @<short id>, @alias, @label), or a bare short id")
+    delete.add_argument("ref", nargs="?", help=REF_HELP)
     delete.add_argument("--artifact", metavar="NAME", help="delete every version of this artifact")
     delete.add_argument(
         "--force",
@@ -932,9 +995,7 @@ def main(argv: list[str] | None = None) -> None:
         "verify",
         help="re-hash what the repo holds (blobs, versions, read-only folders, the outbox); exit 1 on any problem",
     )
-    verify.add_argument(
-        "ref", nargs="?", help="name[@vN|@uid|@<short id>|@alias|@label], or a bare short id: one version"
-    )
+    verify.add_argument("ref", nargs="?", help=f"one version: {REF_HELP}")
     verify.add_argument("--repo", type=Path, help="a repo folder on this machine instead of the project's (a server's)")
     verify.add_argument(
         "--repair",
@@ -1007,6 +1068,15 @@ def main(argv: list[str] | None = None) -> None:
     ui.add_argument("--no-browser", action="store_true", help="do not open the one-time login link in a browser")
     ui.set_defaults(run=cmd_ui)
 
+    upgrade = commands.add_parser(
+        "upgrade",
+        help="convert a repo made by Cairn 0.14 (a project's .cairn, or a server's repo folder) in place, once",
+    )
+    upgrade.add_argument(
+        "root", nargs="?", type=Path, help="the repo folder (default: the project's, .cairn); stop its server first"
+    )
+    upgrade.set_defaults(run=cmd_upgrade)
+
     argv = list(sys.argv[1:] if argv is None else argv)
     command = []
     if "--" in argv:  # `publish ... -- <command...>`: everything after -- is the command to run
@@ -1016,6 +1086,8 @@ def main(argv: list[str] | None = None) -> None:
     args.command = command
     if command and args.run is not cmd_publish:
         parser.error("only `publish` takes a command after --")
+    if args.run is not cmd_upgrade:
+        _refuse_old(args)
     if args.run in LOOKING_COMMANDS and not getattr(args, "repo", None):  # they look at a repo; they never make one
         from .client.open import existing_repo
 

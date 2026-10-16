@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 export type PillTone = "default" | "tentative" | "pending" | "deleted" | "alias";
 
-const PENDING_TIP = "this repo has the version; its remote does not have it yet, so it has no number (a uid names it)";
+const PENDING_TIP = "this repo has the version; its remote does not have it yet, so it has no number (its id names it)";
 
 /** A small rounded label. `tone` picks the look: default (accent), tentative (warn), pending, deleted, alias (outlined). */
 export function Pill({ tone = "default", title, children }: { tone?: PillTone; title?: string; children: ReactNode }) {

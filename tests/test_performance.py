@@ -44,13 +44,13 @@ def publish_small(port, token, connection, artifact, index):
         {"path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)} for path, data in files.items()
     ]
     status, _, data = request(
-        port, token, "POST", "/api/v2/blobs/missing", {"sha256": [e["sha256"] for e in entries]}, connection=connection
+        port, token, "POST", "/api/v3/blobs/missing", {"sha256": [e["sha256"] for e in entries]}, connection=connection
     )
     assert status == 200
     missing = set(json.loads(data)["missing"])
     for entry, body in zip(entries, files.values()):
         if entry["sha256"] in missing:
-            assert request(port, token, "PUT", f"/api/v2/blobs/{entry['sha256']}", body, connection=connection)[0] in (
+            assert request(port, token, "PUT", f"/api/v3/blobs/{entry['sha256']}", body, connection=connection)[0] in (
                 200,
                 201,
             )
@@ -58,7 +58,7 @@ def publish_small(port, token, connection, artifact, index):
         port,
         token,
         "POST",
-        f"/api/v2/projects/perf/artifacts/{artifact.replace('/', '%2F')}/publish",
+        f"/api/v3/projects/perf/artifacts/{artifact.replace('/', '%2F')}/publish",
         {"entries": entries},
         connection=connection,
     )
@@ -68,7 +68,7 @@ def publish_small(port, token, connection, artifact, index):
 
 @pytest.mark.parametrize("same", [True, False], ids=["one-artifact", "distinct-artifacts"])
 def test_concurrent_small_publishes(server, same):
-    request(server.port, server.token, "POST", "/api/v2/projects", {"name": "perf"})
+    request(server.port, server.token, "POST", "/api/v3/projects", {"name": "perf"})
     local, opened = threading.local(), []
 
     def one(index):
@@ -114,7 +114,7 @@ def seed_artifacts(root: Path, project: str, count: int) -> None:
 def test_listing_two_thousand_artifacts(server):
     seed_artifacts(server.root, "big", 2000)
     started = time.perf_counter()
-    status, headers, data = request(server.port, server.token, "GET", "/api/v2/projects/big/artifacts")
+    status, headers, data = request(server.port, server.token, "GET", "/api/v3/projects/big/artifacts")
     cold = time.perf_counter() - started
     assert status == 200 and len(json.loads(data)) == 2000
     assert cold < 30, f"the first listing took {cold:.1f} s"
@@ -123,7 +123,7 @@ def test_listing_two_thousand_artifacts(server):
     for _ in range(5):
         started = time.perf_counter()
         assert (
-            request(server.port, server.token, "GET", "/api/v2/projects/big/artifacts", connection=connection)[0] == 200
+            request(server.port, server.token, "GET", "/api/v3/projects/big/artifacts", connection=connection)[0] == 200
         )
         times.append(time.perf_counter() - started)
     assert sorted(times)[2] < 1.0, f"a warm listing of 2000 artifacts took {sorted(times)[2]:.2f} s"  # was about 4 s
@@ -131,13 +131,13 @@ def test_listing_two_thousand_artifacts(server):
         server.port,
         server.token,
         "GET",
-        "/api/v2/projects/big/artifacts",
+        "/api/v3/projects/big/artifacts",
         headers={"If-None-Match": headers["ETag"]},
         connection=connection,
     )
     assert status == 304 and again["ETag"] == headers["ETag"]
     connection.close()
-    status, _, data = request(server.port, server.token, "GET", "/api/v2/projects")
+    status, _, data = request(server.port, server.token, "GET", "/api/v3/projects")
     assert status == 200 and next(item for item in json.loads(data) if item["name"] == "big")["artifacts"] == 2000
 
 
@@ -176,11 +176,11 @@ def test_a_large_download_streams_without_loading_into_memory(tmp_path, sendfile
         for line in process.stdout:
             if line.startswith("  Token "):
                 break
-        assert request(port, token, "POST", "/api/v2/projects", {"name": "p"})[0] == 201
+        assert request(port, token, "POST", "/api/v3/projects", {"name": "p"})[0] == 201
         with big.open("rb") as handle:  # streamed up, hashed while it arrives
-            assert request(port, token, "PUT", f"/api/v2/blobs/{sha}", handle, {"Content-Length": str(size)})[0] == 201
+            assert request(port, token, "PUT", f"/api/v3/blobs/{sha}", handle, {"Content-Length": str(size)})[0] == 201
         entries = [{"path": "big.bin", "sha256": sha, "size": size}]
-        assert request(port, token, "POST", "/api/v2/projects/p/artifacts/big/publish", {"entries": entries})[0] == 201
+        assert request(port, token, "POST", "/api/v3/projects/p/artifacts/big/publish", {"entries": entries})[0] == 201
         time.sleep(0.2)
         before, peak, done = rss_kb(process.pid), [0], threading.Event()
 
@@ -264,23 +264,23 @@ def test_version_numbers_stay_unique_across_processes(tmp_path):
 
 
 def test_caching_headers(server):
-    request(server.port, server.token, "POST", "/api/v2/projects", {"name": "perf"})
+    request(server.port, server.token, "POST", "/api/v3/projects", {"name": "perf"})
     connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=60)
     assert publish_small(server.port, server.token, connection, "c", 0) == 1
-    status, headers, _ = request(server.port, server.token, "GET", "/api/v2/projects/perf/artifacts/c/versions/1")
+    status, headers, _ = request(server.port, server.token, "GET", "/api/v3/projects/perf/artifacts/c/versions/v1")
     assert status == 200 and "immutable" in headers["Cache-Control"]  # a completed version never changes
     status, headers, _ = request(server.port, server.token, "GET", "/files/perf/c@v1//f0.txt")
     assert status == 200 and "immutable" in headers["Cache-Control"]
     status, headers, _ = request(server.port, server.token, "GET", "/files/perf/c@latest//f0.txt")
     assert status == 200 and headers["Cache-Control"] == "no-cache"  # an alias moves
-    status, headers, _ = request(server.port, server.token, "GET", "/api/v2/projects/perf/artifacts/c")
+    status, headers, _ = request(server.port, server.token, "GET", "/api/v3/projects/perf/artifacts/c")
     assert status == 200 and headers["Cache-Control"] == "private, no-cache" and headers["ETag"]
     assert (
         request(
             server.port,
             server.token,
             "GET",
-            "/api/v2/projects/perf/artifacts/c",
+            "/api/v3/projects/perf/artifacts/c",
             headers={"If-None-Match": headers["ETag"]},
         )[0]
         == 304
@@ -291,7 +291,7 @@ def test_caching_headers(server):
             server.port,
             server.token,
             "GET",
-            "/api/v2/projects/perf/artifacts/c",
+            "/api/v3/projects/perf/artifacts/c",
             headers={"If-None-Match": headers["ETag"]},
         )[0]
         == 200
@@ -312,13 +312,13 @@ def test_downloads_use_sendfile_when_enabled(tmp_path, monkeypatch):
     try:
         data = os.urandom(3 << 20)
         sha = hashlib.sha256(data).hexdigest()
-        request(port, token, "POST", "/api/v2/projects", {"name": "p"})
-        assert request(port, token, "PUT", f"/api/v2/blobs/{sha}", data, {"Content-Length": str(len(data))})[0] == 201
+        request(port, token, "POST", "/api/v3/projects", {"name": "p"})
+        assert request(port, token, "PUT", f"/api/v3/blobs/{sha}", data, {"Content-Length": str(len(data))})[0] == 201
         request(
             port,
             token,
             "POST",
-            "/api/v2/projects/p/artifacts/f/publish",
+            "/api/v3/projects/p/artifacts/f/publish",
             {"entries": [{"path": "d.bin", "sha256": sha, "size": len(data)}]},
         )
         for setting, zero_copy in (("1", 1), ("0", 0)):

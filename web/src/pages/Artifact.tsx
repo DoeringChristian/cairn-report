@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { paths, useApi, type Entry, type Manifest, type Summary, type VersionRow } from "../api";
+import { Link, useNavigate } from "react-router-dom";
+import { paths, useApi, type ArtifactData, type Entry, type NodeInfo, type VersionData } from "../api";
 import {
   AliasPills, Button, CodeChips, CopyButton, Crumbs, DataTable, ErrorNote, FigureCard, FigureGrid, Hero, HeroLine, Hint, JsonBlock,
   KeyValueTable, LinkButton, Loading, MetricCard, MetricGrid, Note, Panel, RefRow, RefRows, RowActions, SearchInput, Section, Select,
   StatusPill, TextBlock, Thumbnail, ThumbnailSpacer, Toolbar, useLightbox, type GalleryItem,
 } from "../components";
-import { artifactHref, bytes, exact, fileHref, userRef, isReport, parseRef, previewKind, reportHref, selOf, shortOf, when, zipHref } from "../util";
+import { exactRef, fileHref, refText, reportHref, shortName, shownRef, versionHref, zipHref, type Named, type Ref } from "../refs";
+import { bytes, isReport, previewKind, when } from "../util";
 import { Graph } from "./Graph";
 import { RunPanel } from "./Run";
-
-interface ArtifactData { project: string; name: string; summary: Summary; versions: VersionRow[]; aliases: Record<string, number> }
-interface VersionData { project: string; name: string; version: Manifest; consumers: string[]; deleted?: string[] }
 
 const TEXT_LIMIT = 64 * 1024, MEDIA_LIMIT = 50 * 1024 * 1024, THUMB_LIMIT = 5 * 1024 * 1024, SHOWN = 200, FIGURES = 6;
 
@@ -76,17 +74,18 @@ function Preview({ url, entry, onOpen }: { url: string; entry: Entry; onOpen?: (
 
 /** A version's files: figure cards of its first images, then the list (filter, thumbnails, preview, download, copy).
  *  All its images, in list order, are one lightbox gallery. */
-function Files({ project, name, version, files }: { project: string; name: string; version: string; files: Entry[] }) {
+function Files({ project, version, files }: { project: string; version: Named; files: Entry[] }) {
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [all, setAll] = useState(false);
-  const href = (path: string, download = false) => fileHref(project, name, version, path, download);
+  const href = (path: string, download = false) => fileHref(project, version, path, download);
+  const fileRef = (path: string) => `${exactRef(version)}//${path}`;
   const isImage = (f: Entry) => !!f.sha256 && (f.size ?? 0) > 0 && previewKind(f.path) === "image";  // an empty file is no image
   const images = useMemo(() => files.filter(isImage), [files]);  // eslint-disable-line react-hooks/exhaustive-deps
   const gallery = useMemo<GalleryItem[]>(() => images.map(f => ({
     src: href(f.path), title: f.path, caption: bytes(f.size ?? 0), download: href(f.path, true),
-    copy: { text: `${userRef(name, version)}//${f.path}`, label: "Copy file reference", done: "Reference copied" },
-  })), [images, project, name, version]);  // eslint-disable-line react-hooks/exhaustive-deps
+    copy: { text: fileRef(f.path), label: "Copy file reference", done: "Reference copied" },
+  })), [images, project, version.name, version.version, version.id]);  // eslint-disable-line react-hooks/exhaustive-deps
   const position = useMemo(() => new Map(images.map((f, i) => [f.path, i])), [images]);
   const { open: show, lightbox } = useLightbox(gallery);
   const shown = files.filter(f => f.path.toLowerCase().includes(filter.toLowerCase()));
@@ -118,7 +117,7 @@ function Files({ project, name, version, files }: { project: string; name: strin
               <td><RowActions>
                 {f.sha256 && kind && (f.size ?? 0) > 0 && <Button small aria-expanded={isOpen} onClick={() => toggle(f.path)}>{isOpen ? "Hide" : "Preview"}</Button>}
                 {f.sha256 && <LinkButton small href={href(f.path, true)}>Download</LinkButton>}
-                {f.sha256 && <CopyButton text={`${userRef(name, version)}//${f.path}`} label="Copy file reference" done="Reference copied" />}
+                {f.sha256 && <CopyButton text={fileRef(f.path)} label="Copy file reference" done="Reference copied" />}
               </RowActions></td>
             </tr>
           );
@@ -132,18 +131,20 @@ function Files({ project, name, version, files }: { project: string; name: strin
   );
 }
 
-function RefList({ title, refs, project, empty, deleted = [] }: { title: string; refs: string[]; project: string; empty: string; deleted?: string[] }) {
+/** Versions named by id (inputs, consumers): `name@v<n>` and the short id, or the short id alone for an unknown name. */
+function RefList({ title, ids, nodes, project, empty, deleted }: { title: string; ids: string[]; nodes: Record<string, NodeInfo>; project: string; empty: string; deleted: string[] }) {
   return (
     <Panel title={title}>
-      {refs.length === 0 ? <Hint>{empty}</Hint> : (
+      {ids.length === 0 ? <Hint>{empty}</Hint> : (
         <RefRows>
-          {refs.map(ref => {
-            const p = parseRef(ref);
+          {ids.map(id => {
+            const node = nodes[id] ?? { name: null, version: null, short_id: id.slice(0, 7) };
+            const named = { name: node.name, version: node.version, id };
             return (
-              <RefRow key={ref} name={p?.name ?? ref}
-                value={p ? <Link className="data-version" to={artifactHref(p.project, p.name, p.sel)}>{p.sel}</Link> : ref}
-                extra={<>{p && p.project !== project ? p.project : ""}{deleted.includes(ref) && <> <StatusPill status="deleted" /></>}</>}
-                copy={{ text: p ? userRef(p.name, p.sel) : ref, label: "Copy exact version", done: "Version copied" }} />
+              <RefRow key={id} name={node.name ?? <code>{node.short_id}</code>}
+                value={<Link className="data-version" to={versionHref(project, node.name, node.version, id)} title={id}>{node.name != null ? shortName({ ...node, id }) : node.short_id}</Link>}
+                extra={<><code className="muted">{node.short_id}</code>{deleted.includes(id) && <> <StatusPill status="deleted" /></>}</>}
+                copy={{ text: exactRef(named), label: "Copy exact version", done: "Version copied" }} />
             );
           })}
         </RefRows>
@@ -152,36 +153,48 @@ function RefList({ title, refs, project, empty, deleted = [] }: { title: string;
   );
 }
 
-export function ArtifactPage({ project, name, selector }: { project: string; name: string; selector: string | null }) {
-  const art = useApi<ArtifactData>(paths.artifact(project, name));
-  const last = art.data?.versions.at(-1);
-  const head = art.data?.aliases.latest !== undefined ? `v${art.data.aliases.latest}` : last ? selOf(last) : undefined;
-  const sel = selector ?? head ?? null;
-  const ver = useApi<VersionData>(art.data && sel ? paths.version(project, name, sel) : null);
-  document.title = `${name}${sel ? "@" + sel : ""} - Cairn`;
-  const error = art.error ?? ver.error;
+export function ArtifactPage({ project, target }: { project: string; target: Ref }) {
+  const navigate = useNavigate();
+  // every form is resolved by the server (store/refs.py), a bare name too: its `latest` may be a pending version of
+  // the repo, which no listing's alias names; only an artifact with no completed version shows its newest row
+  const direct = refText({ ...target, path: null });
+  const named = useApi<VersionData>(paths.version(project, direct));
+  const name = target.name ?? named.data?.name ?? null;
+  const art = useApi<ArtifactData>(name ? paths.artifact(project, name) : null);
+  let head: string | null = null;
+  if (target.id === undefined && !target.selector && named.error && art.data) {
+    const row = art.data.versions.at(-1);
+    head = row ? exactRef({ name: art.data.name, version: row.version, id: row.id }) : null;
+  }
+  const latestVer = useApi<VersionData>(head ? paths.version(project, head) : null);
+  const ver = head ? latestVer : named;
+  const error = ver.error ?? art.error;
 
   const byVersion: Record<number, string[]> = {};
   Object.entries(art.data?.aliases ?? {}).forEach(([alias, n]) => (byVersion[n] ??= []).push(alias));
   const manifest = ver.data?.version;
-  const number = manifest ? selOf(manifest) : undefined;  // v<n>, or the uid of a pending version
+  const me: Named | undefined = manifest && name ? { name, version: manifest.version, id: manifest.id } : undefined;
+  const exact = ver.data?.ref ?? "";  // name@v<n>, or the whole id while pending
+  const number = manifest ? shortName(manifest) : "";  // v<n>, or the short id of a pending version
+  document.title = `${manifest && name ? shownRef({ name, version: manifest.version, id: manifest.id, short_id: manifest.short_id }) : name ?? refText(target)} - Cairn`;
   const pending = !!manifest?.pending;
-  const report = isReport(name);
+  const report = !!name && isReport(name);
   const gone = manifest?.status === "deleted";
   const isRun = (manifest?.metadata as Record<string, unknown> | undefined)?.kind === "run";
   const size = manifest ? bytes(manifest.files.reduce((n, f) => n + (f.size ?? 0), 0)) : "";
+  const rows = [...(art.data?.versions ?? [])].reverse();
 
   return (
     <main>
       {error && <ErrorNote error={error} />}
-      {!error && (art.loading || ver.loading) && <Loading />}
-      {art.data && manifest && number !== undefined && (
+      {!error && (art.loading || ver.loading || (!art.data && !ver.data)) && <Loading />}
+      {art.data && ver.data && manifest && me && name && (
         <>
           <Hero
             eyebrow={<Crumbs items={[{ label: "Projects", to: "/" }, { label: project, to: `/p/${encodeURIComponent(project)}/${isRun ? "?tab=runs" : ""}` }, { label: report ? "report" : isRun ? "run" : "artifact" }]} />}
             title={name}
             subtitle={art.data.summary.metadata.title && report ? art.data.summary.metadata.title : undefined}
-            status={manifest.status === "completed" ? number : pending ? `${shortOf(manifest)} pending` : `${number} ${manifest.status}`}
+            status={manifest.status === "completed" ? number : pending ? `${number} pending` : `${number} ${manifest.status}`}
           >
             <HeroLine>
               {art.data.summary.latest ? <>latest <b>v{art.data.summary.latest}</b></> : "no completed version"} <AliasPills aliases={Object.keys(art.data.aliases).filter(a => a !== "latest")} />
@@ -191,24 +204,25 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
 
           {pending && (
             <Note tone="pending" title="Pending">
-              <p>This repo has this version, but its remote does not have it yet, so it has no number: its uid <code>{manifest.uid}</code> names it.
+              <p>This repo has this version, but its remote does not have it yet, so it has no number: its id <code>{manifest.short_id}</code> names it.
                 It is sent automatically (the next command, a running job, or <code>cairn sync</code>; <code>cairn status</code> lists it){manifest.sync === "rejected" ? <>. The remote refused it: {manifest.error}</> : "."}</p>
             </Note>
           )}
 
           {gone && (
             <Note tone="deleted" title="Deleted">
-              <p>{number} was deleted {when(manifest.deleted_at ?? "")}{manifest.deleted_by ? ` by ${manifest.deleted_by}` : ""}{manifest.reason ? `: ${manifest.reason}` : "."} Its files are gone; its number and uid are never used again, and its lineage is kept.</p>
+              <p>{number} was deleted {when(manifest.deleted_at ?? "")}{manifest.deleted_by ? ` by ${manifest.deleted_by}` : ""}{manifest.reason ? `: ${manifest.reason}` : "."} Its files are gone; its number and id are never used again, and its lineage is kept.</p>
             </Note>
           )}
 
           <Panel title="Reference">
             <RefRows>
-              <RefRow name="Version" value={userRef(name, number)} copy={{ text: userRef(name, number), label: "Copy exact version", done: "Version copied" }} />
-              {manifest.short_id && <RefRow name="Id" value={manifest.short_id} mono copy={{ text: manifest.short_id, label: "Copy short id", done: "Id copied" }} />}
-              {!gone && <RefRow name="Pull" value={`cairn pull ${userRef(name, number)}`} copy={{ text: `cairn pull ${userRef(name, number)}`, label: "Copy pull command", done: "Command copied" }} />}
+              <RefRow name="Version" value={exact} mono={pending} copy={{ text: exact, label: "Copy exact version", done: "Version copied" }} />
+              <RefRow name="Short id" value={manifest.short_id} mono copy={{ text: manifest.short_id, label: "Copy short id", done: "Id copied" }} />
+              <RefRow name="Id" value={<span className="wrap-any">{manifest.id}</span>} mono copy={{ text: manifest.id, label: "Copy id", done: "Id copied" }} />
+              {!gone && <RefRow name="Pull" value={`cairn pull ${exact}`} copy={{ text: `cairn pull ${exact}`, label: "Copy pull command", done: "Command copied" }} />}
               {!gone && manifest.files.length > 0 && (
-                <RefRow name="Files" value={<LinkButton small href={zipHref(project, name, number)} download>Download zip</LinkButton>}
+                <RefRow name="Files" value={<LinkButton small href={zipHref(project, me)} download>Download zip</LinkButton>}
                   extra={manifest.status === "running" ? "what is synced so far; the run is still running" : size} />
               )}
               {manifest.digest && <RefRow name="Digest" value={manifest.digest} mono copy={{ text: manifest.digest, label: "Copy digest", done: "Digest copied" }} />}
@@ -221,16 +235,16 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             <MetricCard label="Versions" value={art.data.versions.length} note={manifest.label ? `label ${manifest.label}` : undefined} />
           </MetricGrid>
 
-          {isRun && !gone && !pending && <RunPanel project={project} name={name} sel={number} status={manifest.status} />}
+          {isRun && !gone && !pending && <RunPanel project={project} reference={exact} status={manifest.status} />}
 
           <Section title="Versions" actions={
-            <Select label="Version" value={number} onChange={v => location.assign(artifactHref(project, name, v))}
-              choices={[...art.data.versions].reverse().map(v => ({ value: selOf(v), label: `${shortOf(v)}${v.label ? ` (${v.label})` : ""}`, note: v.status !== "completed" ? v.status : undefined }))} />
+            <Select label="Version" value={manifest.id} onChange={id => { const v = rows.find(row => row.id === id); if (v) navigate(versionHref(project, name, v.version, v.id)); }}
+              choices={rows.map(v => ({ value: v.id, label: `${shortName(v)}${v.label ? ` (${v.label})` : ""}`, note: v.status !== "completed" ? v.status : undefined }))} />
           }>
             <DataTable head={["Version", "Id", "Label", "Status", "Created", "Aliases", "Source host"]}>
-              {[...art.data.versions].reverse().map(v => (
-                <tr key={v.uid} className={[selOf(v) === number ? "selected" : "", v.status === "deleted" ? "tombstone" : "", v.pending ? "pending" : ""].join(" ").trim() || undefined}>
-                  <td className="nowrap"><Link to={artifactHref(project, name, selOf(v))} title={v.pending ? v.uid : undefined}><strong>{shortOf(v)}</strong></Link>{report && v.status === "completed" && v.version != null && <> &middot; <a href={reportHref(project, name, v.version)}>open</a></>}</td>
+              {rows.map(v => (
+                <tr key={v.id} className={[v.id === manifest.id ? "selected" : "", v.status === "deleted" ? "tombstone" : "", v.pending ? "pending" : ""].join(" ").trim() || undefined}>
+                  <td className="nowrap"><Link to={versionHref(project, name, v.version, v.id)} title={v.id}><strong>{shortName(v)}</strong></Link>{report && v.status === "completed" && v.version != null && <> &middot; <a href={reportHref(project, name, v.version)}>open</a></>}</td>
                   <td><code className="muted">{v.short_id}</code></td>
                   <td>{v.label}</td>
                   <td><StatusPill status={v.status} />{v.status === "deleted" && <span className="muted tombstone-reason" title={`deleted ${v.deleted_at ?? ""}${v.deleted_by ? " by " + v.deleted_by : ""}`}> {v.reason || when(v.deleted_at ?? "")}</span>}</td>
@@ -242,16 +256,16 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             </DataTable>
           </Section>
 
-          <Section title={`Lineage of ${shortOf(manifest)}`}>
-            {!pending && ["completed", "deleted", "running", "failed"].includes(manifest.status) ? <Graph root={exact(project, name, number)} project={project} /> : <Hint>Lineage is shown once the remote has the version (its inputs are listed below).</Hint>}
+          <Section title={`Lineage of ${number}`}>
+            {!pending && ["completed", "deleted", "running", "failed"].includes(manifest.status) ? <Graph root={manifest.id} project={project} /> : <Hint>Lineage is shown once the remote has the version (its inputs are listed below).</Hint>}
           </Section>
 
-          <Section title={`Files of ${shortOf(manifest)}`}>
-            {gone ? <Hint>This version was deleted: its files are gone.</Hint> : manifest.files.length ? <Files project={project} name={name} version={number} files={manifest.files} /> : <Hint>This version has no files.</Hint>}
+          <Section title={`Files of ${number}`}>
+            {gone ? <Hint>This version was deleted: its files are gone.</Hint> : manifest.files.length ? <Files project={project} version={me} files={manifest.files} /> : <Hint>This version has no files.</Hint>}
           </Section>
 
-          <RefList title="Inputs" refs={manifest.inputs} project={project} empty="No inputs recorded." deleted={ver.data!.deleted} />
-          <RefList title="Consumers" refs={ver.data!.consumers} project={project} empty="No consumers yet." deleted={ver.data!.deleted} />
+          <RefList title="Inputs" ids={manifest.inputs} nodes={ver.data.nodes} project={project} empty="No inputs recorded." deleted={ver.data.deleted} />
+          <RefList title="Consumers" ids={ver.data.consumers} nodes={ver.data.nodes} project={project} empty="No consumers yet." deleted={ver.data.deleted} />
 
           <MetadataSections metadata={manifest.metadata as Record<string, unknown>} />
         </>

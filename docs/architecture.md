@@ -37,7 +37,7 @@ version, git-like, and one parser). Fixed: later work fits this design; it does 
 
 ```text
 .cairn/                      the repo (self-ignoring: .gitignore = "*")
-├── repo.json                uid of this repo, layout version
+├── repo.json                id of this repo, layout version
 ├── config.toml              the project's settings (see Configuration)
 ├── metadata.sqlite3         versions, aliases, lineage (WAL)   — not on a network filesystem
 ├── blobs/<aa>/<sha256>      content-addressed files, written once (temp + rename), shared by all versions
@@ -90,7 +90,7 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
   | `<name>@<word>` | the version an alias (`best`, `latest`) or a label (a run's timestamp) names |
 
   A file inside a version follows after `//` (`descent@v3//figures/a.png`, `3f9a2c1//figures/a.png`).
-- **The forms cannot overlap:** an id has no `@`; `v<n>` is never a word; an artifact name, an alias and a
+- **The forms cannot overlap:** an id has no `@`; `v<n>` is never a word, nor is anything else of a version's shape (`V3`, `v-1`, `v01`, `v2-final`: `v` or `V`, then a sign or a digit), and a Cairn 0.14 uid (a UUID) is neither a name nor a word; an artifact name, an alias and a
   label are never 4 or more hex digits alone (`cafe`, `1234` and `deadbeef` are refused when a name, alias or
   label is created), so a bare word is an id or a name by its shape, and a word after `@` is a number or a
   word. An alias and a label cannot share a word (creating the second is refused).
@@ -124,7 +124,8 @@ touches. A rule of the form "X is matched first" is a failed review.
 ## Upgrading a 0.14 repo
 
 `cairn upgrade [repo]` converts a repo made by 0.14 (a project's `.cairn/`, or a server's repo folder) in place,
-once: every version gets a new id, and every place that named its uid (inputs, lineage, aliases, outbox entries,
+once: every version gets its id, the SHA-256 of its 0.14 uid (so a server and each of its clients, upgraded one
+by one, agree on every id, and every short id 0.14 printed still names its version), and every place that named its uid (inputs, lineage, aliases, outbox entries,
 read-only folders, heartbeats) is rewritten to it; numbers, labels, aliases, files and blobs stay. It refuses to
 run while another process uses the repo (a running `cairn server`, an open run), writes a backup of the
 database first (`metadata.sqlite3.0.14.bak`), works in one transaction, and checks the result with

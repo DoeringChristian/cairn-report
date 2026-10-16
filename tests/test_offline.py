@@ -13,8 +13,7 @@ import pytest
 
 import cairn
 from cairn.cli import main
-from cairn.store import refs
-from cairn.store.uids import UID
+from cairn.store.ids import ID, new_id
 
 from test_identity import Server
 from test_store import env, folder  # noqa: F401
@@ -45,22 +44,22 @@ def run(capsys, *argv, code=None):
     return captured.out, captured.err
 
 
-def record_file(env, uid):
+def record_file(env, version_id):
     """A pending version's outbox entry in the repo."""
-    return env / ".cairn" / "outbox" / uid / "manifest.json"
+    return env / ".cairn" / "outbox" / version_id / "manifest.json"
 
 
 # ---------------------------------------------------------- pending versions
 
 
-def test_publish_while_down_is_queued_and_synced_with_its_uid(down, env, capsys):
+def test_publish_while_down_is_queued_and_synced_with_its_id(down, env, capsys):
     data = folder(env, "d", {"a.txt": "as published", "sub/b.txt": "2"})
     version = cairn.connect().artifact("data").publish(data, metadata={"n": 1}, aliases=["paper"])
-    assert version.number is None and version.status == "pending" and UID.fullmatch(version.uid)
-    assert version.ref == f"data@{version.uid}" and "pending" in capsys.readouterr().err
-    record = json.loads(record_file(env, version.uid).read_text())
-    assert (record["uid"], record["sync"], record["status"], record["aliases"]) == (
-        version.uid,
+    assert version.number is None and version.status == "pending" and ID.fullmatch(version.id)
+    assert version.ref == f"{version.id}" and "pending" in capsys.readouterr().err
+    record = json.loads(record_file(env, version.id).read_text())
+    assert (record["id"], record["sync"], record["status"], record["aliases"]) == (
+        version.id,
         "pending",
         "completed",
         ["paper"],
@@ -76,9 +75,9 @@ def test_publish_while_down_is_queued_and_synced_with_its_uid(down, env, capsys)
     out, _ = run(capsys, "sync")
     assert out.count("sent data@v") == 2 and version.short_id in out
     first, second = down.versions()
-    assert first["uid"] == version.uid and first["metadata"] == {"n": 1} and first["status"] == "completed"
+    assert first["id"] == version.id and first["metadata"] == {"n": 1} and first["status"] == "completed"
     assert cairn.LocalRepo(down.root).aliases("study", "data")["paper"] == 1
-    assert (cairn.pull(f"data@{version.uid}//a.txt", record=False)).read_text() == "as published"
+    assert (cairn.pull(f"{version.id}//a.txt", record=False)).read_text() == "as published"
     assert (cairn.pull("data@v2//a.txt", record=False)).read_text() == "changed after publishing"
     assert run(capsys, "sync")[0].startswith("nothing to sync")  # a second sync sends nothing
     assert "nothing pending" in run(capsys, "status")[0]
@@ -89,16 +88,16 @@ def test_resending_a_record_creates_no_second_version(down, env, capsys):
     """A crash after the server's answer leaves the record behind: sending it again must be harmless."""
     store = cairn.connect()
     version = store.artifact("data").publish(folder(env, "d", {"a.txt": "1"}))
-    file = record_file(env, version.uid)
+    file = record_file(env, version.id)
     saved = file.read_text()
     down.start()
-    assert [record["uid"] for record in store.sync()["sent"]] == [version.uid]
+    assert [record["id"] for record in store.sync()["sent"]] == [version.id]
     assert not file.parent.exists()  # sent: the entry left the outbox, the repo has the copy with its number
-    assert store.backend.copies.get_version("data", version.uid)["version"] == 1
+    assert store.backend.copies.get_version("data", version.id)["version"] == 1
     file.parent.mkdir(parents=True)
     file.write_text(saved)
     assert len(store.sync()["sent"]) == 1
-    assert [v["uid"] for v in down.versions()] == [version.uid]
+    assert [v["id"] for v in down.versions()] == [version.id]
     assert version.refresh().number == 1 and version.ref == "data@v1"
 
 
@@ -123,20 +122,24 @@ def test_background_uploader_sends_when_the_server_answers(env, tmp_path, monkey
             if server.versions():
                 break
             time.sleep(0.1)
-        assert [v["uid"] for v in server.versions()] == [version.uid]
+        assert [v["id"] for v in server.versions()] == [version.id]
     finally:
         server.stop()
 
 
 def test_rejected_versions_are_kept_for_status_and_skipped(down, env, capsys):
     store = cairn.connect()
-    store.artifact("data").publish(folder(env, "d", {"a.txt": "1"}), inputs=["missing@v1"])  # the server refuses
+    version = store.artifact("data").publish(folder(env, "d", {"a.txt": "1"}))
+    missing = new_id()  # an input the server does not have (say, from another repo): the server refuses
+    record = json.loads(record_file(env, version.id).read_text())
+    record["inputs"] = [missing]
+    record_file(env, version.id).write_text(json.dumps(record))
     capsys.readouterr()
     down.start()
     out, _ = run(capsys, "sync", code=1)
     assert "rejected data (" in out
     out, _ = run(capsys, "status")
-    assert out.splitlines()[1].split()[:2] == ["rejected", "data"] and "missing" in out
+    assert out.splitlines()[1].split()[:2] == ["rejected", "data"] and missing[:7] in out, out
     store.artifact("data").publish(folder(env, "e", {"a.txt": "2"}))
     assert down.versions()[0]["status"] == "completed"  # a rejected version does not hold up the next
 
@@ -199,7 +202,7 @@ def test_watch_while_down_throughout_queues_the_completion(down, env, capsys):
     [version] = down.versions("sweep")
     assert (
         version["status"] == "completed"
-        and refs.default_short_id(version["uid"]) in status
+        and version["id"][:7] in status  # the short id: 7 digits, unique here
         and len(version["files"]) == 2
     )
 
@@ -233,7 +236,7 @@ def test_a_dead_watch_job_is_failed_not_left_running(down, env, capsys):
     down.start()
     out = run(capsys, "sync")[0]
     assert "failing sweep (" in out and "is gone" in out
-    assert [(v["status"], v["uid"]) for v in down.versions("sweep")] == [("failed", record["uid"])]
+    assert [(v["status"], v["id"]) for v in down.versions("sweep")] == [("failed", record["id"])]
 
 
 # ------------------------------------------------------------- offline pulls
@@ -252,7 +255,7 @@ def test_offline_pulls_of_exact_and_alias_refs(down, env, capsys, monkeypatch):
 
     inputs = env / "inputs.jsonl"
     monkeypatch.setenv("CAIRN_INPUTS", str(inputs))
-    assert (cairn.pull(f"data@{v1.uid}//a.txt")).read_text() == "one"
+    assert (cairn.pull(f"{v1.id}//a.txt")).read_text() == "one"
     assert (cairn.pull("data@best") / "a.txt").read_text() == "one"
     err = capsys.readouterr().err
     assert "not reachable" in err and f"using the repo's data@v1 ({v1.short_id}) for data@best" in err

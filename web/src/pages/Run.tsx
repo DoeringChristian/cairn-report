@@ -99,10 +99,10 @@ function Info({ info, sweep }: { info: Record<string, any> | null; sweep: Record
 }
 
 /** The Run panel of a version of kind "run": its metrics, the machine's, the output, and where it ran. While the
- *  run is running it fetches again every few seconds. */
-export function RunPanel({ project, name, sel, status }: { project: string; name: string; sel: string; status: string }) {
+ *  run is running it fetches again every few seconds. `reference` is the version's exact reference. */
+export function RunPanel({ project, reference, status }: { project: string; reference: string; status: string }) {
   const running = status === "running";
-  const run = usePoll<RunData>(paths.run(project, name, sel), REFRESH, running);
+  const run = usePoll<RunData>(paths.run(project, reference), REFRESH, running);
   const data = run.data;
   const live = data ? data.status === "running" : running;
   return (

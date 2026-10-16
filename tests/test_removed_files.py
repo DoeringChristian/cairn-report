@@ -90,7 +90,7 @@ import cairn
 
 run = cairn.init(name="sweep", system=False, code=False, capture=False, watch=True)
 here = Path(run.path)
-Path("ref.txt").write_text(run.uid)
+Path("ref.txt").write_text(run.id)
 (here / "light_sweep.mp4").write_bytes(os.urandom(3 << 20))
 (here / "light_sweep.webp").write_bytes(b"")             # caught mid-write, then deleted
 (here / "growing.txt").write_text("a" * 10)              # caught mid-write, then finished
@@ -148,14 +148,14 @@ def test_a_run_ends_with_the_files_its_folder_ends_with(mode, env):
     try:
         _wait(lambda: (env / "phase1").exists() or process.poll() is not None, "the job to write its files")
         assert process.poll() is None, process.communicate()
-        uid = (env / "ref.txt").read_text()
+        run_id = (env / "ref.txt").read_text()
         early = {"light_sweep.mp4", "light_sweep.webp", "growing.txt", "scratch.log", "notes.txt"}
         if server is None:
             repo = cairn.connect().backend.local
-            look = lambda: repo.get_version("runs/sweep", uid)  # noqa: E731
+            look = lambda: repo.get_version("runs/sweep", run_id)  # noqa: E731
         else:
             remote = server.remote()
-            look = lambda: remote.get_version("runs/sweep", uid)  # noqa: E731
+            look = lambda: remote.get_version("runs/sweep", run_id)  # noqa: E731
 
         def synced():
             try:
@@ -182,7 +182,7 @@ def test_a_run_ends_with_the_files_its_folder_ends_with(mode, env):
         cairn.connect().sync()
     store = cairn.connect()
     manifest = look() if server is not None else None
-    run = store.version(f"runs/sweep@{uid}")
+    run = store.version(run_id)
     assert run.status == "completed" and run.number == 1
     files = {entry.path: entry for entry in run.files}
     assert not GONE & set(files), sorted(files)
@@ -195,4 +195,4 @@ def test_a_run_ends_with_the_files_its_folder_ends_with(mode, env):
         assert sizes["growing.txt"] == len(final)
     result = store.artifact("results/sweep").latest
     [video] = [entry for entry in result.files if entry.path.endswith("light_sweep.mp4")]
-    assert video.size == 3 << 20 and result.inputs == [run.ref]
+    assert video.size == 3 << 20 and result.inputs == [run.id]

@@ -138,7 +138,7 @@ video.preview-media { background: #111; }
 .graph-node.is-deleted rect { fill: transparent; stroke: var(--muted); stroke-dasharray: 5 4; }
 .graph-node.is-deleted .graph-name { fill: var(--muted); }
 
-/* pending versions: in this repo, not on its remote yet (no number: a uid names them) */
+/* pending versions: in this repo, not on its remote yet (no number: an id names them) */
 .pill.pending, .report-prose .pill.pending { display: inline-block; padding: 1px 8px; border-radius: 99px; background: transparent; border: 1px solid var(--warn); color: var(--warn); font-size: 12px; font-weight: 700; }
 .table-card tr.pending td strong { font-style: italic; }
 .pending-note { border-left-color: var(--warn); }

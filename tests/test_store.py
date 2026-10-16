@@ -43,12 +43,13 @@ def folder(base, name, files):
         ("datasets/crops@v3", ("datasets/crops", "v3", None)),
         ("models/denoiser@best", ("models/denoiser", "best", None)),
         ("a@2026-10-15_07-49-37", ("a", "2026-10-15_07-49-37", None)),
-        ("3f9a2c1", ("3f9a2c1", None, None)),
+        ("3f9a2c1", (None, None, None)),  # the id form: no name
     ],
 )
 def test_ref_roundtrip(text, expected):
     ref = refs.parse(text)
     assert (ref.name, ref.selector, ref.path) == expected
+    assert (ref.id is not None) == (expected[0] is None)
     assert str(ref) == text
 
 
@@ -214,11 +215,12 @@ def test_lineage_both_directions(local):
     d = local.publish("p", "data", put(local, {"x": "d"}))
     local.publish("p", "fit", put(local, {"y": "f"}), inputs=["data@v1"])
     local.publish("p", "reports/r", put(local, {"report.md": "r"}), inputs=["fit"])
-    assert local.lineage("p", "fit") == {"inputs": ["data@v1"], "consumers": ["reports/r@v1"]}
-    assert local.lineage("p", "data") == {"inputs": [], "consumers": ["fit@v1"]}
+    ids = {name: local.resolve("p", name)[1]["id"] for name in ("data", "fit", "reports/r")}
+    assert local.lineage("p", "fit") == {"id": ids["fit"], "inputs": [ids["data"]], "consumers": [ids["reports/r"]]}
+    assert local.lineage("p", "data") == {"id": ids["data"], "inputs": [], "consumers": [ids["fit"]]}
     local.create_project("q")  # another project of the repo folder: its own lineage, nothing of p's
     local.publish("q", "data", put(local, {"x": "d"}))
-    assert local.lineage("q", "data") == {"inputs": [], "consumers": []}
+    assert local.lineage("q", "data")["inputs"] == local.lineage("q", "data")["consumers"] == []
     with pytest.raises(NotFound):
         local.publish("q", "fit", put(local, {"y": "f"}), inputs=["fit@v1"])
     with pytest.raises(NotFound):
@@ -235,20 +237,20 @@ def test_project_records(local):
         local.create_project("Bad Name")
 
 
-def test_short_ids_are_fixed_per_project(local):
-    import hashlib
-
+def test_short_ids_are_prefixes_of_the_id_per_project(local):
     local.publish("p", "run", put(local, {"a": "1"}))
     state = local.get_version("p", "run", 1)
-    assert state["short_id"] == hashlib.sha256(state["uid"].encode()).hexdigest()[:7]
-    assert local.resolve("p", state["short_id"][:4])[1]["uid"] == state["uid"]
-    assert local.resolve("p", f"run@{state['short_id']}")[1]["uid"] == state["uid"]
-    assert local.ids("p", state["short_id"]) == [
-        {"name": "run", "version": 1, "uid": state["uid"], "short_id": state["short_id"], "status": "completed"}
+    short = local.short_ids("p", [state["id"]])[state["id"]]
+    assert short == state["id"][:7] and "short_id" not in state  # computed when shown, never stored
+    assert local.resolve("p", short[:4])[1]["id"] == state["id"]
+    with pytest.raises(store.InvalidRef):
+        local.resolve("p", f"run@{short}")  # an id names a version alone
+    assert local.ids("p", short) == [
+        {"name": "run", "version": 1, "id": state["id"], "short_id": short, "status": "completed"}
     ]
     local.create_project("q")
     with pytest.raises(NotFound):
-        local.resolve("q", state["short_id"])  # ids stay inside their project
+        local.resolve("q", short)  # ids stay inside their project
 
 
 # -------------------------------------------------------------- cache / pull
@@ -260,7 +262,7 @@ def test_materialize_read_only_and_idempotent(local, tmp_path):
     cache = tmp_path / "c"
     view = LocalProject(local, "p")
     folder_ = materialize(view, "run", cache)
-    assert folder_ == cache / "versions" / local.get_version("p", "run", 1)["uid"] / "files"
+    assert folder_ == cache / "versions" / local.get_version("p", "run", 1)["id"] / "files"
     assert (folder_ / "sub/b.txt").read_text() == "2"
     assert (folder_ / "ln").is_symlink() and (folder_ / "ln").read_text() == "1"
     assert not os.access(folder_ / "a.txt", os.W_OK)
@@ -315,7 +317,7 @@ def test_configured_store_pull_publish_lineage(env, tmp_path):
     (work / ".cairn-inputs.jsonl").rename(out / ".cairn-inputs.jsonl")
     assert store.publish("fit", out, metadata={"loss": 0.1}) == 1
     version = store.versions("fit")[0]
-    assert version["inputs"] == ["datasets/crops@v1"]
+    assert version["inputs"] == [store.versions("datasets/crops")[0]["id"]]  # stored by id
     assert version["label"] == "out" and version["metadata"] == {"loss": 0.1}
     assert version["source"]["folder"] == str(out.resolve())
     assert ".cairn-inputs.jsonl" not in {f["path"] for f in version["files"]}

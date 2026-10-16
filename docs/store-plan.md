@@ -1,3 +1,7 @@
+> **This plan predates 0.15,** which replaced the version uids (UUIDv7) and the stored short ids with one
+> id per version and one reference syntax; see [architecture.md](architecture.md), "Identity and
+> references".
+
 > **Historical design note, superseded by [cairn-plan.md](cairn-plan.md) and, for storage, by
 > [architecture.md](architecture.md).** This is the plan the artifact
 > store was first built from, written while the project was still called cairn-report. It is kept for the

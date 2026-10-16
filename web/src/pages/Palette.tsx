@@ -30,7 +30,7 @@ const VERSIONS = [
   { version: "v3", label: "tuned", status: "running", created: "2026-10-16 09:12 UTC", aliases: [], host: "kuma-g042" },
   { version: "v2", label: "second", status: "completed", created: "2026-10-15 17:40 UTC", aliases: ["latest", "best"], host: "lab-laptop" },
   { version: "v1", label: "first", status: "deleted", created: "2026-10-14 08:03 UTC", aliases: [], host: "lab-laptop" },
-  { version: "01JA7Q2W3E…", label: "draft", status: "pending", created: "2026-10-16 09:30 UTC", aliases: [], host: "lab-laptop" },
+  { version: "3f9a2c1", label: "draft", status: "pending", created: "2026-10-16 09:30 UTC", aliases: [], host: "lab-laptop" },
 ];
 
 /** One entry of the palette: the component's name, what it is for, and live examples. */
@@ -194,7 +194,7 @@ export function PalettePage() {
         <Specimen name="Note" note="tones: info, warning, pending, deleted">
           <Note title="Note"><p>An admonition in the accent.</p></Note>
           <Note tone="warning" title="Warning"><p>The remote refused the version: quota exceeded.</p></Note>
-          <Note tone="pending" title="Pending"><p>This repo has this version, but its remote does not have it yet: its uid <code>01JA7Q2W3E</code> names it.</p></Note>
+          <Note tone="pending" title="Pending"><p>This repo has this version, but its remote does not have it yet: its id <code>3f9a2c1</code> names it.</p></Note>
           <Note tone="deleted" title="Deleted"><p>v1 was deleted 2026-10-15 10:00 UTC by owner: superseded.</p></Note>
         </Specimen>
       </Section>

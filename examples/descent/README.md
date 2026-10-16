@@ -20,11 +20,15 @@ cairn init                                               # its own repo: example
 cairn publish data/quadratic datasets/quadratic          # datasets/quadratic@v1
 python descent.py                                        # runs/descent@v1 and its result descent@v1
 cairn publish reports/descent-study                      # reports/descent-study@v1, pinned to its inputs
-cairn show descent@latest                                # the result (its short id), its run, and the data behind it
+cairn show descent@latest                                # the result (its id and short id), its run, and the data behind it
 cairn versions descent                                   # v1 and its short id, e.g. 3f9a2c1
-cairn show 3f9a2c1                                       # the same version by its short id (any 4+ digits of it)
+cairn show 3f9a2c1                                       # the same version by its id (any unique prefix of 4+ digits)
 cairn ui                                                 # runs (charts, logs), versions, files, lineage, the report
 ```
+
+A version's id (64 hex digits) is its identity; its short id is the shortest unique prefix of at least
+7 digits. A reference is an id alone (`3f9a2c1`), a name (`descent`, its latest version), a number
+(`descent@v1`), or an alias or a label (`descent@best`); never a name with an id after `@`.
 
 Run these from this folder: Cairn uses the repo of the folder it runs in (the nearest `.cairn/`
 upward), so from elsewhere the commands would use another repo.
@@ -67,7 +71,8 @@ Things to try:
 - **A remote.** `cairn server ~/cairn-remote` in another terminal (it prints a token and starts the
   UI), then `cairn remote set http://127.0.0.1:8800/descent-example` here (a remote is
   `<server>/<project>`; the first sync makes the project), copy the server's token file to
-  `.cairn/token` (or `export CAIRN_TOKEN=<token>`), and run again: the versions this repo numbered itself are sent first (the remote numbers them), and the run is
+  `.cairn/token` (or `export CAIRN_TOKEN=<token>`), and run again: the versions this repo numbered itself are adopted and sent first (the remote numbers them;
+their ids stay the same), and the run is
   synced while it runs, so the remote's UI shows it live. Stop the server and run again: everything still
   works, the new versions wait as pending (`cairn status`) and are sent by the next command once the server
   is back.

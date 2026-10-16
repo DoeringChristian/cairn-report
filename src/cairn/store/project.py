@@ -27,6 +27,7 @@ _PROJECT = (
     "resolve",
     "find",
     "ids",
+    "short_ids",
     "lineage",
     "start_version",
     "add_files",
@@ -79,9 +80,9 @@ class LocalProject:
         return self.repo.root
 
     @property
-    def uid(self) -> str:
-        """The repo folder's uid (`repo.json`)."""
-        return self.repo.uid
+    def id(self) -> str:
+        """The repo folder's id (`repo.json`)."""
+        return self.repo.id
 
     @property
     def reaped(self) -> list:

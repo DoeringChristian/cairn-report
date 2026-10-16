@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+from .._version import API_PREFIX
 from ..term import cause, debug, short_path, warn
 
 TOKEN_ENV = "CAIRN_TOKEN"
@@ -391,7 +392,7 @@ class Client:
         with file.open("rb") as handle:
             self.request(
                 "PUT",
-                f"/api/v2/blobs/{sha}",
+                f"{API_PREFIX}/blobs/{sha}",
                 body=Limited(handle, size),
                 headers={"Content-Length": str(size), "Content-Type": "application/octet-stream"},
                 expect=(200, 201),
@@ -401,7 +402,7 @@ class Client:
     def missing(self, hashes: list[str]) -> set[str]:
         missing: set[str] = set()
         for start in range(0, len(hashes), BATCH):
-            _, answer = self.json("POST", "/api/v2/blobs/missing", {"sha256": hashes[start : start + BATCH]})
+            _, answer = self.json("POST", f"{API_PREFIX}/blobs/missing", {"sha256": hashes[start : start + BATCH]})
             missing.update(answer["missing"])
         return missing
 

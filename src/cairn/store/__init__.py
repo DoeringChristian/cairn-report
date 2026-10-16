@@ -1,6 +1,6 @@
 """The core: artifacts and immutable versions in a repo folder (`LocalRepo`; one project of it as its own repo:
-`LocalProject`), their references and short ids, blobs, tokens, and the read-only folders pulls make. No HTTP, no
-reports, no UI: everything else builds on this."""
+`LocalProject`), their ids and references (the one parser, refs.py), blobs, tokens, the read-only folders pulls make,
+and the upgrade of a 0.14 repo (upgrade.py). No HTTP, no reports, no UI: everything else builds on this."""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ from .errors import (
     Conflict,
     Deleted,
     Forbidden,
+    Incompatible,
     InvalidRef,
     MissingBlobs,
     NoRun,
     NotFound,
+    OldRepo,
     Protected,
     StoreError,
     Unauthorized,
@@ -24,8 +26,8 @@ from .errors import (
 from .inputs import INPUTS_ENV, INPUTS_FILE, drop_inputs, read_inputs, record_input, run_status
 from .local import OWN, FileRead, LocalRepo
 from .project import LocalProject
+from .ids import new_id
 from .refs import Ref
-from .uids import new_uid
 
 __all__ = [
     "Ambiguous",
@@ -35,9 +37,11 @@ __all__ = [
     "Deleted",
     "FileRead",
     "Forbidden",
+    "Incompatible",
     "InvalidRef",
     "MissingBlobs",
     "NoRun",
+    "OldRepo",
     "Protected",
     "INPUTS_ENV",
     "INPUTS_FILE",
@@ -50,7 +54,7 @@ __all__ = [
     "Unauthorized",
     "Unreachable",
     "materialize",
-    "new_uid",
+    "new_id",
     "pull",
     "read_inputs",
     "drop_inputs",

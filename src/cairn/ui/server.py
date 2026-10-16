@@ -6,20 +6,22 @@ It reaches the data only through the repo interface (the project's repo, which r
 has one and shows the versions still waiting for it as pending; a repo folder; or a remote), so it runs next to the
 repo or on a laptop against a remote. It shows projects (backends.py): the project's repo is one project, named after
 the project folder or the remote's project (`mode: local` in /ui-api/me), a server or a server's repo folder has
-many (`mode: server`). Inside a project, references have no project; the JSON API names them `project:name@sel`
-(inputs, consumers, lineage), as the app reads them, and every version carries its `short_id`. It serves the React
-app (web/, built into static/) and a small JSON API for it:
+many (`mode: server`). Inside a project, references have no project. Every reference the UI reads, from its URLs and
+from the app's API calls, is parsed by store/refs.py and nothing else (the app's own `web/src/refs.ts` mirrors it to
+tell a name from an id); the JSON names versions by id, with `nodes` saying each one's name, number, and short id. It
+serves the React app (web/, built into static/) and a small JSON API for it:
 
-    /, /login, /p/<p>/, /p/<p>/a/<name>[@sel]   the app (index.html; the app routes on the client)
+    /, /login, /p/<p>/                           the app (index.html; the app routes on the client)
+    /p/<p>/a/<name>[@v<n>|@<alias or label>]     an artifact page at a version (the app)
+    /p/<p>/v/<id>                                a version by its id, or a unique prefix of it (the app)
     /assets/<file>                               the app's hashed scripts and styles
     /ui-api/...                                  the app's JSON API (see `_api`), session-scoped
     /p/<p>/r/<slug>[@v<n>]/...                   a report version's built site (latest without @), its `_static/`
                                                  files and a generated `site.json` at /p/<p>/r/
-    /files/<p>/<name>@sel//<path>                the repo's files, with Range (so videos seek)
-    /files/<p>/<name>@sel.zip                    a whole version as a zip, streamed (`<name>-v<n>/...` inside)
+    /files/<p>/<reference>//<path>               the repo's files, with Range (so videos seek)
+    /files/<p>/<reference>.zip                   a whole version as a zip, streamed (`<name>-v<n>/...` inside)
 
-A selector is `v<n>`, a uid (a pending version has no number yet), an alias, or a label. Reports are a UI concept:
-an artifact `reports/<slug>` whose files have `site/` and `source/`.
+Reports are a UI concept: an artifact `reports/<slug>` whose files have `site/` and `source/`.
 
 Login: `cairn ui` prints a one-time link (a random code that works once and does not expire; every launch prints a
 new one); or the user enters the token on /login (the app posts it to /ui-api/login). The UI checks it (a remote: an
@@ -55,10 +57,21 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from ..hosts import LOCAL_HOSTS, url_host
 from ..term import cause, field, request_line, warn
 from .._version import __version__
-from ..store import BadRange, Deleted, FileRead, Forbidden, InvalidRef, NotFound, Ref, StoreError, Unauthorized, refs
+from ..store import (
+    Ambiguous,
+    BadRange,
+    Deleted,
+    FileRead,
+    Forbidden,
+    InvalidRef,
+    NotFound,
+    Ref,
+    StoreError,
+    Unauthorized,
+    refs,
+)
 from ..store.blobs import resolve_entry, valid_path
 from ..store.outbox import exact_ref
-from ..store.uids import UID
 from .backends import LocalBackend, RemoteBackend
 from .sessions import COOKIE, COOKIE_SECONDS, LOGIN_DELAY, Session, session_id
 
@@ -139,45 +152,28 @@ def app_route(segments: list[str]) -> bool:
     return (
         len(segments) >= 4
         and segments[1] == "p"
-        and (segments[3] == "" and len(segments) == 4 or segments[3] == "a" and len(segments) > 4)
+        and (
+            segments[3] == ""
+            and len(segments) == 4
+            or segments[3] == "a"
+            and len(segments) > 4
+            or segments[3] == "v"
+            and len(segments) == 5
+        )
     )
 
 
-def selector_of(version: dict) -> str:
-    """`v<n>`, or the uid of a pending version (not numbered yet)."""
-    return f"v{version['version']}" if version.get("version") is not None else version["uid"]
+def file_ref(name: str, version: dict, path: str | None = None) -> Ref:
+    """The exact reference of a version (`name@v<n>`, or its id while it has no number), at `path` inside it."""
+    if version.get("version") is not None:
+        return Ref(name, f"v{version['version']}", path)
+    return Ref.of(version["id"], path)
 
 
-def qualified(project: str, ref: str) -> str:
-    """A reference inside a project as the app reads it: `project:name@sel`."""
-    return f"{project}:{ref}"
-
-
-def split_ref(text: str) -> tuple[str, refs.Ref]:
-    """(project, reference) of the app's `project:name@sel`."""
-    project, colon, rest = text.partition(":")
-    if not colon or not project:
-        raise ValueError("the reference needs a project: project:name[@selector]")
-    return refs.valid_project(project) if project else project, refs.parse(rest)
-
-
-def with_short_id(version: dict) -> dict:
-    """A manifest with its `short_id` (every version has one; a pending one its default)."""
-    return {**version, "short_id": refs.short_of(version)} if version.get("uid") else version
-
-
-def shown(project: str, version: dict) -> dict:
-    """A manifest as the app shows it: its short id, its inputs as `project:name@sel`."""
-    version = with_short_id(version)
-    if "inputs" in version:
-        version = {**version, "inputs": [qualified(project, item) for item in version.get("inputs") or []]}
-    return version
-
-
-def summarize_version(version: dict) -> dict:
+def summarize_version(version: dict, short: str) -> dict:
     """A version without its file list: the table of versions needs only counts (a tombstone keeps those it had)."""
     files = version.get("files", [])
-    version = with_short_id(version)
+    version = {**version, "short_id": short}
     slim = {key: value for key, value in version.items() if key not in ("files", "inputs")}
     counts = {"file_count": len(files), "size": sum(entry.get("size", 0) for entry in files)}
     if version.get("status") == "deleted":
@@ -242,6 +238,10 @@ class UIHandler(BaseHTTPRequestHandler):
             self._send(416, b"", headers={"Content-Range": f"bytes */{error.total}"})
         except Deleted as error:
             self._error(410, str(error))
+        except Ambiguous as error:  # an id prefix of several versions: the app lists them
+            if self._is_api():
+                return self._json(409, {"error": str(error), "candidates": error.candidates})
+            self._error(409, str(error))
         except NotFound as error:
             self._error(404, str(error))
         except Forbidden as error:
@@ -384,14 +384,15 @@ class UIHandler(BaseHTTPRequestHandler):
                 repo = store.get(project)
                 return self._json(200, {"project": store.record(project), "artifacts": repo.summaries()})
             case ["projects", project, "artifacts", *rest] if rest:
-                repo = store.get(project)
-                if len(rest) >= 4 and rest[-3] == "versions" and rest[-1] == "run":
-                    return self._json(200, self._run_api(repo, project, "/".join(rest[:-3]), rest[-2]))
-                if len(rest) >= 3 and rest[-2] == "versions":
-                    return self._json(200, self._version_api(repo, project, "/".join(rest[:-2]), rest[-1]))
-                return self._json(200, self._artifact_api(repo, project, "/".join(rest)))
-            case ["lineage"]:
-                project, ref = split_ref(query.get("ref", [""])[0])
+                return self._json(200, self._artifact_api(store.get(project), project, refs.valid_name("/".join(rest))))
+            case ["projects", project, "version"]:  # ?ref=: any of the four forms (refs.parse)
+                ref = refs.parse(query.get("ref", [""])[0])
+                return self._json(200, self._version_api(store.get(project), project, ref))
+            case ["projects", project, "run"]:
+                ref = refs.parse(query.get("ref", [""])[0])
+                return self._json(200, self._run_api(store.get(project), project, ref))
+            case ["projects", project, "lineage"]:
+                ref = refs.parse(query.get("ref", [""])[0])
                 depth = int(query.get("depth", ["1"])[0])
                 if not 1 <= depth <= MAX_LINEAGE_DEPTH:
                     raise ValueError(f"depth must be between 1 and {MAX_LINEAGE_DEPTH}")
@@ -399,49 +400,61 @@ class UIHandler(BaseHTTPRequestHandler):
         raise HttpError(404, "no such API route")
 
     @staticmethod
-    def _artifact_api(repo, project: str, name: str) -> dict:
+    def _shorts(repo, ids) -> dict[str, str]:
+        """{id: short id} of versions of the project (the first 7 digits for any the repo cannot say)."""
+        ids = [id for id in dict.fromkeys(ids) if id]
+        try:
+            found = repo.short_ids(ids) if ids else {}
+        except (StoreError, ValueError):
+            found = {}
+        return {id: found.get(id) or id[: refs.SHORT] for id in ids}
+
+    @classmethod
+    def _artifact_api(cls, repo, project: str, name: str) -> dict:
         versions = repo.versions(name)
         if not versions:
             raise NotFound(f"no artifact {name} in the project {project}")
+        shorts = cls._shorts(repo, [version["id"] for version in versions])
         return {
             "project": project,
             "name": name,
             "summary": repo.summary(name),
-            "versions": [summarize_version(version) for version in versions],
+            "versions": [summarize_version(version, shorts[version["id"]]) for version in versions],
             "aliases": repo.aliases(name),
         }
 
-    def _version_api(self, repo, project: str, name: str, selector: str) -> dict:
-        """One manifest (files, metadata, inputs) with its consumers; `selector` is a number, `v<n>`, a uid, a short id,
-        an alias or a label."""
-        version = self._numbered(repo, name, selector)
+    def _version_api(self, repo, project: str, ref: Ref) -> dict:
+        """One version (any of the four reference forms, refs.parse): its manifest (files, metadata, inputs as ids), its
+        consumers (ids), the ids among them that were deleted, and `nodes` {id: {name, version, short_id, status,
+        kind}} for each, so the app shows them without parsing anything."""
+        name, version = self._find(repo, ref)
         consumers, deleted, nodes = [], [], {}
-        if version["status"] in (
-            "completed",
-            "deleted",
-            "running",
-            "failed",
-        ):  # a deleted version keeps its edges, a running run has some
-            found = repo.lineage(exact_ref(name, version), marks=True)
-            consumers, deleted, nodes = found["consumers"], found.get("deleted", []), found.get("nodes", {})
+        if version["status"] in ("completed", "deleted", "running", "failed") and not version.get("pending"):
+            found = repo.lineage(Ref.of(version["id"]), marks=True)  # a deleted version keeps its edges
+            consumers, deleted, nodes = found["consumers"], found.get("deleted", []), dict(found.get("nodes", {}))
+        shorts = self._shorts(repo, [version["id"], *(version.get("inputs") or []), *consumers])
+        for id in shorts:
+            nodes.setdefault(id, {"name": None, "version": None, "status": None})
+            nodes[id]["short_id"] = shorts[id]
+        nodes[version["id"]].update(name=name, version=version.get("version"), status=version["status"])
         return {
             "project": project,
             "name": name,
-            "version": shown(project, version),
-            "consumers": [qualified(project, item) for item in consumers],
-            "deleted": [qualified(project, item) for item in deleted],
-            "nodes": {qualified(project, item): mark for item, mark in nodes.items()},
+            "ref": exact_ref(name, version),
+            "version": {**version, "short_id": shorts[version["id"]]},
+            "consumers": consumers,
+            "deleted": deleted,
+            "nodes": nodes,
         }
 
-    def _run_api(self, store, project: str, name: str, selector: str) -> dict:
+    def _run_api(self, store, project: str, ref: Ref) -> dict:
         """What the app's Run panel shows of a run version: its metrics.jsonl and system/metrics.jsonl rows (numbers
         only, thinned to RUN_POINTS), the tails of logs/stdout.txt, stderr.txt, and error.txt, system/info.json, and
         the config. A running version answers with what it has synced so far."""
-        version = self._numbered(store, name, selector)
+        name, version = self._find(store, ref)
         if version["status"] == "deleted":
             raise Deleted(f"{exact_ref(name, version)} was deleted")
         files = {entry["path"]: entry for entry in version.get("files", [])}
-        exact = selector_of(version)
 
         def read(path: str, limit: int) -> tuple[bytes, bool]:
             entry = files.get(path)
@@ -450,7 +463,7 @@ class UIHandler(BaseHTTPRequestHandler):
             size = entry.get("size") or 0
             wanted = f"bytes=-{limit}" if size > limit else None
             try:
-                found = store.read_file(name, exact, path, wanted)
+                found = store.read_file(file_ref(name, version, path), wanted)
             except (NotFound, StoreError, BadRange):
                 return b"", False
             try:
@@ -512,7 +525,8 @@ class UIHandler(BaseHTTPRequestHandler):
             "project": project,
             "name": name,
             "version": version["version"],
-            "short_id": refs.short_of(version),
+            "id": version["id"],
+            "short_id": self._shorts(store, [version["id"]])[version["id"]],
             "status": version["status"],
             "metrics": rows("metrics.jsonl"),
             "system": rows("system/metrics.jsonl"),
@@ -525,25 +539,21 @@ class UIHandler(BaseHTTPRequestHandler):
         }
 
     def _lineage_api(self, store, project: str, ref: Ref, depth: int) -> dict:
-        """Inputs to the left and consumers to the right of a version, `depth` levels each way, from one-level lineage calls.
+        """Inputs to the left and consumers to the right of a version, `depth` levels each way, from one-level lineage
+        calls; every version is named by its id.
 
-        `nodes` maps each reference to its `inputs` and `consumers` when they were looked up (null: not looked
-        up, so the app may offer to expand it). Ancestors are expanded through their inputs only, descendants
-        through their consumers only. Lineage never leaves the project. A deleted version keeps its edges; its node says
-        `deleted: true` (the key is there only then). References are `project:name@sel`, as the app reads them; every
-        node has the version's `short_id` once it was looked up."""
+        `nodes` maps each id to its `inputs` and `consumers` (ids) when they were looked up (null: not looked up, so the
+        app may offer to expand it), its `name`, `version` (number, or null while pending), and `short_id`. Ancestors
+        are expanded through their inputs only, descendants through their consumers only. Lineage never leaves the
+        project. A deleted version keeps its edges; its node says `deleted: true` (the key is there only then)."""
         name, manifest = self._find(store, ref)
-        root = exact_ref(name, manifest)
-        first = store.lineage(root, marks=True)
+        root = manifest["id"]
+        first = store.lineage(Ref.of(root), marks=True)
         nodes: dict[str, dict] = {root: {"inputs": None, "consumers": None}}
         gone = set(first.get("deleted", []))
         marks: dict[str, dict] = dict(first.get("nodes", {}))
         truncated = False
-
-        marks.setdefault(root, {"status": manifest["status"], "short_id": refs.short_of(manifest)})
-
-        def visible(items: list[str]) -> list[str]:
-            return list(items)
+        marks.setdefault(root, {"name": name, "version": manifest.get("version"), "status": manifest["status"]})
 
         def is_run(item: str) -> bool:
             return marks.get(item, {}).get("kind") == "run"
@@ -555,14 +565,14 @@ class UIHandler(BaseHTTPRequestHandler):
                 if level >= depth or nodes[current][side] is not None:
                     continue
                 if current == root:
-                    found = visible(first[side])
+                    found = list(first[side])
                 else:
                     try:
-                        answer = store.lineage(current, marks=True)
+                        answer = store.lineage(Ref.of(current), marks=True)
                         gone.update(answer.get("deleted", []))
                         marks.update(answer.get("nodes", {}))
-                        found = visible(answer[side])
-                    except (NotFound, StoreError, Forbidden):
+                        found = list(answer[side])
+                    except (NotFound, StoreError, Forbidden, ValueError):
                         found = []
                 kept = []
                 for item in found:
@@ -574,33 +584,17 @@ class UIHandler(BaseHTTPRequestHandler):
                         queue.append((item, level + (0 if is_run(item) else 1)))
                     kept.append(item)
                 nodes[current][side] = kept
-        for item in gone & nodes.keys():
-            nodes[item]["deleted"] = True
+        shorts = self._shorts(store, nodes)
         for item, node in nodes.items():
             mark = marks.get(item, {})
+            node.update(name=mark.get("name"), version=mark.get("version"), short_id=shorts.get(item))
+            if item in gone:
+                node["deleted"] = True
             if mark.get("kind"):
                 node["kind"] = mark["kind"]
             if mark.get("status") not in (None, "completed", "deleted"):
                 node["status"] = mark["status"]
-            if mark.get("short_id"):
-                node["short_id"] = mark["short_id"]
-
-        def outward(node: dict) -> dict:
-            return {
-                key: (
-                    [qualified(project, item) for item in value]
-                    if key in ("inputs", "consumers") and value is not None
-                    else value
-                )
-                for key, value in node.items()
-            }
-
-        return {
-            "ref": qualified(project, root),
-            "depth": depth,
-            "nodes": {qualified(project, item): outward(node) for item, node in nodes.items()},
-            "truncated": truncated,
-        }
+        return {"ref": root, "depth": depth, "nodes": nodes, "truncated": truncated}
 
     # ------------------------------------------------------------------ files
 
@@ -608,12 +602,12 @@ class UIHandler(BaseHTTPRequestHandler):
         rest = unquote(path)[len("/files/") :]
         project, _, remainder = rest.partition("/")
         head, separator, inner = remainder.partition("//")
-        if not separator and head.endswith(".zip") and "@" in head:
+        if not separator and head.endswith(".zip"):
             return self._zip(session, project, head[: -len(".zip")])
         if not separator:
-            raise HttpError(404, "file URLs look like /files/<project>/<name>@v<n>//<path>")
+            raise HttpError(404, "file URLs look like /files/<project>/<reference>//<path>")
         ref = refs.parse(f"{head}//{inner}")
-        read = session.store.get(project).read_file(ref.name, ref.selector, ref.path, self.headers.get("Range"))
+        read = session.store.get(project).read_file(ref, self.headers.get("Range"))
         # a pushed HTML file must not act as the UI's origin (its session)
         extra = {"Content-Security-Policy": "sandbox"}
         if query.get("download"):
@@ -621,18 +615,18 @@ class UIHandler(BaseHTTPRequestHandler):
         self._stream(read, entry_type(ref.path), read.immutable, extra)
 
     def _zip(self, session: Session, project: str, head: str) -> None:
-        """`/files/<p>/<name>@<sel>.zip`: the version's files as one zip, streamed while it is written (chunked; ZIP64,
+        """`/files/<p>/<reference>.zip`: the version's files as one zip, streamed while it is written (chunked; ZIP64,
         data descriptors, no temporary file): `<name>-v<n>/<path>` inside, a stored symlink as the file it names;
         already compressed types are stored, the rest deflated."""
         ref = refs.parse(head)
-        if ref.path or not ref.selector:
-            raise HttpError(404, "zip URLs look like /files/<project>/<name>@v<n>.zip")
+        if ref.path:
+            raise HttpError(404, "zip URLs look like /files/<project>/<reference>.zip")
         store = session.store.get(project)
-        version = self._version(store, ref.name, ref.selector)
+        name, version = self._find(store, ref)
         if version["status"] == "deleted":
-            raise Deleted(f"{exact_ref(ref.name, version)} was deleted: its files are gone")
-        exact = selector_of(version)
-        top = f"{ref.name.replace('/', '-')}-{exact}"
+            raise Deleted(f"{exact_ref(name, version)} was deleted: its files are gone")
+        number = f"v{version['version']}" if version.get("version") is not None else version["id"][: refs.SHORT]
+        top = f"{name.replace('/', '-')}-{number}"
         self.send_response(200)
         self.send_header("Content-Type", "application/zip")
         self.send_header("Content-Disposition", f'attachment; filename="{top}.zip"')
@@ -644,22 +638,22 @@ class UIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         sink = _ChunkedSink(self.wfile)
         try:
-            self._zip_into(sink, store, ref.name, exact, top, version.get("files", []))
+            self._zip_into(sink, store, name, version, top, version.get("files", []))
         except (BrokenPipeError, ConnectionResetError):
             raise
         except Exception as error:  # noqa: BLE001  (the headers are sent: end the connection, the zip stays incomplete)
             self.close_connection = True
-            sys.stderr.write(f"zip of {project}:{ref.name}@{exact} broke off: {cause(error)}\n")
+            sys.stderr.write(f"zip of {project}:{exact_ref(name, version)} broke off: {cause(error)}\n")
             return
         sink.finish()
 
     @staticmethod
-    def _zip_into(sink, store, name: str, exact: str, top: str, files: list[dict]) -> None:
+    def _zip_into(sink, store, name: str, version: dict, top: str, files: list[dict]) -> None:
         stamp = time.localtime()[:6]
         with zipfile.ZipFile(sink, "w", allowZip64=True) as archive:
             for entry in sorted(files, key=lambda item: item["path"]):
                 try:
-                    read = store.read_file(name, exact, entry["path"])
+                    read = store.read_file(file_ref(name, version, entry["path"]))
                 except (NotFound, StoreError):
                     continue  # a link to a file the version does not have
                 info = zipfile.ZipInfo(f"{top}/{entry['path']}", date_time=max(stamp, (1980, 1, 1, 0, 0, 0)))
@@ -714,37 +708,9 @@ class UIHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _find(store, ref: Ref) -> tuple[str, dict]:
-        """(name, manifest) of the version a reference names (any status for `v<n>`, a uid, or a short id)."""
-        if hasattr(store, "find"):
-            return store.find(ref)
-        if ref.exact:
-            return ref.name, store.get_version(ref.name, ref.version if ref.version is not None else ref.uid)
-        try:
-            return store.resolve(ref)
-        except NotFound:
-            if ref.id is None:
-                raise
-            found = refs.pick(ref.id, store.ids(ref.id, None if ref.bare else ref.name))
-            return found["name"], store.get_version(found["name"], found["uid"])
-
-    @classmethod
-    def _numbered(cls, store, name: str, selector: str) -> dict:
-        """`_version`, where a bare number is a version number (`3` is `v3`) unless it is a short id: a short id has
-        at least 4 hex digits and may be all 0-9, so 4 or more digits are tried as one first."""
-        if not selector.isdigit():
-            return cls._version(store, name, selector)
-        if len(selector) >= 4:
-            try:
-                return cls._version(store, name, selector)
-            except (NotFound, InvalidRef):
-                pass
-        return cls._version(store, name, f"v{int(selector)}")
-
-    @classmethod
-    def _version(cls, store, name: str, selector: str | None) -> dict:
-        """A version manifest: `v<n>`, a uid, or a short id (whatever its status), else the completed version an alias or
-        label names."""
-        return cls._find(store, Ref(name, selector))[1]
+        """(name, manifest) of the version a reference names: any status for an id or `name@v<n>`, a completed one for
+        an alias, a label, or a bare name. The repo's own `find` does it all; nothing is tried in turn here."""
+        return store.find(ref)
 
     def _report(self, session: Session, store, project: str, rest: list[str], url) -> None:
         first = rest[0] if rest else ""
@@ -754,12 +720,13 @@ class UIHandler(BaseHTTPRequestHandler):
             return self._json(200, self._site(session, project))
         if first == "_static" and len(rest) == 2:
             return self._static(store, project, rest[1])
-        slug, at, selector = first.partition("@")
-        name = f"reports/{slug}"
-        refs.valid_name(name)
+        ref = refs.parse(f"reports/{first}")  # reports/<slug>[@v<n>|@<alias or label>]
+        if ref.path or ref.name.count("/") != 1:
+            raise HttpError(404, "report URLs look like /p/<project>/r/<slug>[@v<n>]/")
+        name, slug = ref.name, ref.name.split("/", 1)[1]
         if len(rest) == 1:  # relative links in the page need the trailing slash
             return self._send(301, b"", headers={"Location": url.path + "/" + (f"?{url.query}" if url.query else "")})
-        version = self._version(store, name, selector if at else None)
+        name, version = self._find(store, ref)
         inside = "/".join(rest[1:])
         file = f"site/{slug}/{inside}index.html" if inside.endswith("/") or not inside else f"site/{slug}/{inside}"
         if not valid_path(file):
@@ -767,11 +734,12 @@ class UIHandler(BaseHTTPRequestHandler):
         if resolve_entry(version["files"], file) is None:
             raise HttpError(404, f"the report has no {file}")
         immutable = re.search(r"(^|&)v=[0-9a-f]+", url.query) is not None
-        exact = selector_of(version)
         if resolve_entry(version["files"], file + ".gz") and "gzip" in self.headers.get("Accept-Encoding", ""):
-            read = store.read_file(name, exact, file + ".gz")
+            read = store.read_file(file_ref(name, version, file + ".gz"))
             return self._stream(read, entry_type(file), immutable, encoding="gzip")
-        self._stream(store.read_file(name, exact, file, self.headers.get("Range")), entry_type(file), immutable)
+        self._stream(
+            store.read_file(file_ref(name, version, file), self.headers.get("Range")), entry_type(file), immutable
+        )
 
     def _static(self, store, project: str, file: str) -> None:
         """A shared page file (`site/_static/<name>`, named by content hash): the newest report version that has it."""
@@ -786,7 +754,7 @@ class UIHandler(BaseHTTPRequestHandler):
                     if version["status"] == "completed" and resolve_entry(version["files"], f"site/_static/{file}"):
                         found = (
                             name,
-                            selector_of(version),
+                            version,
                             resolve_entry(version["files"], f"site/_static/{file}.gz") is not None,
                         )
                         break
@@ -797,12 +765,15 @@ class UIHandler(BaseHTTPRequestHandler):
             self.static_cache[key] = (
                 found  # where it lives, not its bytes: every read still goes to the store with the session's token
             )
-        name, number, compressed = self.static_cache[key]
+        name, version, compressed = self.static_cache[key]
         if compressed and "gzip" in self.headers.get("Accept-Encoding", ""):
             return self._stream(
-                store.read_file(name, number, f"site/_static/{file}.gz"), entry_type(file), True, encoding="gzip"
+                store.read_file(file_ref(name, version, f"site/_static/{file}.gz")),
+                entry_type(file),
+                True,
+                encoding="gzip",
             )
-        self._stream(store.read_file(name, number, f"site/_static/{file}"), entry_type(file), True)
+        self._stream(store.read_file(file_ref(name, version, f"site/_static/{file}")), entry_type(file), True)
 
     @staticmethod
     def _site(session: Session, project: str) -> dict:
@@ -829,7 +800,7 @@ class UIHandler(BaseHTTPRequestHandler):
                         }
                     )
             elif name.startswith("runs/"):
-                last = f"@v{summary['versions']}" if summary["versions"] else ""
+                last = f"@v{summary['latest']}" if summary.get("latest") else ""
                 runs.append({"title": name[len("runs/") :], "href": f"{base}a/{quote(name)}{last}", "plain": True})
             else:
                 artifacts.append({"title": name, "href": f"{base}a/{quote(name)}", "plain": True})

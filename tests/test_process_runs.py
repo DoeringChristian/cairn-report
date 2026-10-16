@@ -45,11 +45,22 @@ def test_the_first_use_pull_or_draft_starts_the_run(configured, env):
     assert (used.path / "x.txt").read_text() == "1"  # materialized on first use
     store = cairn.connect()
     running = store.version(run.ref)
-    assert running.status == "running" and running.metadata == {"kind": "run"} and running.uid == run.uid
+    assert running.status == "running" and running.metadata == {"kind": "run"} and running.id == run.id
     assert cairn.pull("datasets/toy@v1").is_dir() and cairn.run == run  # one run
     version = finish_and_sync(run)
-    assert version.status == "completed" and version.inputs == [dataset.ref] and not cairn.run
-    assert dataset.consumers == [version.ref]
+    assert version.status == "completed" and version.inputs == [dataset.id] and not cairn.run
+    assert dataset.consumers == [version.id]
+
+
+def test_a_run_name_of_hex_digits_alone_is_refused(env):
+    write_config(env, "")
+    for name in ("cafe", "1234", "DEADBEEF"):
+        with pytest.raises(cairn.InvalidRef, match="hex digits"):
+            cairn.init(name=name, system=False, code=False)
+    assert not cairn.run
+    run = cairn.init(name="cafe-run", system=False, code=False)  # not an id's shape
+    assert run.name == "runs/cafe-run"
+    run.finish()
 
 
 def test_one_run_per_process(env):
@@ -86,7 +97,7 @@ def test_init_after_an_implicit_start_updates_the_running_run(configured, env):
         cairn.connect().sync()
     assert cairn.connect().version(run.ref).metadata == running
     version = finish_and_sync(run)
-    assert version.status == "completed" and version.metadata == running and version.inputs == [dataset.ref]
+    assert version.status == "completed" and version.metadata == running and version.inputs == [dataset.id]
 
 
 def test_use_refuses_versions_that_are_not_completed(env):
@@ -97,26 +108,30 @@ def test_use_refuses_versions_that_are_not_completed(env):
     run.finish()
 
 
-def test_running_inputs_by_uid_are_accepted_failed_and_unknown_ones_refused(configured, env):
+def test_running_inputs_by_id_are_accepted_failed_and_unknown_ones_refused(configured, env):
     store = cairn.connect()
     backend = store.backend
     started = backend.start_version("runs/job", label="t", metadata={"kind": "run"})
-    uid = started["uid"]
+    run_id = started["id"]
     data = folder(env, "out", {"a.txt": "a"})
-    out = store.artifact("out").publish(data, inputs=[f"runs/job@{uid}"])
-    assert out.inputs == ["runs/job@v1"]  # stored by number, like any exact input
-    assert store.backend.lineage(f"runs/job@{uid}")["consumers"] == [out.ref]
+    out = store.artifact("out").publish(data, inputs=[run_id])
+    assert out.inputs == [run_id]  # stored by id, like any input
+    assert store.backend.lineage(run_id)["consumers"] == [out.id]
     with pytest.raises(cairn.StoreError, match="running"):  # by number or alias, a running version is no input
         store.artifact("out2").publish(data, inputs=["runs/job@v1"])
-    from cairn.store.uids import new_uid
+    from cairn.store.ids import new_id
 
-    with pytest.raises(cairn.StoreError):
-        store.artifact("out3").publish(data, inputs=[f"runs/job@{new_uid()}"])
-    backend.fail_version("runs/job", uid)
+    with pytest.raises(cairn.StoreError):  # an id no version has
+        store.artifact("out3").publish(data, inputs=[new_id()])
+    with pytest.raises(cairn.InvalidRef):  # an id is never written after a name
+        store.artifact("out3").publish(data, inputs=[f"runs/job@{run_id}"])
+    backend.fail_version("runs/job", run_id)
     with pytest.raises(cairn.StoreError, match="failed"):
-        store.artifact("out4").publish(data, inputs=[f"runs/job@{uid}"])
+        store.artifact("out4").publish(data, inputs=[run_id])
     marks = store.backend.lineage(out.ref, marks=True)
-    assert marks["inputs"] == ["runs/job@v1"] and marks["nodes"]["runs/job@v1"] == {
+    assert marks["inputs"] == [run_id] and marks["nodes"][run_id] == {
+        "name": "runs/job",
+        "version": 1,
         "status": "failed",
         "kind": "run",
         "short_id": store.version("runs/job@v1").short_id,
@@ -140,7 +155,7 @@ def test_lineage_looks_through_runs(env):
     second.finish()
     store = cairn.connect()
     evals = store.version("evals/m@v1")
-    assert evals.inputs == ["runs/evaluate@v1"] and evals.run.ref == "runs/evaluate@v1"
+    assert evals.inputs == [store.version("runs/evaluate@v1").id] and evals.run.ref == "runs/evaluate@v1"
     assert [v.ref for v in evals.upstream()] == ["models/m@v1"]
     assert [v.ref for v in data.downstream()] == ["models/m@v1"]
     assert cairn.lineage("models/m@v1") == {
@@ -162,7 +177,8 @@ def test_open_drafts_are_published_with_the_run(env):
     left_open = cairn.draft("forgotten")
     left_open.add({"x": 1})
     run.finish()
-    assert left_open.version.number == 1 and left_open.version.inputs == ["runs/loose@v1"]
+    assert left_open.version.number == 1 and left_open.version.inputs == [run.id]
+    assert cairn.connect().version(run.id).ref == "runs/loose@v1"
     assert drafts.drafts() == []
 
 
@@ -173,7 +189,7 @@ def test_a_subprocess_of_a_run_records_in_that_run(env):
     child = "import cairn; cairn.use('datasets/toy@v1'); d = cairn.draft('child-out'); d.add({'x': 1}); d.publish(); assert not cairn.run"
     subprocess.run([sys.executable, "-c", child], check=True, cwd=env, env=dict(os.environ))
     version = run.finish()
-    assert version.inputs == [data.ref] and version.consumers == ["child-out@v1"]
+    assert version.inputs == [data.id] and version.consumers == [cairn.connect().version("child-out@v1").id]
     assert [item.name for item in cairn.connect().artifacts(prefix="runs/")] == ["runs/parent"]
 
 
@@ -197,7 +213,7 @@ def test_watch_syncs_a_running_run_to_the_server(configured, env):
         time.sleep(0.1)
     assert "metrics.jsonl" in files and store.version(run.ref).status == "running"
     outbox = store.backend.outbox
-    assert outbox.load(run.uid)["sync"] == "running" and (outbox.folder_of(run.uid) / "heartbeat").is_file()
+    assert outbox.load(run.id)["sync"] == "running" and (outbox.folder_of(run.id) / "heartbeat").is_file()
     version = finish_and_sync(run)
     assert version.status == "completed" and "metrics.jsonl" in [f.path for f in version.files]
 
@@ -210,12 +226,15 @@ def test_a_run_and_its_output_published_while_the_server_is_down(configured, env
     run = cairn.init(name="offline", system=False, code=False)
     with cairn.draft("result") as result:
         result.add({"x": 1})
-    assert result.version.pending and result.version.inputs == [run.ref]
+    assert (
+        result.version.pending and result.version.inputs == [run.id] and run.ref == run.id
+    )  # a run's reference is its id
     run.finish()
     configured.start()
     store.sync()
     out = store.artifact("result").latest
-    assert out.inputs == ["runs/offline@v1"] and store.version("runs/offline@v1").status == "completed"
+    assert out.inputs == [run.id] and store.version("runs/offline@v1").id == run.id
+    assert store.version("runs/offline@v1").status == "completed"
 
 
 # ------------------------------------------------------------------ whole processes
@@ -284,8 +303,9 @@ def test_a_script_is_a_run_that_completes_at_exit(script_project):
     store = cairn.connect()
     run = store.version("runs/job@latest")
     assert run.status == "completed" and run.metadata == {"kind": "run", "config": {"a": 1}}
-    assert run.inputs == ["datasets/toy@v1"] and run.consumers == ["out@v1"]
-    assert store.version("out@v1").inputs == [run.ref]
+    out = store.version("out@v1")
+    assert run.inputs == [store.version("datasets/toy@v1").id] and run.consumers == [out.id]
+    assert out.inputs == [run.id]
     folder_ = run.pull()
     assert "hello out" in (folder_ / "logs" / "stdout.txt").read_text()
     assert "from a subprocess" in (folder_ / "logs" / "stdout.txt").read_text()  # the file descriptor is teed
@@ -297,7 +317,7 @@ def test_a_script_is_a_run_that_completes_at_exit(script_project):
     )
     info = json.loads((folder_ / "system" / "info.json").read_text())
     assert info["host"] and info["argv"] == ["job.py", "ok"] and info["cwd"] == str(script_project) and info["pid"]
-    assert info["slurm"] == {"job_id": "123", "array_task_id": "4"} and info["run"].startswith("runs/job@")
+    assert info["slurm"] == {"job_id": "123", "array_task_id": "4"} and info["run"] == run.id
     assert info["environment"] == {"CUDA_VISIBLE_DEVICES": "0", "SLURM_ARRAY_TASK_ID": "4", "SLURM_JOB_ID": "123"}
     assert "packages" not in info and "cairn==" in (folder_ / "environment" / "pip-freeze.txt").read_text()
     manifest = json.loads((folder_ / "code" / "manifest.json").read_text())
@@ -318,9 +338,10 @@ def test_an_unhandled_exception_fails_the_run(script_project):
     store = cairn.connect()
     [run] = store.artifact("runs/job").versions()
     assert run.status == "failed" and "logs/error.txt" in [f.path for f in run.files]
-    assert run.consumers == ["out@v1"] and store.version("out@v1").inputs == ["runs/job@v1"]  # the edge stays
+    out = store.version("out@v1")
+    assert run.consumers == [out.id] and out.inputs == [run.id] and run.ref == "runs/job@v1"  # the edge stays
     [kept] = drafts.drafts()
-    assert kept.uid == run.uid and kept.state == "kept"
+    assert kept.id == run.id and kept.state == "kept"
     assert "ValueError: boom" in (kept.folder / "logs" / "error.txt").read_text()
     assert "ValueError: boom" in (kept.folder / "logs" / "stderr.txt").read_text()
 
@@ -389,7 +410,7 @@ def test_a_sigkilled_run_does_not_stay_running(script_project, capsys):
         time.sleep(0.05)
     store = cairn.LocalRepo(script_project / ".cairn")
     [run] = store.versions(OWN, "runs/job")
-    assert run["status"] == "running" and (store.root / "heartbeats" / run["uid"]).is_file()
+    assert run["status"] == "running" and (store.root / "heartbeats" / run["id"]).is_file()
     process.kill()  # SIGKILL: no handler, no atexit
     process.communicate(timeout=60)
     assert process.returncode == -signal.SIGKILL
@@ -397,19 +418,19 @@ def test_a_sigkilled_run_does_not_stay_running(script_project, capsys):
     assert "failed runs/job@v1: the process died (no heartbeat since " in capsys.readouterr().out
     after = cairn.LocalRepo(store.root).get_version(OWN, "runs/job", 1)
     assert after["status"] == "failed" and after["error"].startswith("the process died (no heartbeat since ")
-    assert not (store.root / "heartbeats" / run["uid"]).exists()
+    assert not (store.root / "heartbeats" / run["id"]).exists()
     assert cairn.connect().version("runs/job@v1").status == "failed"  # also through the object API
     assert cairn.LocalRepo(store.root).aliases(OWN, "runs/job") == {}  # `latest` never moved to it
 
 
 def test_a_local_version_is_failed_by_age_or_dead_owner_and_never_while_alive(tmp_path):
-    from cairn.store.uids import new_uid
+    from cairn.store.ids import new_id
 
     store = cairn.LocalRepo(tmp_path / "store")
     store.create_project("p")  # a server's repo: a named project
-    mine, stale, foreign, bare = new_uid(), new_uid(), new_uid(), new_uid()
-    for uid in (mine, stale, foreign, bare):
-        store.start_version("p", "run", label=uid[-8:], uid=uid)
+    mine, stale, foreign, bare = new_id(), new_id(), new_id(), new_id()
+    for id in (mine, stale, foreign, bare):
+        store.start_version("p", "run", label=f"run-{id[-8:]}", id=id)
     store.beat(mine)  # this process: alive
     beats = tmp_path / "store" / "heartbeats"
     now = time.time()
@@ -417,7 +438,7 @@ def test_a_local_version_is_failed_by_age_or_dead_owner_and_never_while_alive(tm
     (beats / foreign).write_text(json.dumps({"time": now - 5, "host": "other-host", "pid": 2**22}))  # recent, elsewhere
     reaped = dict(cairn.LocalRepo(tmp_path / "store", heartbeat_timeout=600).reaped)
     assert list(reaped) == ["run@v2 (project p)"] and "no heartbeat since" in reaped["run@v2 (project p)"]
-    states = {version["uid"]: version["status"] for version in store.versions("p", "run")}
+    states = {version["id"]: version["status"] for version in store.versions("p", "run")}
     assert states == {
         mine: "running",
         stale: "failed",
@@ -456,12 +477,15 @@ def test_the_default_name_follows_the_script(env):
         capture_output=True,
         text=True,
     )
-    assert [by_module.stdout.strip(), by_path.stdout.strip(), by_code.stdout.strip()] == [
+    (env / "c0ffee.py").write_text("import cairn\nprint(cairn.init(system=False, code=False).name)\n")
+    by_hex = subprocess.run([sys.executable, "c0ffee.py"], cwd=env, capture_output=True, text=True)
+    assert [by_module.stdout.strip(), by_path.stdout.strip(), by_code.stdout.strip(), by_hex.stdout.strip()] == [
         "runs/pkg.train_model",
         "runs/train_model",
         "runs/interactive",
+        "runs/c0ffee-run",  # a stem of an id's shape is never a name alone
     ], (
-        by_module.stderr + by_path.stderr
+        by_module.stderr + by_path.stderr + by_hex.stderr
     )
 
 
@@ -562,12 +586,13 @@ def test_a_hydra_job_is_a_run_in_its_job_folder(run_project):
         "system/info.json",
         "system/metrics.jsonl",
     } <= paths and "run.json" not in paths
-    assert run.status == "completed" and run.inputs == [dataset.ref] and run.consumers == ["models/toy@v1"]
+    model = store.version("models/toy@v1")
+    assert run.status == "completed" and run.inputs == [dataset.id] and run.consumers == [model.id]
     assert run.metadata["kind"] == "run" and run.metadata["config"]["experiment"]["pull"] == "datasets/toy@latest"
     assert run.metadata["overrides"] == ["experiment.pull=datasets/toy@latest"]
     with run.open("logs/stdout.txt") as handle:
         assert "training" in handle.read().decode()
-    assert store.version("models/toy@v1").inputs == [run.ref]
+    assert model.inputs == [run.id]
     assert drafts.drafts() == []
 
 
@@ -576,7 +601,7 @@ def test_a_failed_hydra_job_fails_its_run(run_project):
     assert result.returncode != 0
     store = synced()
     [run] = store.artifact("runs/demo").versions()
-    assert run.status == "failed" and store.version("models/toy@v1").inputs == ["runs/demo@v1"]
+    assert run.status == "failed" and store.version("models/toy@v1").inputs == [run.id] and run.number == 1
     [kept] = drafts.drafts()
     assert "asked to fail" in (kept.folder / "logs" / "error.txt").read_text()
 
@@ -591,18 +616,24 @@ def test_a_hydra_sweep_is_a_run_per_trial_and_a_summary_run(run_project):
     assert [trial0.metadata["sweep"]["num"], trial1.metadata["sweep"]["num"]] == [0, 1]
     assert trial0.label == f"{summary.label}/0" and trial1.label == f"{summary.label}/1"
     assert (
-        trial0.metadata["sweep"]["uid"] == summary.uid
+        trial0.metadata["sweep"]["id"] == summary.id
         and trial0.metadata["config"]["experiment"]["pull"] == "datasets/a@v1"
     )
-    assert trial0.inputs == [first.ref] and trial1.inputs == [second.ref]
+    assert trial0.inputs == [first.id] and trial1.inputs == [second.id]
     assert {".hydra/config.yaml", "result.txt", "logs/stdout.txt"} <= {f.path for f in trial0.files}
-    assert summary.metadata["kind"] == "run" and summary.inputs == [trial0.ref, trial1.ref]
+    assert summary.metadata["kind"] == "run" and summary.inputs == [trial0.id, trial1.id]
     assert [row["status"] for row in summary.metadata["sweep"]["trials"]] == ["completed", "completed"]
+    with summary.open("trials.jsonl") as handle:
+        rows = [json.loads(line) for line in handle.read().decode().splitlines()]
+    assert [{key: row[key] for key in ("num", "id", "label", "ref", "status")} for row in rows] == [
+        {"num": n, "id": trial.id, "label": trial.label, "ref": trial.ref, "status": "completed"}
+        for n, trial in enumerate((trial0, trial1))
+    ] and all(set(row) == {"num", "id", "label", "ref", "status", "time"} for row in rows)
     assert summary.metadata["overrides"] == ["experiment.pull=datasets/a@v1,datasets/b@v1"]
     assert {"multirun.yaml", "trials.jsonl"} <= {f.path for f in summary.files}
     assert not any(f.path.startswith("0/") for f in summary.files)  # each trial is its own version
     assert [v.ref for v in summary.upstream()] == [first.ref, second.ref]
-    assert [v.inputs for v in store.artifact("models/toy").versions()] == [[trial0.ref], [trial1.ref]]
+    assert [v.inputs for v in store.artifact("models/toy").versions()] == [[trial0.id], [trial1.id]]
     assert drafts.drafts() == []
 
 

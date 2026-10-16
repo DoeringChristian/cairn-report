@@ -1,12 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
-import { api, paths, useApi, type Me, type Project, type Summary } from "./api";
+import { Link, Navigate, Route, Routes, matchPath, useLocation, useParams } from "react-router-dom";
+import { api, paths, useApi, type Me, type Project, type Summary, type VersionData } from "./api";
 import { Field, Hero, Loading } from "./components";
 import { ArtifactPage } from "./pages/Artifact";
 import { PalettePage } from "./pages/Palette";
 import { ProjectPage } from "./pages/Project";
 import { ProjectsPage } from "./pages/Projects";
-import { artifactHref, isReport, isRunName, reportHref } from "./util";
+import { artifactHref, isId, parseRef, reportHref } from "./refs";
+import { isReport, isRunName } from "./util";
 
 type RailItem = { key: string; title: string; to: string; plain?: boolean; current: boolean };
 
@@ -32,9 +33,13 @@ function Rail() {
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
   useEffect(() => { setOpen(false); }, [pathname]);
-  const match = /^\/p\/([^/]+)(?:\/a\/(.+?))?\/?$/.exec(pathname);
-  const project = match ? decodeURIComponent(match[1]) : null;
-  const here = match?.[2] ? decodeURIComponent(match[2]).split("@")[0] : null;
+  const inProject = matchPath("/p/:project/*", pathname);
+  const project = inProject?.params.project ?? null;
+  const onArtifact = matchPath("/p/:project/a/*", pathname), onId = matchPath("/p/:project/v/:id", pathname);
+  const parsed = onArtifact ? parseRef((onArtifact.params["*"] ?? "").replace(/\/+$/, "")) : null;
+  const byId = onId && isId(onId.params.id!) ? onId.params.id! : null;
+  const loaded = useApi<VersionData>(project && byId ? paths.version(project, byId) : null);  // the page's own request (cached)
+  const here = parsed?.name ?? loaded.data?.name ?? null;
   const projects = useApi<Project[]>(pathname === "/login" ? null : paths.projects);
   const detail = useApi<{ project: Project; artifacts: Summary[] }>(project ? paths.project(project) : null);
   const me = useApi<Me>(pathname === "/login" ? null : "me");
@@ -86,13 +91,20 @@ function Login() {
   );
 }
 
+/** `/p/<p>/a/<name>[@v<n>|@<alias or label>]`: refs.ts tells the forms apart. */
 function ArtifactRoute() {
   const params = useParams();
-  const rest = params["*"] ?? "";
-  const at = rest.indexOf("@");
-  const name = (at < 0 ? rest : rest.slice(0, at)).replace(/\/+$/, "");
-  const sel = at < 0 ? null : rest.slice(at + 1).replace(/\/+$/, "");
-  return <ArtifactPage project={params.project!} name={name} selector={sel} />;
+  const ref = parseRef((params["*"] ?? "").replace(/\/+$/, ""));
+  if (!ref) return <NotFound />;
+  return <ArtifactPage project={params.project!} target={ref} />;
+}
+
+/** `/p/<p>/v/<id or a unique prefix>`. */
+function IdRoute() {
+  const params = useParams();
+  const ref = parseRef(params.id ?? "");
+  if (!ref || ref.id === undefined) return <NotFound />;
+  return <ArtifactPage project={params.project!} target={ref} />;
 }
 
 /** `/`: a local UI (one project, `cairn ui` on a project's repo) opens that project; a server lists its projects. */
@@ -119,6 +131,7 @@ export function App() {
         <Route path="/palette" element={<PalettePage />} />
         <Route path="/p/:project" element={<ProjectPage />} />
         <Route path="/p/:project/a/*" element={<ArtifactRoute />} />
+        <Route path="/p/:project/v/:id" element={<IdRoute />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </>

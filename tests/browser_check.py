@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,7 +29,7 @@ import cairn as store  # noqa: E402
 from cairn.cli import main  # noqa: E402
 from cairn.server import make_server  # noqa: E402
 from cairn.store.tokens import init_root  # noqa: E402
-from cairn.ui import RemoteBackend, make_ui_server  # noqa: E402
+from cairn.ui import RemoteBackend, make_ui_server, open_backend  # noqa: E402
 from conftest import make_data, write, write_config  # noqa: E402
 
 
@@ -482,6 +483,52 @@ def run(keep: bool) -> int:
         page.locator(".graph-node", has_text="toy-fit").locator(".graph-expand").click()  # one more level to the right
         page.wait_for_function(f"document.querySelectorAll('.graph-node').length > {before}")
         shot("08-expanded")
+
+        # a version by its id: the Reference panel shows name@v<n>, the short id and the whole id; /v/<short id>
+        # and /v/<id> open the same version (the rail marks its artifact); an alias in the URL names a version too
+        def reference_rows() -> dict:
+            page.locator("section.data-panel[aria-label=Reference] .data-row").first.wait_for()
+            return page.evaluate(
+                """() => Object.fromEntries([...document.querySelectorAll('section.data-panel[aria-label=Reference] .data-row')]
+                .map(r => [r.querySelector('.data-name').textContent, r.querySelector('.data-version').textContent]))"""
+            )
+
+        page.goto(ui + "/p/study/a/toy-fit")
+        page.get_by_role("heading", name="toy-fit").wait_for()
+        rows = reference_rows()
+        short, whole = rows["Short id"], rows["Id"]
+        assert rows["Version"] == "toy-fit@v1", rows
+        assert re.fullmatch(r"[0-9a-f]{64}", whole) and whole.startswith(short) and len(short) >= 7, rows
+        assert "uid" not in page.locator("main").inner_text().lower().split(), "no uid wording"
+        data = page.evaluate(
+            "async () => (await fetch('/ui-api/projects/study/version?ref=toy-fit', {headers: {'X-Cairn': '1'}})).json()"
+        )
+        assert data["ref"] == "toy-fit@v1" and data["version"]["id"] == whole and "uid" not in data["version"], data
+        assert all(re.fullmatch(r"[0-9a-f]{64}", i) for i in data["version"]["inputs"]), data["version"]["inputs"]
+        assert all(data["nodes"][i]["name"] for i in data["version"]["inputs"] + data["consumers"]), data["nodes"]
+        inputs = page.locator("section.data-panel[aria-label=Inputs] a.data-version")
+        assert inputs.all_inner_texts() == ["v2"], inputs.all_inner_texts()
+        assert inputs.first.get_attribute("href") == "/p/study/a/datasets/toy@v2", inputs.first.get_attribute("href")
+        page.goto(ui + f"/p/study/v/{short}")
+        page.get_by_role("heading", name="toy-fit").wait_for()
+        page.locator(".graph-node").first.wait_for()
+        assert reference_rows()["Id"] == whole
+        assert page.locator(".rail a[aria-current=page]").all_inner_texts() == ["study", "toy-fit"]
+        shot("08b-by-id")
+        page.goto(ui + f"/p/study/v/{whole}")
+        page.get_by_role("heading", name="toy-fit").wait_for()
+        assert reference_rows()["Version"] == "toy-fit@v1"
+        page.goto(ui + "/p/study/a/models/denoiser@best")
+        page.get_by_role("heading", name="models/denoiser").wait_for()
+        assert reference_rows()["Version"] == "models/denoiser@v1"
+        page.goto(ui + "/p/study/a/datasets/toy@stable")
+        page.get_by_role("heading", name="datasets/toy").wait_for()
+        assert reference_rows()["Version"] == "datasets/toy@v1"
+        page.get_by_role("button", name="Version", exact=True).click()  # the select goes to the chosen version's page
+        page.get_by_role("option", name=re.compile(r"^v2")).click()
+        page.wait_for_url("**/a/datasets/toy@v2")
+        page.wait_for_function("document.title.startsWith('datasets/toy@v2')")
+
         page.goto(ui + "/p/study/a/models/denoiser")
         page.locator(".graph-node").nth(1).wait_for()
         page.locator(".graph-expand").first.click()  # one more level to the left: the dataset
@@ -539,8 +586,17 @@ def run(keep: bool) -> int:
         page.get_by_role("link", name="Open report v").click()
         page.wait_for_url("**/p/study/r/summary@v*/")
         page.locator("#title").wait_for()
-        page.locator(".data-version").first.click()
-        page.wait_for_url("**/p/study/a/**")
+        pinned = page.evaluate(
+            "async () => (await (await fetch('/ui-api/projects/study/version?ref=reports/summary', "
+            "{headers: {'X-Cairn': '1'}})).json()).version.inputs"
+        )
+        first = page.locator(".data-version").first
+        first.wait_for()
+        href = first.get_attribute("href") or ""
+        assert href.startswith("/p/study/v/") and href.split("/")[-1] in pinned, (href, pinned)  # by id: a number
+        # the build recorded can name another version after a renumbering (a remote added later)
+        first.click()
+        page.wait_for_url("**/p/study/v/**")
         page.go_back()
         page.locator(".brand").click()
         page.wait_for_url("**/p/study/")
@@ -671,6 +727,35 @@ def run(keep: bool) -> int:
         page.goto(ui + "/")
         check_palette(page, shots, "dark")
         check_touch_lightbox(browser, ui, token, shots, problems)
+
+        # a bare name opens its @latest as the repo resolves it: with the remote away, a version pending in the
+        # project's repo is the latest, though no alias of the listing names it (it has no number yet)
+        store_httpd.shutdown()
+        store_httpd.server_close()
+        pending = (
+            store.connect().artifact("datasets/toy").publish(write(base / "pending" / "notes.md", "# Pending\n").parent)
+        )
+        assert pending.pending, pending
+        local_httpd = make_ui_server(open_backend(no_auth=True), port=0, no_auth=True)
+        local_httpd.RequestHandlerClass.log_message = lambda *a: None
+        threading.Thread(target=local_httpd.serve_forever, daemon=True).start()
+        local = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
+        local.on("pageerror", lambda error: problems.append(f"page error (local): {error}"))
+        local.on("response", lambda r: r.status >= 400 and problems.append(f"HTTP {r.status} (local): {r.url}"))
+        local.goto(f"http://127.0.0.1:{local_httpd.server_address[1]}/p/study/a/datasets/toy")
+        try:
+            local.get_by_role("heading", name="datasets/toy").wait_for()
+        except Exception:
+            print("LOCAL PAGE", local.url, local.locator("body").inner_text()[:1000])
+            raise
+        local.locator("section.data-panel[aria-label=Reference] .data-row").first.wait_for()
+        shown = local.evaluate(
+            """() => Object.fromEntries([...document.querySelectorAll('section.data-panel[aria-label=Reference] .data-row')]
+            .map(r => [r.querySelector('.data-name').textContent, r.querySelector('.data-version').textContent]))"""
+        )
+        if shown.get("Id") != pending.id:
+            problems.append(f"the bare name shows {shown} as its latest, not the pending {pending.id}")
+        local_httpd.shutdown()
         browser.close()
 
     out = Path("/tmp/cairn-ui-mobile-shots")

@@ -40,12 +40,12 @@ def test_the_repo_layout(proj, tmp_path):
     version = cairn.connect().artifact("data").publish(data)
     folder = cairn.pull(f"data@v{version.number}")
     base = proj / ".cairn"
-    assert folder == base / "versions" / version.uid / "files"
+    assert folder == base / "versions" / version.id / "files"
     names = {path.name for path in base.iterdir()}
     assert {"repo.json", "metadata.sqlite3", "blobs", "tmp", "versions", "drafts", ".gitignore"} <= names
     assert not names & {"store", "pending", "cache", "store.json", "projects"}  # the 0.13 layout is gone
     record = json.loads((base / "repo.json").read_text())
-    assert record["layout"] == 1 and record["uid"]
+    assert record["layout"] == 2 and record["id"]
     sha = version.files[0].sha256
     assert (base / "blobs" / sha[:2] / sha).is_file()  # blobs/<aa>/<sha256>
     assert (base.stat().st_mode & 0o777) == 0o700  # private to its owner
@@ -139,12 +139,12 @@ def test_cairn_init_is_idempotent_and_writes_only_the_repo(tmp_path, capsys):
     main(["init", str(tmp_path)])
     assert capsys.readouterr().out.startswith("created the repo")
     repo = tmp_path / ".cairn"
-    assert json.loads((repo / "repo.json").read_text())["uid"] and (repo / ".gitignore").read_text() == "*\n"
+    assert json.loads((repo / "repo.json").read_text())["id"] and (repo / ".gitignore").read_text() == "*\n"
     assert (repo.stat().st_mode & 0o777) == 0o700
-    uid = json.loads((repo / "repo.json").read_text())["uid"]
+    repo_id = json.loads((repo / "repo.json").read_text())["id"]
     main(["init", str(tmp_path)])
     assert "exists already" in capsys.readouterr().out
-    assert json.loads((repo / "repo.json").read_text())["uid"] == uid
+    assert json.loads((repo / "repo.json").read_text())["id"] == repo_id
     assert (tmp_path / ".gitignore").read_text() == "mine\n" and set(path.name for path in tmp_path.iterdir()) == {
         ".gitignore",
         ".cairn",

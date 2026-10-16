@@ -4,13 +4,13 @@
 
     repo = cairn.connect()                        # the project's repo (with its remote, if [remote] url names one)
     crops = repo.artifact("datasets/crops")       # repo.artifacts(prefix="datasets/")
-    v3 = crops.version(3)                         # also "v3", an alias, a label, a uid, or a short id; crops.latest
-    v3.files, v3.metadata, v3.inputs, v3.consumers, v3.short_id
+    v3 = crops.version(3)                         # also "v3", an alias, a label, or an id (a prefix); crops.latest
+    v3.files, v3.metadata, v3.inputs, v3.consumers, v3.id, v3.short_id      # inputs and consumers: ids
     with v3.open("tables/cases.csv") as handle:  # streams one file (recorded as an input, like pull)
         ...
     folder = v3.pull()                            # the whole version, read-only, in the repo
     fit = repo.artifact("fit").publish("outputs/fit", metadata={"loss": 0.1}, aliases=["best"])
-    fit.ref                                       # "fit@v4"; a pending version: number None, ref by uid
+    fit.ref                                       # "fit@v4"; a pending version: number None, ref its id
     v3.delete(reason="bad crop")                  # a tombstone; refused for protected versions unless force=True
     repo.retention = [{"prefix": "runs/", "keep_last": 5}]   # applied by repo.gc(dry_run=False)
 
@@ -18,7 +18,7 @@ A repo holds one project, so nothing here names one. Objects are thin and lazy: 
 a `Version` its manifest on first access and keep them. The backend is a client/repo.py ProjectRepo, without or with
 a remote. With a remote, publishing goes through the outbox (outbox.py, sync.py): the version is committed there
 first, and when the remote does not answer, `publish` returns a pending `Version` (status `pending`, number None) that
-is usable at once (`pull`, `open`, as an input by its uid), and it is sent once the remote answers (a background
+is usable at once (`pull`, `open`, as an input by its id), and it is sent once the remote answers (a background
 uploader, the next command, `cairn sync`).
 
 Every public method and property raises Cairn's errors from the caller's call (cairn/api.py).
@@ -39,7 +39,6 @@ from ..store.errors import Deleted, NotFound, Unreachable
 from ..store.gc import GRACE
 from ..store.outbox import exact_ref, manifest_of
 from ..store.refs import Ref
-from ..store.uids import UID
 from .repo import ProjectRepo
 
 
@@ -77,9 +76,9 @@ class Repo:
         return self.backend.url
 
     @property
-    def uid(self) -> str | None:
-        """The uid of the source of truth: the remote's server, else this repo."""
-        return self.backend.uid
+    def id(self) -> str | None:
+        """The id of the source of truth: the remote's server, else this repo."""
+        return self.backend.id
 
     @property
     def root(self) -> Path:
@@ -97,9 +96,9 @@ class Repo:
         return Artifact(self, refs.valid_name(name))
 
     def version(self, ref: str, *, offline: bool = False) -> "Version":
-        """The version a reference names (`name[@selector]`, or a bare short id), resolved now (with the offline
-        fallbacks). An exact reference (`@v<n>`, `@<uid>`) or a short id also names a running or failed version; a
-        deleted one raises Deleted."""
+        """The version a reference names (an id or a unique prefix of it, `name`, `name@v<n>`, `name@<alias or label>`;
+        store/refs.py), resolved now (with the offline fallbacks). An id or `name@v<n>` also names a running or failed
+        version; a deleted one raises Deleted."""
         name, manifest = self.backend.find(refs.parse(ref), offline)
         version = Version(self.artifact(name), manifest)
         if version.deleted:
@@ -197,13 +196,9 @@ class Artifact:
             return []
 
     def version(self, selector: int | str) -> "Version":
-        """A version by number (3 or "v3"), uid, short id, alias, or label (completed versions only for the last two).
-        Lazy."""
-        if isinstance(selector, bool) or not isinstance(selector, (int, str)):
-            raise TypeError("a version is a number, 'v<n>', a uid, a short id, an alias, or a label")
-        text = f"v{selector}" if isinstance(selector, int) else selector
-        refs.parse(f"{self.name}@{text}")  # validates it
-        return Version(self, None, text)
+        """A version by number (3 or "v3"), alias, or label (completed versions only for these two), or id (a unique
+        prefix of 4 or more digits; it must be a version of this artifact). Lazy."""
+        return Version(self, None, refs.of_artifact(self.name, selector))
 
     @property
     def latest(self) -> "Version":
@@ -243,11 +238,12 @@ class Artifact:
         config: Config | None = None,
         allow_incomplete: bool = False,
         _link: bool = False,
-        _uid: str | None = None,
+        _id: str | None = None,
     ) -> "Version":
         """Store a folder as the next version; when nothing changed since the latest, that version is returned.
 
-        A symlinked folder is followed (the label defaults to the resolved folder's name). The folder's
+        A symlinked folder is followed (the label defaults to the resolved folder's name, when that is a label a version
+        may have: not 4 or more hex digits alone). The folder's
         `.cairn-inputs.jsonl` and `inputs` become the version's inputs. With a remote the version is committed
         to the outbox first; if the remote does not answer, a pending Version is returned (usable at once) and
         sent in the background (and by `cairn sync` or the next cairn command).
@@ -274,12 +270,12 @@ class Artifact:
             exclude=config.repo.get("exclude", []),
             project_root=config.project,
             link=_link,
-            label=label or local.name,
+            label=label or refs.default_label(local.name),
             metadata=metadata,
             inputs=merged,
             aliases=aliases,
             source=_source(local),
-            uid=_uid,
+            id=_id,
         )
         return Version(self, manifest)
 
@@ -305,8 +301,9 @@ class Artifact:
 class Version:
     """One version of an artifact. `number` is None while it is pending: on this machine, not yet on the server."""
 
-    def __init__(self, artifact: Artifact, manifest: dict | None, selector: str | None = None):
-        self.artifact, self._manifest, self._selector = artifact, manifest, selector
+    def __init__(self, artifact: Artifact, manifest: dict | None, ref: Ref | None = None):
+        self.artifact, self._manifest, self._ref = artifact, manifest, ref
+        self._short: str | None = None
 
     @classmethod
     def from_record(cls, repo: Repo, record: dict) -> "Version":
@@ -315,14 +312,14 @@ class Version:
 
     def __repr__(self) -> str:
         if self._manifest is None:
-            return f"<cairn.Version {self.artifact.name}@{self._selector}>"
+            return f"<cairn.Version {self._ref}>"
         return f"<cairn.Version {self.ref} ({self.short_id})>"
 
     def __eq__(self, other) -> bool:
-        return isinstance(other, Version) and other.uid == self.uid
+        return isinstance(other, Version) and other.id == self.id
 
     def __hash__(self) -> int:
-        return hash(self.uid)
+        return hash(self.id)
 
     @property
     def manifest(self) -> dict:
@@ -331,19 +328,20 @@ class Version:
         return self._manifest
 
     def _load(self) -> dict:
-        artifact, selector = self.artifact, self._selector
+        artifact, ref = self.artifact, self._ref
         backend = artifact.backend
-        if refs.VERSION.fullmatch(selector) or UID.fullmatch(selector):  # any status, like versions()
-            return backend.get_version(
-                artifact.name, int(selector[1:]) if refs.VERSION.fullmatch(selector) else selector
-            )
-        return backend.find(Ref(artifact.name, selector))[1]
+        if ref.version is not None:  # any status, like versions()
+            return backend.get_version(artifact.name, ref.version)
+        name, manifest = backend.find(ref)
+        if name != artifact.name:
+            raise NotFound(f"the id {ref.id} names a version of {name}, not of {artifact.name}{backend.where}")
+        return manifest
 
     def refresh(self) -> "Version":
         """Read the manifest again (a pending version learns its number once the remote has it)."""
-        uid = self.manifest["uid"]
+        id = self.manifest["id"]
         try:
-            self._manifest = self.artifact.backend.get_version(self.artifact.name, uid)
+            self._manifest = self.artifact.backend.get_version(self.artifact.name, id)
         except (NotFound, Unreachable):
             if not self.manifest.get("pending"):
                 raise
@@ -356,18 +354,25 @@ class Version:
         return self.manifest["version"]
 
     @property
-    def uid(self) -> str:
-        return self.manifest["uid"]
+    def id(self) -> str:
+        """The version's id: 64 hex digits, its only identity (store/ids.py)."""
+        return self.manifest["id"]
 
     @property
     def short_id(self) -> str:
-        """The first hex digits of the SHA-256 of the uid (7, more when needed to be unique in the project); any unique
-        prefix of 4 or more names the version (`name@<id>`, or a bare `<id>`)."""
-        return refs.short_of(self.manifest)
+        """The shortest prefix of the id (at least 7 digits) that no other version of the project starts with; any
+        unique prefix of 4 or more digits names the version."""
+        if self._short is None:
+            try:
+                self._short = self.artifact.backend.short_ids([self.id]).get(self.id)
+            except (StoreError, ValueError):
+                self._short = None
+            self._short = self._short or self.id[: refs.SHORT]
+        return self._short
 
     @property
     def ref(self) -> str:
-        """The exact reference: `name@v<n>`, or `name@<uid>` while the version is pending."""
+        """The exact reference: `name@v<n>`, or the id while the version is pending."""
         return exact_ref(self.artifact.name, self.manifest)
 
     @property
@@ -380,7 +385,7 @@ class Version:
         return self.manifest["status"] == "deleted"
 
     def delete(self, *, force: bool = False, reason: str | None = None) -> dict:
-        """Delete this version: it becomes a tombstone (number and uid never used again), `latest` moves back, and
+        """Delete this version: it becomes a tombstone (number and id never used again), `latest` moves back, and
         its blobs go at the next `Repo.gc` unless other versions name them. Refused (Protected) when an alias
         other than `latest` points at it, a version that is not deleted consumed it, or it is running, unless
         `force` (the owner token on a server)."""
@@ -411,10 +416,10 @@ class Version:
 
     @property
     def consumers(self) -> list[str]:
-        """The versions that consumed this one, as exact references."""
+        """The ids of the versions that consumed this one (`inputs`: the ids of those it consumed)."""
         if self.number is None:
             return []
-        return self.artifact.backend.lineage(self.ref)["consumers"]
+        return self.artifact.backend.lineage(self.id)["consumers"]
 
     # ------------------------------------------------------------- runs and lineage
 
@@ -445,7 +450,7 @@ class Version:
     def _through(self, side: str, runs: list | None) -> list["Version"]:
         repo = self.artifact.repo
         found: list[Version] = []
-        seen = {self.ref}
+        seen = {self.id}
 
         def walk(items: list[str]) -> None:
             for ref in items:
@@ -484,10 +489,10 @@ class Version:
 
     def _record(self, record: bool) -> None:
         if record and self.artifact.backend.own and (self.number is not None or self.pending):
-            record_input(self.ref, self.uid)
+            record_input(self.id, self.ref)
 
     def pull(self, *, record: bool = True) -> Path:
-        """The whole version, read-only (`<repo>/versions/<uid>/files/`); recorded as an input."""
+        """The whole version, read-only (`<repo>/versions/<id>/files/`); recorded as an input."""
         self._usable()
         folder = self.artifact.backend.local_folder(self.artifact.name, self.manifest)
         self._record(record)
@@ -503,14 +508,16 @@ class Version:
 
         backend = self.artifact.backend
         root = backend.root
-        local = files_folder(root, self.uid) / path
-        if cached(root, self.uid) is not None:
-            touch(version_folder(root, self.uid))
+        local = files_folder(root, self.id) / path
+        if cached(root, self.id) is not None:
+            touch(version_folder(root, self.id))
         if local.is_file():
             handle = local.open("rb")
         else:
-            selector = f"v{self.number}" if self.number is not None else self.uid
-            read = backend.read_file(self.artifact.name, selector, path)
+            exact = (
+                Ref(self.artifact.name, f"v{self.number}", path) if self.number is not None else Ref.of(self.id, path)
+            )
+            read = backend.read_file(exact)
             handle = io.BufferedReader(_Chunks(read))
         self._record(record)
         return handle
