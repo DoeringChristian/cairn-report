@@ -34,12 +34,12 @@ def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
 
     out = step("-m", "cairn", "publish", "data/quadratic", "datasets/quadratic")
     assert "published datasets/quadratic@v1" in out
-    assert "published descent-example:descent@v1" in step("descent.py")
+    assert "published descent@v1" in step("descent.py")
     assert "reports/descent-study@v1" in step("-m", "cairn", "publish", "reports/descent-study")
     shown = step("-m", "cairn", "show", "descent@latest")
-    assert "descent-example:runs/descent@v1" in shown  # the result's one input: its run
-    assert "descent-example:datasets/quadratic@v1" in shown  # the data the run used, through the run
-    assert "descent-example:reports/descent-study@v1" in shown  # and its consumer, the report
+    assert "runs/descent@v1" in shown  # the result's one input: its run
+    assert "datasets/quadratic@v1" in shown  # the data the run used, through the run
+    assert "reports/descent-study@v1" in shown  # and its consumer, the report
     drafts = project / ".cairn" / "drafts"
     assert not drafts.exists() or not any(drafts.rglob("*.draft.json"))  # the draft and run folders are gone
     assert not (project / "runs").exists() and not (project / ".cairn-inputs.jsonl").exists()
@@ -48,21 +48,25 @@ def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
     cairn("show", "descent@latest")
     shown = capsys.readouterr().out
-    assert "run          descent-example:runs/descent@v1" in shown
-    assert "data         descent-example:datasets/quadratic@v1" in shown and "descent-example:reports/descent-study@v1" in shown
+    assert "run          runs/descent@v1" in shown
+    assert "data         datasets/quadratic@v1" in shown and "reports/descent-study@v1" in shown
     cairn("show", "runs/descent@latest")
     shown = capsys.readouterr().out
     assert "config\n  dataset = \"datasets/quadratic@latest\"\n  learning_rate = 0.15\n  steps = 60\n" in shown
-    assert "inputs       descent-example:datasets/quadratic@v1" in shown and "logs/stdout.txt" in shown
+    assert "inputs       datasets/quadratic@v1" in shown and "logs/stdout.txt" in shown
 
     built = (project / ".cairn" / "build" / "descent-study" / "narrative.html").read_text()
     assert "Final loss" in built and 'class="report-value"' in built
     manifest = json.loads((project / ".cairn" / "build" / "descent-study" / "manifest.json").read_text())
-    assert manifest["inputs"]["descent"]["resolved"] == "descent-example:descent@v1"
-    assert manifest["inputs"]["run"]["resolved"] == "descent-example:runs/descent@v1"
+    assert manifest["inputs"]["descent"]["resolved"] == "descent@v1"
+    assert manifest["inputs"]["run"]["resolved"] == "runs/descent@v1"
     assert (project / ".cairn" / ".gitignore").read_text().strip() == "*"
 
     cairn("alias", "descent@v1", "best")
-    assert capsys.readouterr().out.strip() == "descent@best -> v1"
+    shown = capsys.readouterr().out.strip()
+    assert shown.startswith("descent@best -> v1 (") and shown.endswith(")")
+    short = shown.split("(")[1].rstrip(")")
+    cairn("show", short[:5])
+    assert capsys.readouterr().out.startswith("ref          descent@v1\nid           " + short)
     with pytest.raises(SystemExit, match="moves automatically"):
         cairn("alias", "descent@v1", "latest")

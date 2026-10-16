@@ -40,8 +40,10 @@ print(result.version.ref)
 def project(tmp_path, monkeypatch):
     for name in ("CAIRN_DIR", "CAIRN_INPUTS", "CAIRN_TOKEN"):
         monkeypatch.delenv(name, raising=False)
-    (tmp_path / "cairn.toml").write_text('[repo]\nproject = "demo"\n')
-    return tmp_path
+    folder = tmp_path / "demo"  # the UI shows the repo's one project under the folder's name
+    folder.mkdir()
+    (folder / "cairn.toml").write_text("")
+    return folder
 
 
 def start(project, *args):
@@ -95,11 +97,11 @@ def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(pr
         (project / "go").touch()  # the run finishes while the server serves the repo
         out, err = slow.communicate(timeout=120)
         assert slow.returncode == 0, err
-        assert out.strip() == "demo:slow-result@v1"
+        assert out.strip() == "slow-result@v1"
 
         result = run(project, sys.executable, "-c", SCRIPT)  # a script beside the server: the repo directly
         assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == "demo:res@v1"
+        assert result.stdout.strip() == "res@v1"
         listed = run(project, sys.executable, "-m", "cairn", "artifacts")
         assert "res\tv1" in listed.stdout and "runs/slow\tv1" in listed.stdout, listed
 
@@ -118,7 +120,7 @@ def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(pr
     finally:
         stop(server)
     result = run(project, sys.executable, "-c", SCRIPT)
-    assert result.returncode == 0 and result.stdout.strip() == "demo:res@v2", result.stderr
+    assert result.returncode == 0 and result.stdout.strip() == "res@v2", result.stderr
 
 
 def test_cairn_ui_creates_the_project_repo_and_logs_in_with_a_link(project):
@@ -138,6 +140,6 @@ def test_cairn_ui_creates_the_project_repo_and_logs_in_with_a_link(project):
 
 
 def test_cairn_server_refuses_a_project_with_a_remote(project):
-    (project / "cairn.toml").write_text('[repo]\nremote = "https://cairn.example.org"\n')
+    (project / "cairn.toml").write_text('[repo]\nremote = "https://cairn.example.org/demo"\n')
     result = run(project, sys.executable, "-m", "cairn", "server")
-    assert result.returncode == 1 and "this project's repo syncs with the remote https://cairn.example.org" in result.stderr
+    assert result.returncode == 1 and "this project's repo syncs with the remote https://cairn.example.org/demo" in result.stderr

@@ -41,7 +41,7 @@ def make_tree(project: Path) -> Path:
     from cairn.config import load_config
 
     config = load_config(project)
-    store.publish("descent", make_data(project.parent), config=config, store=store.open_repo(config))
+    store.publish("descent", make_data(project.parent), config=config)
     reports = project / "reports"
     write(reports / "alpha" / "assets" / "strip.svg",
           '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"><rect width="400" height="100" fill="#dcebe5"/></svg>')

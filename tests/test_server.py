@@ -15,6 +15,7 @@ import cairn as store
 from cairn.cli import main
 from cairn.client.http import Client
 from cairn import BadRange, LocalRepo, Remote, StoreError
+from cairn.store import LocalProject
 from cairn.server import make_server, serve_store
 from cairn.store.tokens import create_token, init_root, list_tokens, revoke_token
 
@@ -63,7 +64,8 @@ def remote(server, token=None, project="study") -> Remote:
 
 
 def use_remote(env, server, project="study"):
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "{project}"\ninterval = 1\n')
+    """The project `env` with the remote `<server>/<project>`; returns that remote project (a Remote)."""
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/{project}"\ninterval = 1\n')
     return remote(server, project=project)
 
 
@@ -85,7 +87,8 @@ def test_auth_required(server):
 
 
 def test_the_server_has_no_pages_and_no_cookies(server, project):
-    store.publish("data", folder(project, "d", {"a.txt": "1"}), store=use_remote(project, server))
+    use_remote(project, server)
+    store.publish("data", folder(project, "d", {"a.txt": "1"}))
     for path in ("/", "/login", "/logout", "/p/study/", "/p/study/a/data", "/p/study/r/alpha/", "/p/study/r/site.json", "/favicon.ico"):
         for token in ("owner", None):
             status, headers, body = call(server, "GET", path, token=token)
@@ -126,10 +129,9 @@ def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
 
 
 def seed(server):
-    """Projects `alpha` and `beta`, each with an artifact `data` (one file)."""
+    """Projects `alpha` and `beta`, each with an artifact `data` (one file), published with the owner token."""
     for project in ("alpha", "beta"):
-        store.publish(f"{project}:data", None or folder(server.root.parent, f"seed-{project}", {"x.txt": project}),
-                      store=remote(server, project=project), config=SimpleNamespace(project=server.root.parent, repo={}))
+        store.connect(f"{server.url}/{project}").artifact("data").publish(folder(server.root.parent, f"seed-{project}", {"x.txt": project}))
 
 
 def test_scoped_tokens(server, env):
@@ -139,7 +141,7 @@ def test_scoped_tokens(server, env):
     assert api(server, "GET", "/api/v2/projects/alpha", token=read)["name"] == "alpha"
     assert [p["name"] for p in api(server, "GET", "/api/v2/projects", token=read)] == ["alpha"]
     assert [p["name"] for p in api(server, "GET", "/api/v2/projects")] == ["alpha", "beta"]
-    api(server, "GET", "/api/v2/resolve?ref=alpha:data@latest", token=read)
+    api(server, "GET", "/api/v2/projects/alpha/resolve?ref=data@latest", token=read)
     # read-only: no writes, nothing outside its project
     entry = {"path": "y.txt", "sha256": "0" * 64, "size": 1}
     for method, path, body in (("POST", "/api/v2/projects/alpha/artifacts/data/publish", {"entries": []}),
@@ -150,22 +152,23 @@ def test_scoped_tokens(server, env):
                                ("POST", "/api/v2/projects", {"name": "new"}),
                                ("GET", "/api/v2/projects/beta", None),
                                ("GET", "/api/v2/projects/beta/artifacts", None),
-                               ("GET", "/api/v2/resolve?ref=beta:data@latest", None),
-                               ("GET", "/api/v2/lineage?ref=beta:data@latest", None),
+                               ("GET", "/api/v2/projects/beta/resolve?ref=data@latest", None),
+                               ("GET", "/api/v2/projects/beta/ids?id=abcd", None),
+                               ("GET", "/api/v2/projects/beta/lineage?ref=data@latest", None),
                                ("GET", "/files/beta/data@v1//x.txt", None)):
         assert call(server, method, path, body, token=read)[0] == 403, (method, path)
     assert call(server, "PUT", "/api/v2/blobs/" + "a" * 64, body=b"x", token=read)[0] == 403
     assert call(server, "GET", "/files/alpha/data@v1//x.txt", token=read)[0] == 200
     # a write token publishes to its own project only
     other = folder(server.root.parent, "more", {"z.txt": "more"})
-    assert store.publish("alpha:data", other, store=remote(server, write_token), config=SimpleNamespace(project=other, repo={})) == 2
+    assert store.connect(f"{server.url}/alpha", token=write_token).artifact("data").publish(other).number == 2
     with pytest.raises(StoreError, match="cannot"):  # the store says the token cannot write there
-        store.publish("beta:data", other, store=remote(server, write_token, "beta"), config=SimpleNamespace(project=other, repo={}))
+        store.connect(f"{server.url}/beta", token=write_token).artifact("data").publish(other)
     assert call(server, "POST", "/api/v2/projects/beta/artifacts/data/publish", {"entries": [entry]}, token=write_token)[0] == 403
-    # ... and cannot register inputs from another project (that would write into its lineage)
+    # ... and an input names a version of the same project: a reference with a project is refused
     status, _, data = call(server, "POST", "/api/v2/projects/alpha/artifacts/data/publish",
                            {"entries": [], "inputs": ["beta:data@v1"]}, token=write_token)
-    assert status == 403, data
+    assert status == 400 and b"without a project" in data, data
     # revoke: it stops working at once, and the list never shows token values
     listing = list_tokens(server.root)
     assert {row["name"] for row in listing} == {"reader", "writer"} and read not in json.dumps(listing)
@@ -216,13 +219,15 @@ def test_bad_uploads_and_entries(server):
     assert status == 409 and json.loads(data)["missing"] == ["b" * 64]
     assert call(server, "POST", "/api/v2/projects/p/artifacts/Bad%2Fname/versions", {})[0] == 400
     assert call(server, "GET", "/api/v2/projects/nope")[0] == 404
-    assert call(server, "GET", "/api/v2/resolve?ref=a")[0] == 400  # needs a project
+    assert call(server, "GET", "/api/v2/resolve?ref=a")[0] == 404  # resolving is per project
+    assert call(server, "GET", "/api/v2/projects/p/resolve?ref=other:a")[0] == 400  # a reference names no project
+    assert call(server, "GET", "/api/v2/projects/p/ids?id=xyz")[0] == 400
 
 
 def test_artifact_names_with_slashes_are_percent_encoded(server, env):
     r = use_remote(env, server)
-    store.publish("datasets/crops", folder(env, "d", {"a.txt": "1"}), store=r)
-    store.publish("versions", folder(env, "e", {"a.txt": "1"}), store=r)  # a name that is also a route word
+    store.publish("datasets/crops", folder(env, "d", {"a.txt": "1"}))
+    store.publish("versions", folder(env, "e", {"a.txt": "1"}))  # a name that is also a route word
     assert [s["name"] for s in api(server, "GET", "/api/v2/projects/study/artifacts")] == ["datasets/crops", "versions"]
     assert api(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops/versions/1")["status"] == "completed"
     assert len(api(server, "GET", "/api/v2/projects/study/artifacts/versions/versions")) == 1
@@ -231,7 +236,7 @@ def test_artifact_names_with_slashes_are_percent_encoded(server, env):
 
 def test_files_answer_range_etag_and_download(server, env):
     r = use_remote(env, server)
-    store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10, "sub/page.html": "<b>x</b>"}), store=r)
+    store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10, "sub/page.html": "<b>x</b>"}))
     path = "/files/study/data@v1//big.txt"
     status, headers, whole = call(server, "GET", path)
     assert status == 200 and len(whole) == 100 and "immutable" in headers["Cache-Control"] and headers["ETag"]
@@ -254,60 +259,63 @@ def test_remote_store_round_trip(server, env):
     r = use_remote(env, server)
     data = folder(env, "crops", {"a.txt": "one", "sub/b.txt": "two"})
     (data / "latest").symlink_to("sub")
-    assert store.publish("datasets/crops", data, label="first", aliases=["paper"], metadata={"n": 2}, store=r) == 1
-    assert store.publish("datasets/crops", data, metadata={"n": 2}, store=r) == 1  # unchanged: no new version
+    assert store.publish("datasets/crops", data, label="first", aliases=["paper"], metadata={"n": 2}) == 1
+    assert store.publish("datasets/crops", data, metadata={"n": 2}) == 1  # unchanged: no new version
     (data / "a.txt").write_text("changed")
-    assert store.publish("datasets/crops", data, metadata={"n": 2}, store=r) == 2
-    assert [v["version"] for v in store.versions("datasets/crops", store=r)] == [1, 2]
-    assert r.resolve("datasets/crops@paper")[2]["version"] == 1
-    assert r.resolve("datasets/crops")[2]["version"] == 2 and r.resolve("datasets/crops@first")[2]["metadata"] == {"n": 2}
-    store.alias("datasets/crops@v2", "best", store=r)
-    assert r.aliases("study", "datasets/crops") == {"latest": 2, "paper": 1, "best": 2}
-    assert r.artifacts("study") == ["datasets/crops"] and r.get_project("study")["name"] == "study"
-    with pytest.raises(store.NotFound):
+    assert store.publish("datasets/crops", data, metadata={"n": 2}) == 2
+    assert [v["version"] for v in store.versions("datasets/crops")] == [1, 2]
+    assert r.resolve("datasets/crops@paper")[1]["version"] == 1
+    assert r.resolve("datasets/crops")[1]["version"] == 2 and r.resolve("datasets/crops@first")[1]["metadata"] == {"n": 2}
+    second = r.resolve("datasets/crops")[1]
+    assert r.resolve(second["short_id"])[0] == "datasets/crops" and r.resolve(f"datasets/crops@{second['short_id'][:5]}")[1] == second
+    assert [item["uid"] for item in r.ids(second["short_id"])] == [second["uid"]]
+    store.alias("datasets/crops@v2", "best")
+    assert r.aliases("datasets/crops") == {"latest": 2, "paper": 1, "best": 2}
+    assert r.artifacts() == ["datasets/crops"] and r.record()["name"] == "study"
+    with pytest.raises(store.NotFound, match=f"on the remote {server.url}/study"):
         r.resolve("datasets/crops@v7")
     with pytest.raises(StoreError, match="latest"):
-        r.set_alias("study", "datasets/crops", "latest", 1)
+        r.set_alias("datasets/crops", "latest", 1)
     # nothing is local: the data went through HTTP only
     assert not (env / ".store").exists()
-    path = store.pull("datasets/crops@v1", store=r)
+    path = store.pull("datasets/crops@v1")
     assert (path / "a.txt").read_text() == "one" and (path / "sub" / "b.txt").read_text() == "two" and (path / "latest").is_symlink()
     assert not os.access(path / "a.txt", os.W_OK)
-    assert store.pull("datasets/crops@v2//a.txt", store=r).read_text() == "changed"
+    assert store.pull("datasets/crops@v2//a.txt").read_text() == "changed"
 
 
 def test_pull_materializes_once_and_never_downloads_a_blob_twice(server, env, tmp_path, monkeypatch):
     r = use_remote(env, server)
-    store.publish("data", folder(env, "d", {"a.txt": "shared", "b.txt": "only in v1"}), store=r)
-    store.publish("data", folder(env, "d2", {"a.txt": "shared", "c.txt": "only in v2"}), store=r)
+    store.publish("data", folder(env, "d", {"a.txt": "shared", "b.txt": "only in v1"}))
+    store.publish("data", folder(env, "d2", {"a.txt": "shared", "c.txt": "only in v2"}))
     before = blob_gets(server)
-    assert (store.pull("data@v1", store=r) / "b.txt").read_text() == "only in v1"  # publishing left the blobs in the repo
+    assert (store.pull("data@v1") / "b.txt").read_text() == "only in v1"  # publishing left the blobs in the repo
     assert blob_gets(server) == before
     monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "other-machine"))  # another machine's repo downloads each blob once
-    first = store.pull("data@v1", store=r)
+    first = store.pull("data@v1")
     assert blob_gets(server) - before == 2
-    assert store.pull("data@v1", store=r) == first and blob_gets(server) - before == 2  # materialized already
-    store.pull("data@v2", store=r)
+    assert store.pull("data@v1") == first and blob_gets(server) - before == 2  # materialized already
+    store.pull("data@v2")
     assert blob_gets(server) - before == 3  # only c.txt was new
     shutil.rmtree(tmp_path / "other-machine" / "versions")  # the read-only folders are made again from the blobs
-    assert (store.pull("data@v1", store=r) / "b.txt").read_text() == "only in v1"
+    assert (store.pull("data@v1") / "b.txt").read_text() == "only in v1"
     assert blob_gets(server) - before == 3
 
 
 def test_pull_records_inputs_like_the_local_store(server, env):
     r = use_remote(env, server)
-    store.publish("data", folder(env, "d", {"a.txt": "1"}), store=r)
-    store.Repo(r).pull("data@latest")  # the object API outside a run: recorded in the working directory
-    assert (env / ".cairn-inputs.jsonl").read_text().count("study:data@v1") == 1
-    published = store.publish("fit", folder(env, "out", {"r.txt": "r", ".cairn-inputs.jsonl": (env / ".cairn-inputs.jsonl").read_text()}), store=r)
-    assert store.versions("fit", store=r)[published - 1]["inputs"] == ["study:data@v1"]
-    assert store.lineage("data@v1", store=r) == {"inputs": [], "consumers": ["study:fit@v1"], "runs": []}
-    assert store.lineage("fit@v1", store=r, through_runs=False) == {"inputs": ["study:data@v1"], "consumers": []}
+    store.publish("data", folder(env, "d", {"a.txt": "1"}))
+    store.connect().pull("data@latest")  # the object API outside a run: recorded in the working directory
+    assert (env / ".cairn-inputs.jsonl").read_text().count('"data@v1"') == 1
+    published = store.publish("fit", folder(env, "out", {"r.txt": "r", ".cairn-inputs.jsonl": (env / ".cairn-inputs.jsonl").read_text()}))
+    assert store.versions("fit")[published - 1]["inputs"] == ["data@v1"]
+    assert store.lineage("data@v1") == {"inputs": [], "consumers": ["fit@v1"], "runs": []}
+    assert store.lineage("fit@v1", through_runs=False) == {"inputs": ["data@v1"], "consumers": []}
 
 
 def test_cli_pull_prints_the_path_and_copies_into_a_folder(server, env, capsys):
     r = use_remote(env, server)
-    store.publish("data", folder(env, "d", {"a.txt": "1", "sub/b.txt": "2"}), store=r)
+    store.publish("data", folder(env, "d", {"a.txt": "1", "sub/b.txt": "2"}))
     main(["pull", "data@v1", "--no-record"])
     path = capsys.readouterr().out.strip()
     assert (env / "cairn.toml").is_file() and not (env / ".cairn-inputs.jsonl").exists()
@@ -353,21 +361,22 @@ def test_publish_watch_syncs_a_running_version_to_the_server(server, env, capsys
     with pytest.raises(SystemExit) as exit:
         main(["publish", str(out), "sweep", "--interval", "0.5", "--", sys.executable, "-c", script, str(out)])
     watcher.join()
-    assert exit.value.code == 0 and "published sweep@v1 (2 files" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert exit.value.code == 0 and "published sweep@v1 (" in out and "; 2 files" in out
     assert any(status == "running" and files == ["first.txt"] for status, files in seen), seen
-    [version] = store.versions("sweep", store=r)
+    [version] = store.versions("sweep")
     assert version["status"] == "completed" and [f["path"] for f in version["files"]] == ["first.txt", "second.txt"]
 
 
 def test_publish_watch_failure_keeps_latest(server, env, capsys):
     r = use_remote(env, server)
-    store.publish("sweep", folder(env, "earlier", {"ok.txt": "good"}), store=r)
+    store.publish("sweep", folder(env, "earlier", {"ok.txt": "good"}))
     with pytest.raises(SystemExit) as exit:
         main(["publish", str(env / "out2"), "sweep", "--interval", "0.5", "--", sys.executable, "-c",
               "import pathlib, sys; p = pathlib.Path(sys.argv[1]); p.mkdir(); (p / 'x.txt').write_text('x'); sys.exit(3)", str(env / "out2")])
     assert exit.value.code == 3 and "failed" in capsys.readouterr().err
-    assert [v["status"] for v in store.versions("sweep", store=r)] == ["completed", "failed"]
-    assert (store.pull("sweep@latest", store=r) / "ok.txt").read_text() == "good"
+    assert [v["status"] for v in store.versions("sweep")] == ["completed", "failed"]
+    assert (store.pull("sweep@latest") / "ok.txt").read_text() == "good"
 
 
 # ------------------------------------------------- the JSON the UI is built from
@@ -375,8 +384,8 @@ def test_publish_watch_failure_keeps_latest(server, env, capsys):
 
 def test_overview_summary_and_file_list_routes(server, env):
     r = use_remote(env, server)
-    store.publish("datasets/crops", folder(env, "d", {"a.txt": "1", "sub/b.txt": "22"}), metadata={"title": "Crops"}, aliases=["paper"], store=r)
-    store.publish("other", folder(env, "o", {"x.txt": "x"}), store=r)
+    store.publish("datasets/crops", folder(env, "d", {"a.txt": "1", "sub/b.txt": "22"}), metadata={"title": "Crops"}, aliases=["paper"])
+    store.publish("other", folder(env, "o", {"x.txt": "x"}))
     [project] = api(server, "GET", "/api/v2/projects")
     assert project["name"] == "study" and project["artifacts"] == 2 and project["updated"] and "reports" not in project
     summaries = {item["name"]: item for item in api(server, "GET", "/api/v2/projects/study/artifacts")}
@@ -394,20 +403,20 @@ def test_overview_summary_and_file_list_routes(server, env):
 
 def test_remote_store_read_file_streams_ranges(server, env):
     r = use_remote(env, server)
-    store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10}), store=r)
-    local = LocalRepo(server.root)
+    store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10}))
+    local = LocalProject(LocalRepo(server.root), "study")
     for reader in (r, local):  # the same answers from both store kinds
-        whole = reader.read_file("study", "data", "v1", "big.txt")
+        whole = reader.read_file("data", "v1", "big.txt")
         assert (whole.total, whole.size, whole.partial, whole.immutable) == (100, 100, False, True)
         assert b"".join(whole.chunks) == b"0123456789" * 10
-        part = reader.read_file("study", "data", "latest", "big.txt", "bytes=5-14")
+        part = reader.read_file("data", "latest", "big.txt", "bytes=5-14")
         assert (part.first, part.last, part.total, part.partial, part.immutable) == (5, 14, 100, True, False)
         assert b"".join(part.chunks) == b"5678901234" and part.sha256 == whole.sha256
         with pytest.raises(BadRange) as raised:
-            reader.read_file("study", "data", "v1", "big.txt", "bytes=100-")
+            reader.read_file("data", "v1", "big.txt", "bytes=100-")
         assert raised.value.total == 100
         with pytest.raises(store.NotFound):
-            reader.read_file("study", "data", "v1", "nope.txt")
+            reader.read_file("data", "v1", "nope.txt")
 
 
 # ------------------------------------------------- the UI beside the store server

@@ -5,6 +5,7 @@ sends), many writers on one repo, and processes killed with SIGKILL."""
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -15,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import cairn
-from cairn.store import LocalRepo
+from cairn.store import OWN, LocalProject, LocalRepo
 
 from test_identity import Server
 from test_store import folder
@@ -24,12 +25,12 @@ pytest.importorskip("uvicorn")
 
 
 def project_at(base: Path, name: str, remote: str | None = None, extra: str = "") -> Path:
-    """A project folder (its own repo), with `remote` as its remote if given."""
+    """A project folder (its own repo), with the project `study` of the server `remote` as its remote if given."""
     root = base / name
     root.mkdir(parents=True)
-    lines = ['[repo]', 'project = "study"', 'interval = 0.5']
+    lines = ['[repo]', 'interval = 0.5']
     if remote:
-        lines.append(f'remote = "{remote}"')
+        lines.append(f'remote = "{remote}/study"')
     (root / "cairn.toml").write_text("\n".join(lines) + "\n" + extra)
     return root
 
@@ -100,9 +101,9 @@ def test_offline_publishes_wait_and_the_next_command_syncs_them_once_even_after_
     pending = outbox(project)
     assert len(pending) == 3
     status = cairn_cli(project, "status").stdout
-    assert status.count("pending\tstudy:data\t-\t") == 3
+    assert status.count("pending\tdata\t-\t") == 3
     listing = cairn_cli(project, "versions", "data").stdout  # offline: the repo's pending versions, by uid
-    assert listing.count("pending\tpending") == 3
+    assert len(re.findall(r"^pending\t[0-9a-f]{7}\tpending", listing, re.M)) == 3
 
     server.start()
     killed = subprocess.run([sys.executable, "kill.py", "upload"], cwd=project, capture_output=True, text=True, timeout=120)
@@ -114,14 +115,15 @@ def test_offline_publishes_wait_and_the_next_command_syncs_them_once_even_after_
 
     result = cairn_cli(project, "versions", "data")  # the next command sends everything first
     assert result.returncode == 0, result.stderr
-    assert result.stderr.count("uploaded study:data@v") == 3
+    assert result.stderr.count("uploaded data@v") == 3
     on_remote = remote_versions(server, "data")
     assert [v["version"] for v in on_remote] == [1, 2, 3] and sorted(v["uid"] for v in on_remote) == pending  # no duplicates
     assert outbox(project) == []
     assert [line.split("\t")[0] for line in result.stdout.splitlines()] == ["v1", "v2", "v3"]
     repo = LocalRepo(project / ".cairn")
-    assert [(v["version"], v["uid"]) for v in repo.versions("study", "data")] == [(v["version"], v["uid"]) for v in on_remote]
-    assert repo.aliases("study", "data") == {"latest": 3}
+    assert [(v["version"], v["uid"]) for v in repo.versions(OWN, "data")] == [(v["version"], v["uid"]) for v in on_remote]
+    assert [v["short_id"] for v in repo.versions(OWN, "data")] == [v["short_id"] for v in on_remote]  # the same short ids
+    assert repo.aliases(OWN, "data") == {"latest": 3}
     for number in (1, 2, 3):  # every version reads back exactly as published
         text = cairn_cli(project, "pull", f"data@v{number}//a.txt", "--no-record").stdout.strip()
         assert Path(text).read_text() == f"version {number - 1}"
@@ -145,9 +147,9 @@ def test_two_machines_with_their_own_repos_share_one_remote(server, tmp_path):
         print(cairn.use("data@latest").ref)
     """)
     assert used.returncode == 0, used.stderr
-    assert used.stdout.split("\n")[:2] == ["study:data@v1 from a", "study:data@v2"]
-    copied = LocalRepo(b / ".cairn").get_version("study", "data", 1)  # copied into B's repo with the remote's number
-    assert copied["origin"] == LocalRepo(server.root).uid and copied["uid"] == remote_versions(server, "data")[0]["uid"]
+    assert used.stdout.split("\n")[:2] == ["data@v1 from a", "data@v2"]
+    copied = LocalRepo(b / ".cairn").get_version(OWN, "data", 1)  # copied into B's repo with the remote's number
+    assert copied["origin"] == f"{LocalRepo(server.root).uid}/study" and copied["uid"] == remote_versions(server, "data")[0]["uid"]
 
     server.stop()  # both work offline: each keeps its versions pending, by uid
     for machine, text in ((a, "a2"), (b, "b2"), (a, "a3")):
@@ -165,7 +167,7 @@ def test_two_machines_with_their_own_repos_share_one_remote(server, tmp_path):
     for machine in (a, b):
         assert outbox(machine) == []
         repo = LocalRepo(machine / ".cairn")
-        assert {v["uid"]: v["version"] for v in repo.versions("study", "data")}.items() <= {v["uid"]: v["version"] for v in on_remote}.items()
+        assert {v["uid"]: v["version"] for v in repo.versions(OWN, "data")}.items() <= {v["uid"]: v["version"] for v in on_remote}.items()
     latest = cairn_cli(a, "pull", "data@latest//x.txt", "--no-record").stdout.strip()
     assert Path(latest).read_text() == "a3"  # A's last one was sent last
 
@@ -181,18 +183,18 @@ def test_a_remote_added_to_a_repo_takes_over_its_versions_oldest_first(server, t
     made = python(project, """
         import cairn
         repo = cairn.connect()
-        one = repo.project().artifact("data").publish("d1", aliases=["paper"])
-        two = repo.project().artifact("data").publish("d2")
+        one = repo.artifact("data").publish("d1", aliases=["paper"])
+        two = repo.artifact("data").publish("d2")
         with cairn.draft("fit") as fit:
             fit.add_json("uses", {"data": cairn.use("data@v1").ref})
         print(one.ref, one.uid, two.ref, two.uid, fit.version.ref, fit.version.uid)
     """.replace('"d1"', repr(str(folder(tmp_path, "d1", {"x.txt": "one"})))).replace('"d2"', repr(str(folder(tmp_path, "d2", {"x.txt": "two"})))))
     assert made.returncode == 0, made.stderr
     one_ref, one_uid, two_ref, two_uid, fit_ref, fit_uid = made.stdout.split()
-    assert (one_ref, two_ref, fit_ref) == ("study:data@v1", "study:data@v2", "study:fit@v1")
+    assert (one_ref, two_ref, fit_ref) == ("data@v1", "data@v2", "fit@v1")
 
     with open(project / "cairn.toml", "a") as handle:  # now the project gets a remote
-        handle.write(f'remote = "{server.url}"\n')
+        handle.write(f'remote = "{server.url}/study"\n')
     synced = cairn_cli(project, "sync")  # the first command that reaches the remote
     assert synced.returncode == 0, synced.stdout + synced.stderr
     assert "adopted 4 versions this repo numbered itself" in synced.stdout  # data v1, v2, the run, fit
@@ -202,10 +204,10 @@ def test_a_remote_added_to_a_repo_takes_over_its_versions_oldest_first(server, t
     assert remote.aliases("study", "data")["paper"] == 2  # its alias went along
     fit = remote.get_version("study", "fit", fit_uid)
     [run_ref] = fit["inputs"]
-    run = remote.resolve(run_ref)[2]
-    assert run["metadata"]["kind"] == "run" and run["inputs"] == ["study:data@v2"]  # the run's input: the same version, renumbered
+    run = remote.resolve("study", run_ref)[1]
+    assert run["metadata"]["kind"] == "run" and run["inputs"] == ["data@v2"]  # the run's input: the same version, renumbered
     repo = LocalRepo(project / ".cairn")
-    assert repo.local_versions() == [] and repo.get_version("study", "data", one_uid)["version"] == 2  # numbers taken over
+    assert repo.local_versions(OWN) == [] and repo.get_version(OWN, "data", one_uid)["version"] == 2  # numbers taken over
     assert outbox(project) == []
     shown = cairn_cli(project, "show", "fit@v1")
     assert f"inputs       {run_ref}" in shown.stdout, shown.stderr
@@ -254,13 +256,13 @@ def test_on_a_network_filesystem_jobs_keep_an_outbox_and_a_login_node_sends_it(s
     for job in jobs:
         out, err = job.communicate(timeout=180)
         assert job.returncode == 0, err
-        assert out.startswith("study:result@") and "@v" not in out  # pending: a uid, no number
+        assert out.startswith("result@") and "@v" not in out  # pending: a uid, no number
     assert len(outbox(project)) == 8  # every run and every result, one folder each
     assert not (project / ".cairn" / "metadata.sqlite3").exists()  # never a database on the network filesystem
     status = cairn_cli(project, "status", env=env)
-    assert status.stdout.count("pending\tstudy:") == 8, status.stderr
+    assert len(re.findall(r"^pending\t", status.stdout, re.M)) == 8, status.stderr
     down = cairn_cli(project, "versions", "result", env=env)
-    assert down.returncode == 0 and down.stdout.count("pending\tpending\t") == 4  # what the outbox holds, without the remote
+    assert down.returncode == 0 and len(re.findall(r"^pending\t[0-9a-f]{7}\tpending\t", down.stdout, re.M)) == 4  # the outbox
 
     server.start()
     login = cairn_cli(project, "sync", env=env)  # the login node
@@ -271,7 +273,7 @@ def test_on_a_network_filesystem_jobs_keep_an_outbox_and_a_login_node_sends_it(s
     remote = LocalRepo(server.root)
     for result in results:  # each result's input is its own run, by the remote's number
         [run_ref] = result["inputs"]
-        assert remote.resolve(run_ref)[2]["metadata"]["kind"] == "run"
+        assert remote.resolve("study", run_ref)[1]["metadata"]["kind"] == "run"
     pulled = cairn_cli(project, "pull", "result@v2//data/value.json", "--no-record", env=env)
     assert pulled.returncode == 0 and json.loads(Path(pulled.stdout.strip()).read_text())["n"] in range(4)
     server.stop()
@@ -291,7 +293,7 @@ def test_allow_network_fs_keeps_the_database(server, tmp_path):
 WRITER = """
 import sys, pathlib, cairn
 worker = int(sys.argv[1])
-artifact = cairn.connect().project().artifact("shared")
+artifact = cairn.connect().artifact("shared")
 for index in range(20):
     data = pathlib.Path(f"w{worker}-{index}")
     data.mkdir()
@@ -310,12 +312,13 @@ def test_many_writer_processes_on_one_repo_number_every_version_once(tmp_path):
     for writer in writers:
         out, err = writer.communicate(timeout=300)
         assert writer.returncode == 0 and out.strip() == "done", err
-    repo = LocalRepo(project / ".cairn", "study")
-    versions = repo.versions("study", "shared")
+    repo = LocalRepo(project / ".cairn")
+    versions = repo.versions(OWN, "shared")
     assert [v["version"] for v in versions] == list(range(1, 161))  # contiguous, none twice
     assert len({v["uid"] for v in versions}) == 160
     assert sorted((v["metadata"]["worker"], v["metadata"]["index"]) for v in versions) == [(w, i) for w in range(8) for i in range(20)]
-    assert repo.aliases("study", "shared")["latest"] in range(1, 161)
+    assert repo.aliases(OWN, "shared")["latest"] in range(1, 161)
+    assert len({v["short_id"] for v in versions}) == 160  # one short id each
     for version in versions:  # every version's files are there and are its own
         entry = next(item for item in version["files"] if item["path"] == "value.txt")
         assert repo.blob_path(entry["sha256"]).read_text() == f"{version['metadata']['worker']}:{version['metadata']['index']}"
@@ -333,7 +336,7 @@ original = local.LocalRepo._completed
 def completed(self, *args, **kwargs):  # inside the publish transaction, after the version row was written
     os.kill(os.getpid(), signal.SIGKILL)
 local.LocalRepo._completed = completed
-cairn.connect().project().artifact("data").publish(sys.argv[1])
+cairn.connect().artifact("data").publish(sys.argv[1])
 """
 
 SLOW_OUTBOX = """
@@ -343,7 +346,7 @@ original = outbox.Outbox.create
 def create(self, record, running):  # the entry is being written, not yet renamed into place
     os.kill(os.getpid(), signal.SIGKILL)
 outbox.Outbox.create = create
-cairn.connect().project().artifact("data").publish(sys.argv[1])
+cairn.connect().artifact("data").publish(sys.argv[1])
 """
 
 
@@ -353,11 +356,11 @@ def test_a_publish_killed_halfway_leaves_no_partial_version(server, tmp_path):
     data = folder(tmp_path, "data", {"a.txt": "a", "b.txt": "b"})
     killed = subprocess.run([sys.executable, "kill.py", str(data)], cwd=project, capture_output=True, text=True, timeout=120)
     assert killed.returncode == -signal.SIGKILL
-    repo = LocalRepo(project / ".cairn", "study")
-    assert repo.versions("study", "data") == []  # the transaction rolled back: nothing half there
+    repo = LocalRepo(project / ".cairn")
+    assert repo.versions(OWN, "data") == []  # the transaction rolled back: nothing half there
     assert repo.verify().ok
     result = cairn_cli(project, "publish", str(data), "data")
-    assert result.returncode == 0 and "published data@v1 (2 files" in result.stdout, result.stderr
+    assert result.returncode == 0 and re.search(r"published data@v1 \([0-9a-f]{7}; 2 files", result.stdout), result.stderr
 
     synced = project_at(tmp_path, "synced", server.url)
     (synced / "kill.py").write_text(SLOW_OUTBOX)
@@ -415,14 +418,14 @@ def test_an_output_older_than_its_run_is_sent_after_it(server, tmp_path):
     synced = cairn_cli(project, "sync")
     assert synced.returncode == 0 and "rejected" not in synced.stdout, synced.stdout
     [out] = remote_versions(server, "out")
-    assert out["inputs"] == ["study:runs/interactive@v1"]
+    assert out["inputs"] == ["runs/interactive@v1"]
 
 
 # ------------------------------------------------------------------ the sync engine alone, against a stand-in remote
 
 
-class LocalRemote(LocalRepo):
-    """A LocalRepo standing in for a remote: the sync engine needs only the repo interface (and `upload`)."""
+class LocalRemote(LocalProject):
+    """A project of a LocalRepo standing in for a remote: the sync engine needs only the repo interface (and `upload`)."""
 
     url = "http://stand-in"
     calls = 0
@@ -454,9 +457,11 @@ def test_the_sync_engine_against_a_stand_in_remote_is_idempotent_by_uid(tmp_path
     from cairn.store.blobs import BlobStore
     from cairn.store.uids import new_uid
 
-    remote = LocalRemote(tmp_path / "remote", "study")
+    remote = LocalRemote(LocalRepo(tmp_path / "remote"), "study")
+    remote.create()
     root = tmp_path / "repo"
-    copies = LocalRepo(root, "study")
+    copies = LocalProject(LocalRepo(root))
+    copies.create()
     outbox = Outbox(root)
     entries = []
     for name, text in (("a.txt", "a"), ("b.txt", "b")):
@@ -469,20 +474,21 @@ def test_the_sync_engine_against_a_stand_in_remote_is_idempotent_by_uid(tmp_path
         entries.append(entry)
     uid = new_uid()
     record = {"uid": uid, "kind": "publish", "sync": "pending", "status": "completed", "url": remote.url, "store": None,
-              "project": "study", "name": "data", "label": "x", "metadata": {}, "inputs": [], "aliases": ["best"], "source": None,
+              "name": "data", "label": "x", "metadata": {}, "inputs": [], "aliases": ["best"], "source": None,
               "files": entries, "created": "2026-10-15T00:00:00+00:00", "owner": {"host": "h", "pid": 1}, "number": None,
               "pushed": {}, "error": None}
     outbox.create(record, running=False)
     sync = Sync(outbox, remote, copies, root, 600)
     LocalRemote.fail_after = 1  # the first blob goes up, then the remote is gone
     result = sync.flush()
-    assert result["waiting"] and remote.versions("study", "data") == [] and outbox.load(uid)
+    assert result["waiting"] and remote.versions("data") == [] and outbox.load(uid)
     LocalRemote.fail_after = None
     result = sync.flush()
     assert [entry["uid"] for entry in result["sent"]] == [uid] and outbox.load(uid) is None
-    assert copies.get_version("study", "data", 1)["uid"] == uid and copies.aliases("study", "data") == {"latest": 1, "best": 1}
+    assert copies.get_version("data", 1)["uid"] == uid and copies.aliases("data") == {"latest": 1, "best": 1}
+    assert copies.meta("remote") == f"{remote.uid}/study"  # the repo is bound to the server and the project
     outbox.create({**record, "pushed": {}}, running=False)  # the same entry again (a crash after the remote's answer)
-    assert len(sync.flush()["sent"]) == 1 and [v["uid"] for v in remote.versions("study", "data")] == [uid]
+    assert len(sync.flush()["sent"]) == 1 and [v["uid"] for v in remote.versions("data")] == [uid]
 
 
 # ------------------------------------------------------------------ cairn sync --watch (a login node), the UI, changes offline
@@ -508,25 +514,26 @@ def test_sync_watch_sends_what_jobs_leave_once_the_remote_answers(server, tmp_pa
 
 
 def test_the_ui_of_a_repo_with_a_remote_shows_pending_versions(server, tmp_path, monkeypatch):
-    from cairn.client.open import open_repo
     from cairn.config import load_config
-    from cairn.ui.backends import LocalBackend
+    from cairn.ui.backends import open_backend
 
     server.start()
     project = project_at(tmp_path, "study", server.url)
     monkeypatch.chdir(project)
     cairn.publish("data", folder(tmp_path, "d1", {"a.txt": "one"}))
     server.stop()
-    pending = cairn.connect().project().artifact("data").publish(folder(tmp_path, "d2", {"a.txt": "two"}))
+    pending = cairn.connect().artifact("data").publish(folder(tmp_path, "d2", {"a.txt": "two"}))
     assert pending.pending and pending.number is None
-    store = LocalBackend(project / ".cairn", True, open_repo(load_config(project))).store
-    rows = store.versions("study", "data")  # the repo's copy of v1, then the pending one
+    projects = open_backend(config=load_config(project), no_auth=True).store
+    assert [item["name"] for item in projects.overviews()] == ["study"]  # one project: the remote's
+    store = projects.get("study")
+    rows = store.versions("data")  # the repo's copy of v1, then the pending one
     assert [(row["version"], row.get("pending", False)) for row in rows] == [(1, False), (None, True)]
     assert rows[-1]["uid"] == pending.uid and rows[-1]["status"] == "pending"
-    manifest = store.get_version("study", "data", pending.uid)
-    assert manifest["pending"] and b"".join(store.read_file("study", "data", pending.uid, "a.txt").chunks) == b"two"
-    assert b"".join(store.read_file("study", "data", "v1", "a.txt").chunks) == b"one"  # from the repo: the remote is down
-    assert any(item["name"] == "data" for item in store.summaries("study"))
+    manifest = store.get_version("data", pending.uid)
+    assert manifest["pending"] and b"".join(store.read_file("data", pending.uid, "a.txt").chunks) == b"two"
+    assert b"".join(store.read_file("data", "v1", "a.txt").chunks) == b"one"  # from the repo: the remote is down
+    assert any(item["name"] == "data" for item in store.summaries())
 
 
 def test_changes_to_the_source_of_truth_fail_clearly_offline(server, tmp_path, monkeypatch):
@@ -540,9 +547,9 @@ def test_changes_to_the_source_of_truth_fail_clearly_offline(server, tmp_path, m
         assert result.returncode == 1 and "needs the remote" in result.stderr and "does not answer" in result.stderr, argv
     server.start()
     assert cairn_cli(project, "alias", "data@v1", "best").returncode == 0
-    assert LocalRepo(project / ".cairn").aliases("study", "data")["best"] == 1  # set there, then mirrored here
+    assert LocalRepo(project / ".cairn").aliases(OWN, "data")["best"] == 1  # set there, then mirrored here
     assert cairn_cli(project, "delete", "data@v1", "--force", "--reason", "test").returncode == 0
-    assert LocalRepo(project / ".cairn").get_version("study", "data", 1)["status"] == "deleted"  # the tombstone, mirrored
+    assert LocalRepo(project / ".cairn").get_version(OWN, "data", 1)["status"] == "deleted"  # the tombstone, mirrored
 
 
 def test_a_remote_that_drops_packets_does_not_hold_up_reads_or_publishes(tmp_path, monkeypatch):
@@ -572,13 +579,13 @@ def test_a_remote_that_drops_packets_does_not_hold_up_reads_or_publishes(tmp_pat
     try:
         repo = cairn.connect()
         began = time.monotonic()
-        first = repo.project().artifact("data").publish(folder(tmp_path, "d1", {"a.txt": "1"}))
+        first = repo.artifact("data").publish(folder(tmp_path, "d1", {"a.txt": "1"}))
         assert first.pending and time.monotonic() - began < 10
         began = time.monotonic()
-        second = repo.project().artifact("data").publish(folder(tmp_path, "d2", {"a.txt": "2"}))
+        second = repo.artifact("data").publish(folder(tmp_path, "d2", {"a.txt": "2"}))
         assert second.pending and time.monotonic() - began < 2  # not asked again: pending at once
         began = time.monotonic()
-        assert [v.uid for v in repo.project().artifact("data").versions()] == [first.uid, second.uid]
+        assert [v.uid for v in repo.artifact("data").versions()] == [first.uid, second.uid]
         assert time.monotonic() - began < 2
     finally:
         for filler in fillers:
@@ -588,7 +595,7 @@ def test_a_remote_that_drops_packets_does_not_hold_up_reads_or_publishes(tmp_pat
 
 def test_many_processes_opening_a_new_repo_at_once(tmp_path):
     """A job array starting together on a project without a repo yet: every process opens (and creates) it."""
-    code = "import cairn; cairn.connect().project().artifact('x').versions(); print('ok')"
+    code = "import cairn; cairn.connect().artifact('x').versions(); print('ok')"
     for round in range(5):
         project = project_at(tmp_path, f"fresh-{round}")
         starts = [subprocess.Popen([sys.executable, "-c", code], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -617,24 +624,24 @@ def test_a_pending_version_the_remote_finds_unchanged_hands_its_consumers_the_re
     assert cairn_cli(other, "publish", str(folder(tmp_path, "same", {"x.txt": "same"})), "a").returncode == 0  # a@v1
     server.stop()
     repo = cairn.connect()  # this repo never saw a@v1: its publish of the same files is pending
-    pending = repo.project().artifact("a").publish(folder(tmp_path, "same2", {"x.txt": "same"}))
-    consumer = repo.project().artifact("b").publish(folder(tmp_path, "b", {"y.txt": "b"}), inputs=[pending.ref])
+    pending = repo.artifact("a").publish(folder(tmp_path, "same2", {"x.txt": "same"}))
+    consumer = repo.artifact("b").publish(folder(tmp_path, "b", {"y.txt": "b"}), inputs=[pending.ref])
     assert pending.pending and consumer.inputs == [pending.ref]
     server.start()
     result = repo.sync()
     assert not result["rejected"], result["lines"]
     assert [v["version"] for v in remote_versions(server, "a")] == [1]  # the remote kept its own version
     [b] = remote_versions(server, "b")
-    assert b["inputs"] == ["study:a@v1"] and outbox(online) == []
+    assert b["inputs"] == ["a@v1"] and outbox(online) == []
 
 
 def test_a_direct_publish_sends_the_pending_versions_it_names_first(server, online, tmp_path):
     repo = cairn.connect()
-    first = repo.project().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
+    first = repo.artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
     assert first.pending
     server.start()
-    second = cairn.connect().project().artifact("b").publish(folder(tmp_path, "b", {"y.txt": "b"}), inputs=[first.ref])
-    assert second.number == 1 and second.inputs == ["study:a@v1"]
+    second = cairn.connect().artifact("b").publish(folder(tmp_path, "b", {"y.txt": "b"}), inputs=[first.ref])
+    assert second.number == 1 and second.inputs == ["a@v1"]
     assert [v["uid"] for v in remote_versions(server, "a")] == [first.uid] and outbox(online) == []
 
 
@@ -645,9 +652,9 @@ def test_a_token_that_may_not_write_leaves_versions_pending_not_rejected(server,
     reader = create_token(server.root, "study", write=False, name="reader")
     monkeypatch.setenv("CAIRN_TOKEN", reader)
     with pytest.raises(cairn.Forbidden, match="stays pending"):
-        cairn.connect().project().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
+        cairn.connect().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
     status = cairn_cli(online, "status")
-    assert status.stdout.startswith("pending\tstudy:a"), status.stdout  # pending, not rejected
+    assert status.stdout.startswith("pending\ta\t"), status.stdout  # pending, not rejected
     monkeypatch.setenv("CAIRN_TOKEN", server.token)
     assert cairn_cli(online, "sync").returncode == 0 and [v["version"] for v in remote_versions(server, "a")] == [1]
 
@@ -666,7 +673,7 @@ def test_an_output_of_a_run_that_failed_before_anything_was_sent_is_kept(server,
     assert synced.returncode == 0 and "rejected" not in synced.stdout, synced.stdout
     [run] = remote_versions(server, "runs/train")
     [checkpoint] = remote_versions(server, "checkpoint")
-    assert run["status"] == "failed" and checkpoint["inputs"] == ["study:runs/train@v1"]
+    assert run["status"] == "failed" and checkpoint["inputs"] == ["runs/train@v1"]
 
 
 def test_a_script_adopts_the_repos_own_versions_before_it_reads(server, tmp_path, monkeypatch):
@@ -675,10 +682,10 @@ def test_a_script_adopts_the_repos_own_versions_before_it_reads(server, tmp_path
     monkeypatch.setattr(repo_module, "start_uploader", lambda *args, **kwargs: None)
     project = project_at(tmp_path, "study")
     monkeypatch.chdir(project)
-    local = cairn.connect().project().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "mine"}))
+    local = cairn.connect().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "mine"}))
     assert local.number == 1
     with open(project / "cairn.toml", "a") as handle:
-        handle.write(f'remote = "{server.url}"\n')
+        handle.write(f'remote = "{server.url}/study"\n')
     server.start()
     used = cairn.connect().version("a@latest")  # first contact: the repo's own versions are sent first
     assert used.uid == local.uid and used.number == 1 and not used.pending
@@ -693,7 +700,7 @@ def test_claims_work_where_hard_links_do_not(server, online, tmp_path, monkeypat
 
     monkeypatch.setattr(outbox_module.os, "link", no_links)
     server.start()
-    version = cairn.connect().project().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
+    version = cairn.connect().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
     assert version.number == 1 and outbox(online) == []
 
 
@@ -702,9 +709,9 @@ def test_the_remote_fails_a_running_version_no_client_syncs_any_more(server, tmp
 
     server.start()
     remote = server.remote()
-    remote.create_project("study")
-    number = remote.start_version("study", "runs/lost", label="x")  # a job that started, then its node went away
-    remote.keep_alive("study", "runs/lost", number)
+    remote.create()
+    number = remote.start_version("runs/lost", label="x")  # a job that started, then its node went away
+    remote.keep_alive("runs/lost", number)
     stop = reap_schedule(server.httpd.app, every=0.1, timeout=0.5, say=lambda line: None)
     try:
         for _ in range(100):

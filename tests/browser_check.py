@@ -47,7 +47,7 @@ def build_data(base: Path, url: str) -> None:
     project = base / "study"
     project.mkdir()
     (project / "cairn.toml").write_text("")
-    (project / "cairn.toml").write_text(f'[repo]\nremote = "{url}"\nproject = "study"\ninterval = 1\n')
+    (project / "cairn.toml").write_text(f'[repo]\nremote = "{url}/study"\ninterval = 1\n')
     os.chdir(project)
     os.environ.pop("CAIRN_INPUTS", None)
     toy = make_data(base)
@@ -80,7 +80,7 @@ def build_data(base: Path, url: str) -> None:
     (long / "figures" / "tall.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="600" viewBox="0 0 300 600">'
                                                '<rect width="300" height="600" fill="#dcebe5"/><circle cx="150" cy="300" r="120" fill="#176b5b"/></svg>')
     store.publish("datasets/long-set", long)
-    store.publish("models/denoiser", toy, inputs=["study:toy-fit@v1"], aliases=["best"])
+    store.publish("models/denoiser", toy, inputs=["toy-fit@v1"], aliases=["best"])
     # a run: a script that uses the dataset, logs a curve, and publishes a model (the run is its one input)
     (project / "train.py").write_text(
         "import time, cairn\n"

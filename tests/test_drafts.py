@@ -25,12 +25,12 @@ LABEL = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
 
 def published_dataset(env, name="datasets/toy", files=None):
     data = folder(env, name.replace("/", "-"), files or {"x.txt": "1"})
-    return cairn.connect().project().artifact(name).publish(data)
+    return cairn.connect().artifact(name).publish(data)
 
 
 def run_ref(run, number=None):
     """The run's exact reference: by uid while it runs, `@v<n>` as the store records it."""
-    return f"study:{run.name}@v{number}" if number is not None else run.ref
+    return f"{run.name}@v{number}" if number is not None else run.ref
 
 
 def test_a_draft_publishes_its_folder_on_exit(configured, env, monkeypatch):
@@ -52,29 +52,29 @@ def test_a_draft_publishes_its_folder_on_exit(configured, env, monkeypatch):
         folder_ = model.path
     assert cairn.current_draft() is None and cairn.run == run  # the run goes on until the process ends
     version = model.version
-    assert isinstance(version, cairn.Version) and version.number == 1 and version.ref == "study:descent@v1"
+    assert isinstance(version, cairn.Version) and version.number == 1 and version.ref == "descent@v1"
     assert version.uid == model.uid and LABEL.fullmatch(version.label) and version.metadata == {"seed": 0}
     running = cairn.connect().version(run.ref)
     assert running.status == "running" and version.inputs == [run_ref(run, running.number)]  # exactly the run
     assert sorted(f.path for f in version.files) == ["artifacts.jsonl", "data/final.json", "metrics.jsonl", "model.pt"]
-    assert cairn.connect().project().artifact("descent").aliases == {"latest": 1, "best": 1}
+    assert cairn.connect().artifact("descent").aliases == {"latest": 1, "best": 1}
     assert not folder_.exists() and not (env / ".cairn" / "drafts" / "descent").exists()  # removed, record too
     pulled = cairn.pull("descent@best")
     assert read_scalars(pulled)["loss"] == 0.5 and (pulled / "model.pt").read_bytes() == b"weights"
     finished = run.finish()
     assert os.environ["CAIRN_INPUTS"] == str(env / "outer-inputs.jsonl")  # restored
-    assert finished.status == "completed" and finished.inputs == [dataset.ref, "study:descent@v1"]  # what it pulled
-    assert dataset.consumers == [finished.ref] and finished.consumers == ["study:descent@v1"]
+    assert finished.status == "completed" and finished.inputs == [dataset.ref, "descent@v1"]  # what it pulled
+    assert dataset.consumers == [finished.ref] and finished.consumers == ["descent@v1"]
     assert cairn.lineage("descent@v1") == {"inputs": [dataset.ref], "consumers": [], "runs": [finished.ref]}
     assert cairn.lineage("descent@v1", through_runs=False)["inputs"] == [finished.ref]
-    assert [v.ref for v in dataset.downstream()] == ["study:descent@v1"] and version.run == finished
+    assert [v.ref for v in dataset.downstream()] == ["descent@v1"] and version.run == finished
 
 
 def test_an_unchanged_draft_makes_no_new_version(configured, env):
     for _ in range(2):
         with cairn.draft("fit") as run:
             (run.path / "a.txt").write_text("same")
-    assert run.version.number == 1 and [v.number for v in cairn.connect().project().artifact("fit").versions()] == [1]
+    assert run.version.number == 1 and [v.number for v in cairn.connect().artifact("fit").versions()] == [1]
 
 
 def test_an_exception_keeps_the_folder_and_publishes_nothing(configured, env, capsys):
@@ -83,8 +83,8 @@ def test_an_exception_keeps_the_folder_and_publishes_nothing(configured, env, ca
             (run.path / "partial.txt").write_text("half")
             raise RuntimeError("diverged")
     assert (run.path / "partial.txt").read_text() == "half"
-    assert f"kept the draft {run.path}" in capsys.readouterr().err
-    assert run.version is None and cairn.connect().project().artifact("descent").versions() == []
+    assert "cairn: the draft descent failed; its folder is kept (cairn drafts lists it)\n" in capsys.readouterr().err
+    assert run.version is None and cairn.connect().artifact("descent").versions() == []
     assert os.environ["CAIRN_INPUTS"] == str(cairn.run.path / ".cairn-inputs.jsonl")  # the run goes on
     [kept] = [item for item in drafts.drafts() if item.record.get("kind") != "run"]
     assert (kept.uid, kept.state, kept.record["error"]) == (run.uid, "kept", "RuntimeError: diverged")
@@ -103,11 +103,11 @@ def test_a_draft_published_while_the_server_is_down_is_pending(configured, env):
     assert (cairn.pull(version.ref) / "a.txt").read_text() == "a"
     configured.start()
     store.sync()
-    assert store.project().artifact("offline-run").latest.uid == run.uid
+    assert store.artifact("offline-run").latest.uid == run.uid
 
 
 def test_nested_drafts_are_outputs_of_the_one_run(env):
-    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
+    (env / "cairn.toml").write_text("")
     outer = cairn.draft("outer")
     inner = cairn.draft("inner")
     with cairn.draft("innermost") as innermost:
@@ -120,7 +120,7 @@ def test_nested_drafts_are_outputs_of_the_one_run(env):
     assert cairn.current_draft() is None and not outer.path.exists() and not inner.path.exists()
     run = cairn.client.runs.current()
     assert {outer.run_ref, inner.run_ref, innermost.run_ref} == {run.ref}
-    assert innermost.version.inputs == [f"study:{run.name}@v1"]
+    assert innermost.version.inputs == [f"{run.name}@v1"]
 
 
 def test_drafts_get_exactly_the_run_and_pulls_inside_go_to_the_run(configured, env):
@@ -130,17 +130,17 @@ def test_drafts_get_exactly_the_run_and_pulls_inside_go_to_the_run(configured, e
     store = cairn.connect()
     with cairn.draft("models/denoiser") as model:
         (model.path / "model.pt").write_bytes(b"w")
-        with store.project().artifact("evals/denoiser").draft() as evaluation:
+        with store.artifact("evals/denoiser").draft() as evaluation:
             assert cairn.use("datasets/other@latest") == other  # inside a draft: still the run's input
             (evaluation.path / "scores.json").write_text("{}")
         assert evaluation.version.number == 1
     assert not hasattr(model, "use")  # no explicit linking any more
     run = cairn.client.runs.current()
     number = store.version(run.ref).number
-    assert model.version.inputs == evaluation.version.inputs == [f"study:{run.name}@v{number}"]
+    assert model.version.inputs == evaluation.version.inputs == [f"{run.name}@v{number}"]
     finished = run.finish()
     assert finished.inputs == [dataset.ref, other.ref]
-    assert sorted(finished.consumers) == ["study:evals/denoiser@v1", "study:models/denoiser@v1"]
+    assert sorted(finished.consumers) == ["evals/denoiser@v1", "models/denoiser@v1"]
     assert [v.ref for v in evaluation.version.upstream()] == [dataset.ref, other.ref]
     assert drafts.drafts() == []
 
@@ -154,15 +154,15 @@ def test_a_failed_run_keeps_the_edge_to_its_outputs(configured, env):
     if store.remote:
         store.sync()
     failed = store.version(f"{run.name}@{run.uid}")
-    assert failed.status == "failed" and failed.consumers == ["study:model@v1"]
+    assert failed.status == "failed" and failed.consumers == ["model@v1"]
     assert model.version.refresh().inputs == [failed.ref]
     assert "RuntimeError: diverged" in (run.folder / "logs" / "error.txt").read_text()  # the folder is kept
     lineage = store.backend.lineage(failed.ref, marks=True)
-    assert lineage["nodes"][failed.ref] == {"status": "failed", "kind": "run"}
+    assert lineage["nodes"][failed.ref] == {"status": "failed", "kind": "run", "short_id": failed.short_id}
 
 
 def test_config_becomes_metadata(env, capsys):
-    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
+    (env / "cairn.toml").write_text("")
     with cairn.draft("fit", config={"lr": 0.1, "model": {"depth": 3, "widths": [8, 16]}}) as fit:
         assert fit.config == {"lr": 0.1, "model": {"depth": 3, "widths": [8, 16]}}
         (fit.path / "a.txt").write_text("a")
@@ -178,13 +178,13 @@ def test_watch_keeps_a_running_version_synced(configured, env):
     with cairn.draft("live", watch=True, aliases=["now"]) as run:
         (run.path / "first.txt").write_text("1")
         assert run.sync() == 1
-        running = store.project().artifact("live").version(run.uid)
+        running = store.artifact("live").version(run.uid)
         assert running.status == "running" and running.uid == run.uid
         (run.path / "second.txt").write_text("2")
     version = run.version
     assert version.status == "completed" and version.uid == run.uid
     assert [f.path for f in version.files] == ["first.txt", "second.txt"]
-    assert store.project().artifact("live").aliases["now"] == version.number
+    assert store.artifact("live").aliases["now"] == version.number
     assert not run.path.exists()
 
 
@@ -196,16 +196,16 @@ def test_watch_marks_the_version_failed_on_an_exception(configured, env):
     store = cairn.connect()
     if store.remote:
         store.sync()
-    [version] = store.project().artifact("live").versions()
+    [version] = store.artifact("live").versions()
     assert version.status == "failed" and [f.path for f in version.files] == ["partial.txt"]
     assert run.path.is_dir()
     main(["drafts", "publish", run.uid])  # a new version (the failed one keeps the draft's uid)
-    [failed, completed] = store.project().artifact("live").versions()
+    [failed, completed] = store.artifact("live").versions()
     assert (failed.status, completed.status) == ("failed", "completed") and completed.uid != run.uid
 
 
 def test_watch_syncs_in_the_background(env):
-    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
+    (env / "cairn.toml").write_text("")
     store = cairn.connect()
     with cairn.draft("live", watch=True) as run:
         run._stop.set()  # restart the follower with a short interval
@@ -217,9 +217,9 @@ def test_watch_syncs_in_the_background(env):
         run._watcher.start()
         (run.path / "a.txt").write_text("a")
         deadline = time.time() + 10
-        while time.time() < deadline and not store.backend.get_version("study", "live", run.uid)["files"]:
+        while time.time() < deadline and not store.backend.get_version("live", run.uid)["files"]:
             time.sleep(0.05)
-        assert [entry["path"] for entry in store.backend.get_version("study", "live", run.uid)["files"]] == ["a.txt"]
+        assert [entry["path"] for entry in store.backend.get_version("live", run.uid)["files"]] == ["a.txt"]
 
 
 def test_cli_lists_publishes_and_discards_kept_drafts(configured, env, capsys):
@@ -236,19 +236,21 @@ def test_cli_lists_publishes_and_discards_kept_drafts(configured, env, capsys):
     main(["drafts"])
     listed = capsys.readouterr().out.splitlines()
     assert [line.split("\t")[0] for line in listed] == ["jobs/first", "jobs/second", "jobs/third"]
-    assert all(line.split("\t")[2] == "kept" and line.endswith(drafts.drafts()[i].uid) for i, line in enumerate(listed))
+    found = drafts.drafts()
+    assert all(line.split("\t")[1] == found[i].short_id and line.split("\t")[2] == found[i].uid and line.split("\t")[3] == "kept"
+               and line.endswith(found[i].uid) for i, line in enumerate(listed))
     first, second, third = drafts.drafts()
 
     main(["drafts", "publish", first.uid[:30]])
-    assert capsys.readouterr().out.startswith("published study:jobs/first@v1 (1 files")
+    assert capsys.readouterr().out.startswith(f"published jobs/first@v1 ({first.short_id}; 1 files")
     main(["drafts", "discard", str(second.folder)])
     assert not second.folder.exists()
     with pytest.raises(SystemExit, match="says failed"):
         main(["drafts", "publish", third.uid])
     assert third.folder.is_dir()
     main(["drafts", "publish", third.uid, "--allow-incomplete"])
-    assert cairn.connect().project().artifact("jobs/third").latest.metadata == {"run_status": "failed"}
-    assert cairn.connect().project().artifact("jobs/third").latest.inputs[0].startswith("study:runs/")  # its run, completed
+    assert cairn.connect().artifact("jobs/third").latest.metadata == {"run_status": "failed"}
+    assert cairn.connect().artifact("jobs/third").latest.inputs[0].startswith("runs/")  # its run, completed
     capsys.readouterr()
     main(["drafts", "list"])
     assert capsys.readouterr().out.startswith("no drafts in ")
@@ -257,11 +259,11 @@ def test_cli_lists_publishes_and_discards_kept_drafts(configured, env, capsys):
 
 
 def test_outside_a_project_drafts_live_in_the_repo_made_here(tmp_path, capsys):
-    local = cairn.LocalRepo(tmp_path / "repo-root", "loose")
-    with cairn.draft("loose", store=local) as run:
+    with cairn.draft("loose") as run:
         assert run.path.parent.parent == tmp_path / ".cairn" / "drafts"
         (run.path / "a.txt").write_text("a")
-    assert run.version.ref == "loose:loose@v1" and not run.path.exists()
+    assert run.version.ref == "loose@v1" and not run.path.exists()
+    assert (tmp_path / ".cairn" / "repo.json").is_file()
     assert "created the repo" in capsys.readouterr().err
 
 
@@ -271,7 +273,7 @@ def test_a_local_store_shares_storage_with_the_published_blobs(env, monkeypatch)
     import cairn.store.fs
 
     monkeypatch.setattr(cairn.store.fs, "clone", lambda source, target: False)
-    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
+    (env / "cairn.toml").write_text("")
     with cairn.draft("big") as run:
         (run.path / "data.bin").write_bytes(os.urandom(1 << 16))
         inode = (run.path / "data.bin").stat().st_ino
@@ -373,10 +375,10 @@ def test_hydra_single_run_publishes_its_draft(hydra_project):
     store = cairn.connect()
     if store.remote:
         store.sync()
-    version = store.project().artifact("demo").latest
+    version = store.artifact("demo").latest
     paths = {f.path for f in version.files}
     assert {"result.txt", "run.json", "metrics.jsonl", "provenance/manifest.json", ".hydra/config.yaml"} <= paths
-    assert version.inputs == ["study:runs/demo@v1"] and LABEL.fullmatch(version.label)  # the job's run
+    assert version.inputs == ["runs/demo@v1"] and LABEL.fullmatch(version.label)  # the job's run
     assert version.metadata["config"]["experiment"]["pull"] == "datasets/toy@latest"
     assert version.metadata["overrides"] == ["experiment.pull=datasets/toy@latest"]
     with version.open("run.json") as handle:
@@ -391,7 +393,7 @@ def test_hydra_single_run_publishes_its_draft(hydra_project):
 
 def test_hydra_failed_run_keeps_its_draft(hydra_project):
     result = hydra(hydra_project, "experiment.fail=true")
-    assert result.returncode != 0 and "kept the draft" in result.stderr
+    assert result.returncode != 0 and "cairn: the run failed; its folder is kept (cairn drafts lists it)" in result.stderr
     kept = {item.name: item for item in drafts.drafts()}
     assert set(kept) == {"demo", "runs/demo"} and kept["demo"].state == kept["runs/demo"].state == "kept"
     assert json.loads((kept["demo"].folder / "run.json").read_text())["status"] == "failed"
@@ -399,8 +401,8 @@ def test_hydra_failed_run_keeps_its_draft(hydra_project):
     store = cairn.connect()
     if store.remote:
         store.sync()
-    assert store.project().artifact("demo").versions() == []
-    assert [v.status for v in store.project().artifact("runs/demo").versions()] == ["failed"]
+    assert store.artifact("demo").versions() == []
+    assert [v.status for v in store.artifact("runs/demo").versions()] == ["failed"]
 
 
 def test_hydra_multirun_publishes_one_sweep_draft(hydra_project):
@@ -411,10 +413,10 @@ def test_hydra_multirun_publishes_one_sweep_draft(hydra_project):
     store = cairn.connect()
     if store.remote:
         store.sync()
-    [version] = store.project().artifact("demo-sweep").versions()
+    [version] = store.artifact("demo-sweep").versions()
     paths = {f.path for f in version.files}
     assert {"run.json", "multirun.yaml", "0/result.txt", "1/result.txt", "0/metrics.jsonl", "1/provenance/manifest.json"} <= paths
-    assert version.inputs == ["study:runs/demo@v1", "study:runs/demo@v2"]  # the trials' runs
+    assert version.inputs == ["runs/demo@v1", "runs/demo@v2"]  # the trials' runs
     assert [store.version(ref).inputs for ref in version.inputs] == [[first.ref], [second.ref]]
     assert [v.ref for v in version.upstream()] == [first.ref, second.ref]
     with version.open("run.json") as handle:
@@ -422,12 +424,12 @@ def test_hydra_multirun_publishes_one_sweep_draft(hydra_project):
     assert study["kind"] == "study" and [t["status"] for t in study["trials"]] == ["completed", "completed"]
     assert version.metadata["overrides"] == ["experiment.pull=datasets/a@v1,datasets/b@v1"]
     assert drafts.drafts() == []  # one draft for the whole sweep, gone after publishing
-    assert store.project().artifact("demo").versions() == []  # run.dir made no stray draft
+    assert store.artifact("demo").versions() == []  # run.dir made no stray draft
 
 
 def test_finalize_study_publishes_a_sweep_draft(env, capsys):
     pytest.importorskip("hydra")
-    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
+    (env / "cairn.toml").write_text("")
     sweep = drafts.Draft("sweep", activate=False)
     for trial in ("0", "1"):
         (sweep.folder / trial / ".hydra").mkdir(parents=True)
@@ -435,5 +437,5 @@ def test_finalize_study_publishes_a_sweep_draft(env, capsys):
         (sweep.folder / trial / "run.json").write_text(json.dumps({"status": "completed", "started": "t0", "code_revision": "abc"}))
     main(["finalize-study", str(sweep.folder)])
     assert "completed and published" in capsys.readouterr().out
-    version = cairn.connect().project().artifact("sweep").latest
+    version = cairn.connect().artifact("sweep").latest
     assert {"run.json", "0/run.json", "1/run.json"} <= {f.path for f in version.files} and not sweep.folder.exists()

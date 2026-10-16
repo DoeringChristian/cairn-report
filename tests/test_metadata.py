@@ -11,7 +11,8 @@ import threading
 
 import pytest
 
-from cairn import LocalRepo, Remote, StoreError
+from cairn import LocalRepo, StoreError
+from cairn.client.remote import Server
 from cairn.cli import main
 from cairn.server import make_server
 from cairn.store.errors import Conflict
@@ -36,16 +37,18 @@ def test_export_metadata(tmp_path, capsys):
     one, two = blob(root, "one"), blob(root, "two")
     store.publish("data", "sets/crops", [one], metadata={"n": 1})
     store.publish("data", "sets/crops", [two], metadata={"n": 2}, label="big")
-    store.publish("models", "fit", [one], inputs=["data:sets/crops@v2"])
+    store.publish("data", "fit", [one], inputs=["sets/crops@v2"])  # inputs are of the same project
+    store.publish("models", "fit", [two])
     main(["export-metadata", str(root), str(tmp_path / "out")])
     out = capsys.readouterr().out
-    assert "versions.jsonl  3 rows" in out and "aliases.jsonl  3 rows" in out
+    assert "versions.jsonl  4 rows" in out and "aliases.jsonl  4 rows" in out
     versions = [json.loads(line) for line in (tmp_path / "out" / "versions.jsonl").read_text().splitlines()]
-    assert [(v["project"], v["name"], v["version"]) for v in versions][:2] == [("data", "sets/crops", 1), ("data", "sets/crops", 2)]
+    assert [(v["project"], v["name"], v["version"]) for v in versions] == [("data", "fit", 1), ("data", "sets/crops", 1),
+                                                                        ("data", "sets/crops", 2), ("models", "fit", 1)]
     projects = [json.loads(line) for line in (tmp_path / "out" / "projects.jsonl").read_text().splitlines()]
     assert [p["name"] for p in projects] == ["data", "models"]
     consumers = [json.loads(line) for line in (tmp_path / "out" / "consumers.jsonl").read_text().splitlines()]
-    assert [(c["input"], c["consumer"]) for c in consumers] == [("data:sets/crops@v2", "models:fit@v1")]
+    assert [(c["project"], c["input"], c["consumer"]) for c in consumers] == [("data", "sets/crops@v2", "fit@v1")]
     with pytest.raises(SystemExit):
         main(["export-metadata", str(tmp_path / "nothing"), str(tmp_path / "out2")])
 
@@ -118,7 +121,7 @@ def test_processes_on_the_host_write_a_served_root_directly(tmp_path, capsys):
         with pytest.raises(SystemExit, match="in use"):  # a taken port is an error: clients' [repo] url names it
             make_server(tmp_path / "other", port=server.server_address[1])
         client = Client(f"http://127.0.0.1:{server.server_address[1]}", read_token(root / "token"))
-        assert [p["name"] for p in Remote(client).projects()] == ["p"]  # the server sees the direct write
+        assert [p["name"] for p in Server(client).projects()] == ["p"]  # the server sees the direct write
     finally:
         server.shutdown()
         server.server_close()

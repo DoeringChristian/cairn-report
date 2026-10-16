@@ -65,13 +65,18 @@ def data(ui, path, cookie, expect=200):
     return json.loads(body)
 
 
+def plain(nodes: dict) -> dict:
+    """Lineage nodes without their short ids (every node the UI looked up has one)."""
+    return {ref: {key: value for key, value in node.items() if key != "short_id"} for ref, node in nodes.items()}
+
+
 def publish_reports(project, server):
     """The conftest project (reports alpha and beta, input `descent`) with a fresh repo whose remote is the server."""
     import shutil
 
     shutil.rmtree(project / ".cairn")  # the fixture's repo had no remote: start over (adopting it is tested elsewhere)
     r = use_remote(project, server)
-    store.publish("descent", make_data(project.parent / "remote-data"), store=r)
+    store.publish("descent", make_data(project.parent / "remote-data"))
     main(["publish", "reports/alpha"])
     main(["publish", "reports/beta"])
     return r
@@ -124,7 +129,8 @@ def test_the_api_needs_the_x_cairn_header(ui):
         assert get(ui, "/ui-api/" + path, cookie, **{"X-Cairn": "0"})[0] == 403
     assert get(ui, "/ui-api/me", {}, **X)[0] == 401  # and the header alone is not a login
     assert get(ui, "/ui-api/nope", cookie, **X)[0] == 404
-    assert data(ui, "me", cookie) == {"scope": "owner" if ui.kind == "folder" else "remote", "project": None, "auth": True}
+    assert data(ui, "me", cookie) == {"scope": "owner" if ui.kind == "folder" else "remote", "project": None, "auth": True,
+                                      "mode": "server", "home": None}  # a server's repo, or a server: many projects
 
 
 def test_the_cookie_is_secure_behind_https_and_plain_on_this_machine(server):
@@ -166,18 +172,6 @@ def test_scoped_token_sees_only_its_project_and_revocation_ends_the_session(ui, 
     assert call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=JSON)[0] == 401  # and cannot log in again
 
 
-def test_a_scoped_token_hides_other_projects_in_inputs_and_consumers(ui, env):
-    seed(ui.server)
-    r = remote(ui.server, project="beta")
-    store.publish("beta:derived", folder(env, "d", {"r.txt": "r"}), inputs=["alpha:data@v1"], store=r)
-    cookie = login(ui, create_token(ui.server.root, "alpha", name="viewer"))
-    assert data(ui, "projects/alpha/artifacts/data/versions/1", cookie)["consumers"] == ["beta:derived@v1"] or ui.kind == "server"
-    lineage = data(ui, "lineage?ref=alpha:data@v1&depth=2", cookie)
-    assert "beta:derived@v1" not in json.dumps(lineage)  # a consumer in a project this token cannot read
-    owner = data(ui, "lineage?ref=alpha:data@v1", login(ui))
-    assert owner["nodes"]["alpha:data@v1"]["consumers"] == ["beta:derived@v1"]
-
-
 def test_no_auth_ui_is_loopback_only_and_needs_no_login(server):
     with pytest.raises(SystemExit, match="loopback"):
         make_ui_server(RemoteBackend(server.url, allow_http=True), host="0.0.0.0", port=0, no_auth=True)
@@ -205,7 +199,7 @@ def test_no_auth_ui_over_a_no_auth_store_uses_no_token(tmp_path, env, monkeypatc
     threading.Thread(target=store_httpd.serve_forever, daemon=True).start()
     monkeypatch.delenv("CAIRN_TOKEN", raising=False)
     url = f"http://127.0.0.1:{store_httpd.server_address[1]}"
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{url}"\nproject = "study"\n')
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{url}/study"\n')
     store.publish("open", folder(env, "o", {"a.txt": "x"}))
     httpd, ui = start(RemoteBackend(url, False), no_auth=True)
     try:
@@ -249,7 +243,7 @@ def test_the_app_routes_serve_the_built_index(ui):
 
 def test_api_returns_what_the_pages_need(ui, project, capsys):
     r = publish_reports(project, ui.server)
-    store.publish("datasets/other", folder(project, "o", {"a.txt": "1"}), aliases=["best"], store=r)
+    store.publish("datasets/other", folder(project, "o", {"a.txt": "1"}), aliases=["best"])
     capsys.readouterr()
     cookie = login(ui)
     projects = data(ui, "projects", cookie)
@@ -277,6 +271,10 @@ def test_api_returns_what_the_pages_need(ui, project, capsys):
     assert "metrics.jsonl" in paths and descent["consumers"] == ["study:reports/alpha@v1"]
     report = data(ui, "projects/study/artifacts/reports%2Falpha/versions/1", cookie)
     assert report["version"]["inputs"] == ["study:descent@v1"] and report["version"]["metadata"]["title"] == "Alpha"
+    descent_v1 = descent["version"]
+    assert len(descent_v1["short_id"]) == 7 and row["short_id"]  # every version shows its short id
+    by_id = data(ui, f"projects/study/artifacts/descent/versions/{descent_v1['short_id']}", cookie)
+    assert by_id["version"]["uid"] == descent_v1["uid"]
     assert any(f["path"].startswith("site/") for f in report["version"]["files"])
     # errors are JSON
     for path in ("projects/study/artifacts/descent/versions/9", "projects/study/artifacts/nope", "projects/nope", "projects/study/artifacts/descent/versions/zzz"):
@@ -287,16 +285,17 @@ def test_api_returns_what_the_pages_need(ui, project, capsys):
 
 def test_lineage_levels(ui, tmp_path, env):
     r = use_remote(env, ui.server)
-    store.publish("a", folder(env, "a", {"f": "1"}), store=r)
-    store.publish("b", folder(env, "b", {"f": "2"}), inputs=["study:a@v1"], store=r)
-    store.publish("c", folder(env, "c", {"f": "3"}), inputs=["study:b@v1"], store=r)
-    store.publish("d", folder(env, "d", {"f": "4"}), inputs=["study:c@v1"], store=r)
+    store.publish("a", folder(env, "a", {"f": "1"}))
+    store.publish("b", folder(env, "b", {"f": "2"}), inputs=["a@v1"])
+    store.publish("c", folder(env, "c", {"f": "3"}), inputs=["b@v1"])
+    store.publish("d", folder(env, "d", {"f": "4"}), inputs=["c@v1"])
     cookie = login(ui)
     one = data(ui, "lineage?ref=study:b@latest", cookie)  # depth 1, an alias resolves to the exact version
     assert one["ref"] == "study:b@v1" and one["depth"] == 1 and not one["truncated"]
-    assert one["nodes"] == {"study:b@v1": {"inputs": ["study:a@v1"], "consumers": ["study:c@v1"]},
+    assert all(node["short_id"] for node in one["nodes"].values())
+    assert plain(one["nodes"]) == {"study:b@v1": {"inputs": ["study:a@v1"], "consumers": ["study:c@v1"]},
                             "study:a@v1": {"inputs": None, "consumers": None}, "study:c@v1": {"inputs": None, "consumers": None}}
-    two = data(ui, "lineage?ref=study:b@v1&depth=2", cookie)["nodes"]
+    two = plain(data(ui, "lineage?ref=study:b@v1&depth=2", cookie)["nodes"])
     assert two["study:a@v1"] == {"inputs": [], "consumers": None}  # ancestors expand through inputs, descendants through consumers
     assert two["study:c@v1"] == {"inputs": None, "consumers": ["study:d@v1"]}
     assert two["study:d@v1"] == {"inputs": None, "consumers": None}
@@ -307,9 +306,9 @@ def test_lineage_levels(ui, tmp_path, env):
 def test_lineage_is_capped(ui, env, monkeypatch):
     monkeypatch.setattr(ui_server, "MAX_LINEAGE_NODES", 4)
     r = use_remote(env, ui.server)
-    store.publish("root", folder(env, "root", {"f": "0"}), store=r)
+    store.publish("root", folder(env, "root", {"f": "0"}))
     for number in range(6):
-        store.publish(f"leaf{number}", folder(env, f"leaf{number}", {"f": str(number)}), inputs=["study:root@v1"], store=r)
+        store.publish(f"leaf{number}", folder(env, f"leaf{number}", {"f": str(number)}), inputs=["root@v1"])
     lineage = data(ui, "lineage?ref=study:root@v1", login(ui))
     assert lineage["truncated"] and len(lineage["nodes"]) == 4
 
@@ -328,7 +327,7 @@ def test_report_is_served_with_its_static_files(ui, project, capsys):
     css = re.search(r'href="\.\./(_static/report\.[0-9a-f]+\.css)"', page).group(1)
     assert get(ui, f"/p/study/r/{css}", cookie)[0] == 200
     data = json.loads(get(ui, "/p/study/r/alpha/report-data.json", cookie)[2])
-    assert data["inputs"]["descent"]["resolved"] == "study:descent@v1"
+    assert data["inputs"]["descent"]["resolved"] == "descent@v1"  # a report's inputs are of its own project
     assert b"Result" in get(ui, "/p/study/r/alpha/narrative.html", cookie)[2]
     assert get(ui, "/p/study/r/alpha/assets/inputs/descent/figures/hist.png", cookie)[0] == 200
     assert get(ui, "/p/study/r/alpha", cookie)[0] == 301
@@ -372,12 +371,12 @@ def test_data_panel_links_point_at_the_artifact_pages(ui, project, capsys):
     cookie = login(ui)
     script = resources.files("cairn").joinpath("reports", "template", "report.js").read_text()
     assert "STORE_SERVED = !BUNDLE && /^\\/p\\/[^/]+\\/r\\//.test(location.pathname)" in script
-    assert "STORE_SERVED && match ?" in script and "version.dataset.artifact = input.resolved" in script
-    assert "/p/${encodeURIComponent(match[1])}/a/" in script  # /p/<project>/r/... -> /p/<project>/a/<name>@vN
+    assert "STORE_SERVED && here && match ?" in script and "version.dataset.artifact = input.resolved" in script
+    assert "/p/${here[1]}/a/" in script  # /p/<project>/r/... -> /p/<project>/a/<name>@vN, the report's own project
     report_data = json.loads(get(ui, "/p/study/r/alpha/report-data.json", cookie)[2])
     exact = report_data["inputs"]["descent"]["resolved"]
-    project_name, name_version = exact.split(":", 1)
-    name, version = name_version.split("@")
+    project_name = "study"  # from the page's own address
+    name, version = exact.split("@")
     target = f"/p/{project_name}/a/{name}@{version}"  # what the script builds from the exact reference
     assert get(ui, target, cookie)[2] == (Path(ui_server.__file__).parent / "static" / "index.html").read_bytes()  # an app route
     detail = data(ui, f"projects/{project_name}/artifacts/{name}/versions/{version[1:]}", cookie)  # and the app's data for it
@@ -389,7 +388,7 @@ def test_data_panel_links_point_at_the_artifact_pages(ui, project, capsys):
 
 def test_files_passthrough_answers_range_etag_and_download(ui, env):
     r = use_remote(env, ui.server)
-    store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10, "sub/page.html": "<b>x</b>"}), store=r)
+    store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10, "sub/page.html": "<b>x</b>"}))
     cookie = login(ui)
     path = "/files/study/data@v1//big.txt"
     status, headers, whole = get(ui, path, cookie)
@@ -415,7 +414,8 @@ def test_files_passthrough_serves_large_ranges_exactly(ui, env):
     root = env / "big"
     root.mkdir()
     (root / "movie.mp4").write_bytes(big)
-    store.publish("video", root, store=use_remote(env, ui.server))
+    use_remote(env, ui.server)
+    store.publish("video", root)
     cookie = login(ui)
     status, headers, data = get(ui, "/files/study/video@v1//movie.mp4", cookie, Range="bytes=1048000-1049999")
     assert status == 206 and data == big[1048000:1050000] and headers["Content-Range"] == f"bytes 1048000-1049999/{len(big)}"
@@ -442,20 +442,22 @@ def test_the_ui_uses_only_the_store_interface_and_the_server_has_no_ui_code():
 
 
 def test_ui_command_wires_the_project_repo(env, server, monkeypatch, capsys):
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "study"\n')
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/study"\n')
     seen = {}
     monkeypatch.setattr("cairn.ui.serve_ui", lambda backend, **options: seen.update(backend=backend, **options))
     main(["ui"])  # the project's repo directly, reading through its remote
     assert isinstance(seen["backend"], LocalBackend) and seen["backend"].root == (env / ".cairn").resolve()
-    assert seen["backend"].store.url == server.url and seen["port"] == 8801
+    assert seen["backend"].store.repo.url == f"{server.url}/study" and seen["port"] == 8801
+    assert seen["backend"].store.mode == "local" and seen["backend"].store.name == "study"  # one project: the remote's
     assert seen["no_auth"] is False and seen["secure_cookie"] is True and seen["login_token"] == seen["backend"].owner
     main(["ui", "--remote", server.url])
     assert isinstance(seen["backend"], RemoteBackend) and seen["backend"].url == server.url
     main(["ui", "--repo", str(server.root), "--port", "9999", "--insecure-cookies"])
     assert isinstance(seen["backend"], LocalBackend) and seen["port"] == 9999 and seen["secure_cookie"] is False
-    (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
+    (env / "cairn.toml").write_text("")
     main(["ui", "--no-auth"])
-    assert seen["backend"].root == (env / ".cairn").resolve() and seen["no_auth"] is True and seen["backend"].store.url is None
+    assert seen["backend"].root == (env / ".cairn").resolve() and seen["no_auth"] is True and seen["backend"].store.repo.url is None
+    assert seen["backend"].store.name == "study"  # without a remote: named after the project folder
     with pytest.raises(SystemExit, match="no repo folder"):
         main(["ui", "--repo", str(env / "missing")])
 
@@ -477,7 +479,7 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
         root = tmp_path / name
         root.mkdir()
         (root / "cairn.toml").write_text("")
-        (root / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}"\nproject = "study"\ninterval = 1\n')
+        (root / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/study"\ninterval = 1\n')
         monkeypatch.chdir(root)
         monkeypatch.delenv("CAIRN_INPUTS", raising=False)
         return root
@@ -500,15 +502,18 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
         "```python exec hide\nresult = (inputs.fit / 'result.txt').read_text()\n```\n\n## Result\n\nThe result is {{ result }}.\n"))
     main(["publish", "reports/summary"])
 
-    chain = "study:datasets/toy@v1", "study:toy-fit@v1", "study:reports/summary@v1"
-    lineage = api(server, "GET", "/api/v2/lineage?ref=study:reports%2Fsummary@latest")
-    assert lineage == {"ref": chain[2], "inputs": [chain[1]], "consumers": [], "deleted": [],
-                       "nodes": {chain[2]: {"status": "completed"}, chain[1]: {"status": "completed"}}}
-    middle = api(server, "GET", "/api/v2/lineage?ref=study:toy-fit@v1")
-    assert middle["inputs"] == [chain[0]] and middle["consumers"] == [chain[2]]  # the script's parent heard of its pull
-    script_run = "study:runs/interactive@v1"  # the script was a run too (python -c: "interactive"), completed at exit
-    assert api(server, "GET", "/api/v2/lineage?ref=study:datasets%2Ftoy@v1")["consumers"] == [script_run, chain[1]]
-    assert api(server, "GET", f"/api/v2/lineage?ref={script_run}")["nodes"][script_run] == {"status": "completed", "kind": "run"}
+    inside = "datasets/toy@v1", "toy-fit@v1", "reports/summary@v1"  # the server's refs: inside the project
+    lineage = api(server, "GET", "/api/v2/projects/study/lineage?ref=reports%2Fsummary@latest")
+    assert plain(lineage["nodes"]) == {inside[2]: {"status": "completed"}, inside[1]: {"status": "completed"}}
+    assert {key: value for key, value in lineage.items() if key != "nodes"} == {"ref": inside[2], "inputs": [inside[1]],
+                                                                               "consumers": [], "deleted": []}
+    middle = api(server, "GET", "/api/v2/projects/study/lineage?ref=toy-fit@v1")
+    assert middle["inputs"] == [inside[0]] and middle["consumers"] == [inside[2]]  # the script's parent heard of its pull
+    script_run = "runs/interactive@v1"  # the script was a run too (python -c: "interactive"), completed at exit
+    assert api(server, "GET", "/api/v2/projects/study/lineage?ref=datasets%2Ftoy@v1")["consumers"] == [script_run, inside[1]]
+    node = api(server, "GET", f"/api/v2/projects/study/lineage?ref={script_run}")["nodes"][script_run]
+    assert plain({script_run: node})[script_run] == {"status": "completed", "kind": "run"}
+    chain = tuple(f"study:{ref}" for ref in inside)  # the UI's: project:name@sel, as the app reads them
     # the same chain in the UI's data, both ways
     cookie = login(ui)
 
@@ -522,7 +527,7 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
     assert set(graph) == set(chain) and graph[chain[1]]["inputs"] == [chain[0]]
     assert b"fit of 1,2,3" in get(ui, "/p/study/r/summary/narrative.html", cookie)[2]
     # the report data records its exact input for the Data panel
-    assert json.loads(get(ui, "/p/study/r/summary/report-data.json", cookie)[2])["inputs"]["fit"]["resolved"] == chain[1]
+    assert json.loads(get(ui, "/p/study/r/summary/report-data.json", cookie)[2])["inputs"]["fit"]["resolved"] == inside[1]
     assert b"1,2,3" in get(ui, "/files/study/datasets/toy@v1//x.csv", cookie)[2]
 
 
@@ -549,7 +554,7 @@ def test_the_built_app_ships_with_the_package():
 
 def test_the_run_panel_data_of_a_running_and_a_completed_run(ui, env):
     r = use_remote(env, ui.server)
-    store.publish("datasets/toy", folder(env, "toy", {"x.txt": "1"}), store=r)
+    store.publish("datasets/toy", folder(env, "toy", {"x.txt": "1"}))
     run = store.init(name="train", config={"lr": 0.1, "model": {"depth": 2}}, code=False, watch=False)
     store.use("datasets/toy@v1")
     run.add({"loss": 1.0, "step": 0})
@@ -591,7 +596,7 @@ def test_a_version_downloads_as_a_zip(ui, env):
     data_ = folder(env, "zipme", files)
     (data_ / "big.bin").write_bytes(big)
     (data_ / "link.txt").symlink_to("a.txt")
-    store.publish("datasets/zip-me", data_, store=r)
+    store.publish("datasets/zip-me", data_)
     cookie = login(ui)
     status, headers, body = get(ui, "/files/study/datasets/zip-me@v1.zip", cookie)
     assert status == 200 and headers["Content-Type"] == "application/zip"
@@ -620,7 +625,7 @@ def test_a_zip_streams_without_holding_the_files(ui, env, monkeypatch):
     with (data_ / "large.bin").open("wb") as handle:
         for _ in range(24):
             handle.write(os.urandom(1 << 20))
-    store.publish("large", data_, store=r)
+    store.publish("large", data_)
     cookie = login(ui)
     import http.client
 

@@ -189,7 +189,7 @@ def test_share_writes_one_self_contained_page(project):
     alpha = bundle["reports"]["alpha"]["narrative"]
     assert 'data-src="data:image/svg+xml;base64,' in alpha and 'data-src="data:image/png;base64,' in alpha
     assert 'href="../beta/#detail"' in alpha  # report links stay relative; the page resolves them inside the bundle
-    assert bundle["reports"]["alpha"]["data"]["inputs"]["descent"]["resolved"] == "study:descent@v1"
+    assert bundle["reports"]["alpha"]["data"]["inputs"]["descent"]["resolved"] == "descent@v1"
 
 
 def test_share_one_report_and_size_limit(project, monkeypatch):
@@ -253,7 +253,7 @@ def manifest_of(project, key="alpha"):
 def test_inputs_are_pinned_and_recorded(project):
     build_all(load_config(project))
     uid = store.connect().artifact("descent").version(1).uid
-    expected = {"descent": {"requested": "descent@latest", "resolved": "study:descent@v1", "uid": uid, "files": 4}}
+    expected = {"descent": {"requested": "descent@latest", "resolved": "descent@v1", "uid": uid, "files": 4}}
     manifest = manifest_of(project)
     assert manifest["inputs"] == expected and "source_runs" not in manifest and "selection" not in manifest
     assert json.loads((built(project) / "alpha" / "report-data.json").read_text())["inputs"] == expected
@@ -266,7 +266,7 @@ def test_inputs_are_pinned_and_recorded(project):
     assert store.versions("descent")[-1]["version"] == 2
     build_all(load_config(project))
     assert manifest_of(project)["inputs"]["descent"] | {"files": 0, "uid": None} == \
-        expected["descent"] | {"resolved": "study:descent@v2", "files": 0, "uid": None}
+        expected["descent"] | {"resolved": "descent@v2", "files": 0, "uid": None}
 
 
 def test_inputs_exposes_paths_by_attribute_and_item(project):
@@ -287,7 +287,7 @@ def test_input_images_are_copied_with_their_trace(project):
     assert (built(project) / "alpha" / "assets" / "inputs" / "descent" / "figures" / "hist.png").is_file()
     assert re.search(r'data-src="assets/inputs/descent/figures/hist\.png\?v=[0-9a-f]{12}"', narrative)
     trace = json.loads(html.unescape(re.search(r'data-trace="([^"]+)"', narrative).group(1)))
-    assert trace["input"] == "descent@v1//figures/hist.png" and trace["artifact"] == "study:descent@v1"
+    assert trace["input"] == "descent@v1//figures/hist.png" and trace["artifact"] == "descent@v1"
     assert "run" not in trace and "revision" not in trace
     assert "assets/reports/alpha/assets/strip.svg" in narrative  # report-local figures keep their path
 
@@ -296,10 +296,10 @@ def test_input_errors_are_clear(project):
     alpha = project / "reports" / "alpha" / "report.md"
     text = alpha.read_text()
     alpha.write_text(text.replace("descent@latest", "nothing@latest"))
-    with pytest.raises(BuildError, match=r"inputs\.descent: no artifact study:nothing"):
+    with pytest.raises(BuildError, match=r"inputs\.descent: no artifact nothing in the repo "):
         build_all(load_config(project))
     alpha.write_text(text.replace("descent@latest", "descent@v9"))
-    with pytest.raises(BuildError, match=r"inputs\.descent: study:descent has no version v9"):
+    with pytest.raises(BuildError, match=r"inputs\.descent: descent has no version v9"):
         build_all(load_config(project))
     alpha.write_text(text.replace("  descent:", "  Descent:"))
     with pytest.raises(BuildError, match="input names are lower-case identifiers"):
@@ -429,7 +429,7 @@ def test_publish_report_makes_a_self_contained_version(project, capsys):
     assert any(re.fullmatch(r"site/_static/report\.[0-9a-f]+\.js(\.gz)?", path) for path in static)
     assert any("plotly" in path for path in static) and not any(path.startswith("site/beta") for path in paths)
     assert version["metadata"] == {"title": "Alpha", "status": "active", "summary": "The first report, error 0.5."}
-    assert version["inputs"] == ["study:descent@v1"]
+    assert version["inputs"] == ["descent@v1"]
     page = store.pull("reports/alpha@v1") / "site" / "alpha" / "index.html"
     assert (page.parent.parent / "_static").is_dir() and page.is_file()
 
@@ -438,7 +438,7 @@ def test_republishing_an_unchanged_report_creates_no_version(project, capsys):
     main(["publish", "reports/alpha"])
     capsys.readouterr()
     main(["publish", "reports/alpha"])
-    assert "reports/alpha@v1 unchanged" in capsys.readouterr().out
+    assert re.search(r"reports/alpha@v1 \([0-9a-f]{7}\) unchanged", capsys.readouterr().out)
     assert [v["version"] for v in store.versions("reports/alpha")] == [1]
     alpha = project / "reports" / "alpha" / "report.md"
     alpha.write_text(alpha.read_text() + "\nMore text.\n")
@@ -449,13 +449,13 @@ def test_republishing_an_unchanged_report_creates_no_version(project, capsys):
     (data / "data" / "summary.json").write_text('{"steps": 4}')
     store.publish("descent", data)
     main(["publish", "reports/alpha"])
-    assert store.versions("reports/alpha")[-1]["inputs"] == ["study:descent@v2"]
+    assert store.versions("reports/alpha")[-1]["inputs"] == ["descent@v2"]
 
 
 def test_lineage_connects_the_report_and_its_input(project):
     main(["publish", "reports/alpha"])
-    assert store.lineage("reports/alpha@v1") == {"inputs": ["study:descent@v1"], "consumers": [], "runs": []}
-    assert store.lineage("descent@v1")["consumers"] == ["study:reports/alpha@v1"]
+    assert store.lineage("reports/alpha@v1") == {"inputs": ["descent@v1"], "consumers": [], "runs": []}
+    assert store.lineage("descent@v1")["consumers"] == ["reports/alpha@v1"]
 
 
 def test_publish_refuses_options_on_a_report_folder(project):

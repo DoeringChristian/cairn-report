@@ -117,8 +117,8 @@ def test_allow_network_fs_comes_from_cairn_toml(tmp_path, on_nfs, monkeypatch):
     from cairn.client.open import open_repo
     from cairn.config import load_config
 
-    (tmp_path / "cairn.toml").write_text('[repo]\nproject = "p"\nallow_network_fs = true\n')
-    assert open_repo(load_config(tmp_path)).projects()[0]["name"] == "p"
-    (tmp_path / "cairn.toml").write_text('[repo]\nproject = "q"\nallow_network_fs = "yes"\n')
+    (tmp_path / "cairn.toml").write_text('[repo]\nallow_network_fs = true\n')
+    assert open_repo(load_config(tmp_path)).summaries() == []
+    (tmp_path / "cairn.toml").write_text('[repo]\nallow_network_fs = "yes"\n')
     with pytest.raises(ValueError, match="allow_network_fs must be true or false"):
         load_config(tmp_path)

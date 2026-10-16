@@ -19,8 +19,8 @@ def test_publish_folder_records_label_alias_and_meta(env, capsys):
     data = folder(env, "data", {"a.txt": "one", "sub/b.txt": "two"})
     out = run(capsys, "publish", str(data), "crops", "--label", "first", "--alias", "paper", "--alias", "keep",
               "--meta", "psnr=31.2", "--meta", "note=hello")
-    assert out.startswith("published crops@v1 (2 files, ")
     [version] = store.versions("crops")
+    assert out.startswith(f"published crops@v1 ({version['short_id']}; 2 files, ")
     assert version["label"] == "first" and version["metadata"] == {"psnr": 31.2, "note": "hello"}
     assert store.pull("crops@paper") == store.pull("crops@keep") == store.pull("crops@first")
 
@@ -28,7 +28,8 @@ def test_publish_folder_records_label_alias_and_meta(env, capsys):
 def test_unchanged_republish_creates_no_version(env, capsys):
     data = folder(env, "data", {"a.txt": "one"})
     run(capsys, "publish", str(data), "crops")
-    assert run(capsys, "publish", str(data), "crops").strip() == "crops@v1 unchanged"
+    short = store.versions("crops")[0]["short_id"]
+    assert run(capsys, "publish", str(data), "crops").strip() == f"crops@v1 ({short}) unchanged"
     (data / "a.txt").write_text("changed")
     assert run(capsys, "publish", str(data), "crops").startswith("published crops@v2")
     assert [v["version"] for v in store.versions("crops")] == [1, 2]
@@ -80,7 +81,7 @@ def watch(capsys, target, code):
 
 def test_watch_command_makes_one_completed_version(env, capsys):
     code, output = watch(capsys, env / "out", 0)
-    assert code == 0 and "published sweep@v1 (3 files" in output.out
+    assert code == 0 and "published sweep@v1 (" in output.out and "; 3 files" in output.out
     [version] = store.versions("sweep")
     assert version["status"] == "completed" and [e["path"] for e in version["files"]] == ["first.txt", "log.txt", "second.txt"]
     assert "synced" in output.out  # synced while the command still ran
@@ -111,7 +112,7 @@ def test_inputs_pulled_by_the_command_are_recorded(env, capsys, monkeypatch):
         main(["publish", str(out), "fit", "--interval", "0.5", "--", sys.executable, "-c", script])
     assert exit.value.code == 0
     [version] = store.versions("fit")
-    assert version["inputs"] == [f"{store.open_repo().project}:datasets/toy@v1"]
+    assert version["inputs"] == ["datasets/toy@v1"]
     assert [e["path"] for e in version["files"]] == ["r.txt"]
 
 
@@ -132,14 +133,13 @@ def test_study_folder_merges_every_trial_inputs_record(env, capsys):
     main(["publish", str(folder(env, "d1", {"x": "1"})), "data"])
     main(["publish", str(folder(env, "d2", {"x": "2"})), "data"])
     capsys.readouterr()
-    project = store.open_repo().project
     study = folder(env, "runs/study", {"0/metrics.csv": "a", "1/metrics.csv": "b", "summary.txt": "s"})
-    row = lambda ref: json.dumps({"ref": f"{project}:{ref}", "time": "t"}) + "\n"
+    row = lambda ref: json.dumps({"ref": ref, "time": "t"}) + "\n"
     (study / "0" / ".cairn-inputs.jsonl").write_text(row("data@v1"))
     (study / "1" / ".cairn-inputs.jsonl").write_text(row("data@v2") + row("data@v1"))
     main(["publish", str(study), "sweep"])
     [version] = store.versions("sweep")
-    assert version["inputs"] == [f"{project}:data@v1", f"{project}:data@v2"]
+    assert version["inputs"] == ["data@v1", "data@v2"]
     assert sorted(e["path"] for e in version["files"]) == ["0/metrics.csv", "1/metrics.csv", "summary.txt"]
 
 

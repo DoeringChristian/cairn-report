@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 import cairn
-from cairn.store import LocalRepo
+from cairn.store import OWN, LocalRepo
 
 from test_identity import Server, free_port
 
@@ -52,9 +52,9 @@ def base_env(**extra) -> dict:
 def project_at(base: Path, name: str, remote: str | None = None, extra: str = "") -> Path:
     root = base / name
     root.mkdir(parents=True)
-    lines = ["[repo]", 'project = "study"', "interval = 0.5"]
-    if remote:
-        lines.append(f'remote = "{remote}"')
+    lines = ["[repo]", "interval = 0.5"]
+    if remote:  # a server URL: the project on it is `study`
+        lines.append(f'remote = "{remote}/study"')
     (root / "cairn.toml").write_text("\n".join(lines) + "\n" + extra)
     return root
 
@@ -114,6 +114,7 @@ def stray_repos(base: Path, allowed: set[Path]) -> list[Path]:
 
 
 def check_numbers(repo: LocalRepo, project: str = "study") -> dict[str, list[dict]]:
+    """(`project`: "study" on a server's repo, OWN ("") in a project's own repo.)"""
     """Every artifact's versions are numbered 1..n without a gap or a duplicate, and every uid is unique."""
     everything, uids = {}, []
     try:
@@ -161,7 +162,7 @@ import hashlib, json, os, pathlib, random, sys, time, cairn
 worker, seconds, big = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3] == "big"
 rng = random.Random(worker)
 log = open(f"published-{worker}.jsonl", "a")
-artifacts = cairn.connect().project()
+artifacts = cairn.connect()
 end, index = time.time() + seconds, 0
 while time.time() < end:
     folder = pathlib.Path(f"work/p{worker}-{index}")
@@ -215,8 +216,8 @@ print("rounds", rounds)
 HAMMER = """
 import http.client, json, random, sys, time
 from urllib.parse import quote
-port, seconds, out = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
-server, token = (int(sys.argv[4]), sys.argv[5]) if len(sys.argv) > 5 else (None, None)
+port, seconds, out, project = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3], sys.argv[4]
+server, token = (int(sys.argv[5]), sys.argv[6]) if len(sys.argv) > 6 else (None, None)
 samples, statuses, errors = {}, {}, []
 rng = random.Random(0)
 
@@ -242,7 +243,7 @@ def get(kind, path, headers=None, to=None):
 end = time.time() + seconds
 while time.time() < end:
     get("projects", "/ui-api/projects")
-    status, body = get("project", "/ui-api/projects/study")
+    status, body = get("project", f"/ui-api/projects/{project}")
     if status != 200:
         time.sleep(0.05)
         continue
@@ -251,28 +252,28 @@ while time.time() < end:
         continue
     item = rng.choice(artifacts)
     name = quote(item["name"], safe="")
-    status, body = get("artifact", f"/ui-api/projects/study/artifacts/{name}")
+    status, body = get("artifact", f"/ui-api/projects/{project}/artifacts/{name}")
     if status != 200:
         continue
     versions = [version for version in json.loads(body)["versions"] if version.get("status") != "deleted"]
     if not versions:
         continue
     version = rng.choice(versions)
-    get("version", f"/ui-api/projects/study/artifacts/{name}/versions/{version['version']}")
+    get("version", f"/ui-api/projects/{project}/artifacts/{name}/versions/{version['version']}")
     path = quote(item["name"])
     if item["name"].startswith("runs/"):
-        get("run", f"/ui-api/projects/study/artifacts/{name}/versions/{version['version']}/run")
-        get("file-range", f"/files/study/{path}@v{version['version']}//metrics.jsonl", {"Range": "bytes=0-99"})
+        get("run", f"/ui-api/projects/{project}/artifacts/{name}/versions/{version['version']}/run")
+        get("file-range", f"/files/{project}/{path}@v{version['version']}//metrics.jsonl", {"Range": "bytes=0-99"})
     else:
-        get("file-range", f"/files/study/{path}@v{version['version']}//value.txt", {"Range": "bytes=0-2"})
-        get("file", f"/files/study/{path}@v{version['version']}//nested/deeper/x.json")
+        get("file-range", f"/files/{project}/{path}@v{version['version']}//value.txt", {"Range": "bytes=0-2"})
+        get("file", f"/files/{project}/{path}@v{version['version']}//nested/deeper/x.json")
         if item["name"] == "shared":  # every fourth publish of a big publisher has a 50-200 MB file
-            get("big-range", f"/files/study/{path}@v{version['version']}//big.bin", {"Range": "bytes=1000000-1999999"})
+            get("big-range", f"/files/{project}/{path}@v{version['version']}//big.bin", {"Range": "bytes=1000000-1999999"})
     if server:  # `cairn server` on the same repo, as another machine's client sees it
         auth = {"Authorization": f"Bearer {token}"}
-        get("srv-list", "/api/v2/projects/study/artifacts", auth, server)
-        get("srv-versions", f"/api/v2/projects/study/artifacts/{name}/versions", auth, server)
-        get("srv-file", f"/files/study/{path}@v{version['version']}//"
+        get("srv-list", f"/api/v2/projects/{project}/artifacts", auth, server)
+        get("srv-versions", f"/api/v2/projects/{project}/artifacts/{name}/versions", auth, server)
+        get("srv-file", f"/files/{project}/{path}@v{version['version']}//"
             + ("metrics.jsonl" if item["name"].startswith("runs/") else "value.txt"), {**auth, "Range": "bytes=0-2"}, server)
 json.dump({"samples": samples, "statuses": statuses, "errors": errors}, open(out, "w"))
 """
@@ -300,7 +301,7 @@ def wait_port(port: int, process: subprocess.Popen | None = None, seconds: float
 
 def hammer(project: Path, port: int, seconds: float, out: str, server: "RealServer | None" = None) -> dict:
     script(project, "hammer.py", HAMMER)
-    process = spawn(project, "hammer.py", port, seconds, out, *((server.port, server.token) if server else ()))
+    process = spawn(project, "hammer.py", port, seconds, out, project.name, *((server.port, server.token) if server else ()))
     _, err = finish(process)
     assert process.returncode == 0, err
     return json.loads((project / out).read_text())
@@ -339,12 +340,12 @@ def test_contention_on_one_repo(tmp_path):
     (seed / "value.txt").write_text("seed")
     (seed / "nested" / "deeper" / "x.json").write_text("{}")
     assert cli(project, "publish", str(seed), "seed").returncode == 0
-    keep = cli(project, "retention", "set", "study", "--prefix", "shared", "--keep-last", "5", "--keep-days", "0")
+    keep = cli(project, "retention", "set", "--prefix", "shared", "--keep-last", "5", "--keep-days", "0")
     assert keep.returncode == 0, keep.stderr
     for name, code in (("publisher.py", PUBLISHER), ("live.py", LIVE_RUN), ("maintenance.py", MAINTENANCE)):
         script(project, name, code)
     ui, port = start_ui(project)
-    server = RealServer(project / ".cairn").start()  # just another process on the repo (rule 1)
+    server = RealServer(project / ".cairn", own=True).start()  # just another process on the repo (rule 1)
     try:
         idle = hammer(project, port, 5, "idle.json", server)
         with WalWatch(project / ".cairn") as wal:
@@ -376,7 +377,7 @@ def test_contention_on_one_repo(tmp_path):
     assert not problems, "\n".join(problems[:40])
 
     repo = LocalRepo(project / ".cairn")
-    everything = check_numbers(repo)
+    everything = check_numbers(repo, OWN)
     by_uid = {version["uid"]: (name, version) for name, versions in everything.items() for version in versions}
     published = [json.loads(line) for worker in range(4) for line in (project / f"published-{worker}.jsonl").read_text().splitlines()]
     timings = [row["seconds"] for row in published]
@@ -396,7 +397,7 @@ def test_contention_on_one_repo(tmp_path):
         info = json.loads((project / f"run-{index}.json").read_text())
         name, version = by_uid[info["uid"]]
         assert version["status"] == "completed", version
-        metrics = repo.read_file("study", name, f"v{version['version']}", "metrics.jsonl")
+        metrics = repo.read_file(OWN, name, f"v{version['version']}", "metrics.jsonl")
         lines = b"".join(metrics.chunks).decode().splitlines()
         assert len(lines) == info["steps"], (len(lines), info["steps"])
     assert sum(1 for version in everything["shared"] if version["status"] != "deleted") >= 5
@@ -414,7 +415,7 @@ def test_contention_on_one_repo(tmp_path):
 FILL = """
 import pathlib, sys, cairn
 artifacts, per = int(sys.argv[1]), int(sys.argv[2])
-project = cairn.connect().project()
+project = cairn.connect()
 for index in range(artifacts * per):
     folder = pathlib.Path(f"fill/{index}")
     folder.mkdir(parents=True)
@@ -438,7 +439,7 @@ def timed_get(port: int, path: str) -> tuple[float, int]:
     return time.perf_counter() - began, response.status
 
 
-def listing_times(project: Path, label: str, names: list[str], env=None) -> dict[str, float]:
+def listing_times(project: Path, label: str, names: list[str], env=None, shown: str | None = None) -> dict[str, float]:
     """Cold (first request of a new UI process) and warm listing times, and the CLI's."""
     from urllib.parse import quote
 
@@ -452,15 +453,16 @@ def listing_times(project: Path, label: str, names: list[str], env=None) -> dict
     times["cli versions"] = time.perf_counter() - began
     assert result.returncode == 0, result.stderr
     ui, port = start_ui(project, env)
+    project = shown or project.name  # the UI's one project: the remote's project, else the folder's name
     try:
-        times["ui project cold"], status = timed_get(port, "/ui-api/projects/study")
+        times["ui project cold"], status = timed_get(port, f"/ui-api/projects/{project}")
         assert status == 200
-        warm = [timed_get(port, "/ui-api/projects/study")[0] for _ in range(5)]
+        warm = [timed_get(port, f"/ui-api/projects/{project}")[0] for _ in range(5)]
         times["ui project warm"] = statistics.median(warm)
-        times["ui artifact cold"], status = timed_get(port, f"/ui-api/projects/study/artifacts/{quote(names[0], safe='')}")
+        times["ui artifact cold"], status = timed_get(port, f"/ui-api/projects/{project}/artifacts/{quote(names[0], safe='')}")
         assert status == 200
         times["ui artifact warm"] = statistics.median(
-            timed_get(port, f"/ui-api/projects/study/artifacts/{quote(name, safe='')}")[0] for name in names[1:6])
+            timed_get(port, f"/ui-api/projects/{project}/artifacts/{quote(name, safe='')}")[0] for name in names[1:6])
         times["ui projects warm"] = statistics.median(timed_get(port, "/ui-api/projects")[0] for _ in range(5))
     finally:
         ui.terminate()
@@ -491,7 +493,7 @@ def test_listings_with_3000_versions_and_500_pending_entries(tmp_path):
     assert filled.returncode == 0, filled.stderr
     print(f"500 offline publishes in one process: {time.perf_counter() - began:.1f} s")
     assert len(list((offline / ".cairn" / "outbox").iterdir())) == 500
-    pending = listing_times(offline, "500 pending outbox entries, remote refuses", names, env)
+    pending = listing_times(offline, "500 pending outbox entries, remote refuses", names, env, shown="study")
     assert pending["ui project warm"] < 0.03 and pending["ui artifact warm"] < 0.03 and pending["ui projects warm"] < 0.03
 
 
@@ -501,10 +503,12 @@ def test_listings_with_3000_versions_and_500_pending_entries(tmp_path):
 class RealServer:
     """`cairn server <root> --port <port> --no-ui` as a process of its own (SIGKILL-able), started and stopped at will."""
 
-    def __init__(self, root: Path, port: int | None = None):
+    def __init__(self, root: Path, port: int | None = None, own: bool = False):
+        """`own`: `root` is the repo of the project folder around it, served as `cairn server` there serves it (its one
+        project under the folder's name)."""
         from cairn.store.tokens import init_root
 
-        self.root, self.port = root, port or free_port()
+        self.root, self.port, self.own = root, port or free_port(), own
         if not (root / "token").exists():
             init_root(root)
         self.token = (root / "token").read_text().strip()
@@ -512,7 +516,8 @@ class RealServer:
         self.process = None
 
     def start(self, env=None) -> "RealServer":
-        self.process = spawn(self.root.parent, "-m", "cairn", "server", self.root, "--port", self.port, "--no-ui", env=env)
+        root = () if self.own else (self.root,)
+        self.process = spawn(self.root.parent, "-m", "cairn", "server", *root, "--port", self.port, "--no-ui", env=env)
         self.logs = self.process.logs
         wait_port(self.port, self.process)
         return self
@@ -760,7 +765,7 @@ def test_remote_outages_do_not_slow_runs_and_everything_is_sent_once(tmp_path):
     verify_clean(project, env)
     local = LocalRepo(project / ".cairn")
     for name in ("runs/timed", "data", "result"):
-        assert [(v["version"], v["uid"]) for v in local.versions("study", name)] == \
+        assert [(v["version"], v["uid"]) for v in local.versions(OWN, name)] == \
             [(v["version"], v["uid"]) for v in remote.versions("study", name)]
     server.stop()
     timings = {mode: (row, published) for mode, row, published in report}
@@ -794,7 +799,7 @@ print(run.uid, model.version.uid, flush=True)
 MADE_LOCALLY = """
 import json, pathlib, cairn
 repo = cairn.connect()
-data = repo.project().artifact("data")
+data = repo.artifact("data")
 made = {}
 for index in range(4):
     folder = pathlib.Path(f"d{index}")
@@ -832,11 +837,11 @@ def test_a_remote_added_while_a_version_runs_takes_over_everything_once(tmp_path
         assert time.time() < deadline and running.poll() is None, finish(running)
         time.sleep(0.05)
     with open(project / "cairn.toml", "a") as handle:  # now the project gets a remote, while the run runs
-        handle.write(f'remote = "{server.url}"\n')
+        handle.write(f'remote = "{server.url}/study"\n')
     first = cli(project, "sync", env=env)
     print("\nfirst sync:", first.returncode, first.stdout, first.stderr)
     status = cli(project, "status", env=env)
-    assert status.stdout.startswith("running\tstudy:runs/train\t-\t"), status.stdout  # the run the remote has not yet
+    assert status.stdout.startswith("running\truns/train\t-\t"), status.stdout  # the run the remote has not yet
     (project / "go").write_text("")
     out, err = finish(running, 120)
     assert running.returncode == 0, err
@@ -852,17 +857,17 @@ def test_a_remote_added_while_a_version_runs_takes_over_everything_once(tmp_path
     assert made["data3"] not in data  # deleted before the remote came: its files are gone, never sent
     assert remote.aliases("study", "data")["best"] == 5
     runs = {version["uid"]: version for version in remote.versions("study", "runs/train")}
-    assert runs[run_uid]["status"] == "completed" and runs[run_uid]["inputs"] == ["study:data@v5"]
+    assert runs[run_uid]["status"] == "completed" and runs[run_uid]["inputs"] == ["data@v5"]
     model = remote.get_version("study", "model", model_uid)
     # its draft opened after the remote was added, so it went to the remote while its run was the repo's: it says so
     assert model["inputs"] == [] and "gets no run input" in err
     fit = remote.get_version("study", "fit", made["fit"])
     [fit_run] = fit["inputs"]
-    assert remote.resolve(fit_run)[2]["inputs"] == ["study:data@v3"]
+    assert remote.resolve("study", fit_run)[1]["inputs"] == ["data@v3"]
     local = LocalRepo(project / ".cairn")
-    assert local.local_versions() == []
+    assert local.local_versions(OWN) == []
     for name in ("data", "runs/train", "model", "fit"):  # the repo took the remote's numbers over
-        mine = {v["uid"]: v["version"] for v in local.versions("study", name)}
+        mine = {v["uid"]: v["version"] for v in local.versions(OWN, name)}
         theirs = {v["uid"]: v["version"] for v in remote.versions("study", name)}
         assert all(theirs[uid] == number for uid, number in mine.items()), name
     assert "nothing pending" in cli(project, "status", env=env).stdout
@@ -937,7 +942,7 @@ if point:
 KILL_PUBLISH = """
 import pathlib, sys, cairn
 folder = pathlib.Path(sys.argv[1])
-version = cairn.connect().project().artifact("data").publish(folder)
+version = cairn.connect().artifact("data").publish(folder)
 print(version.uid, version.number)
 """
 
@@ -1021,7 +1026,7 @@ def test_sigkill_at_each_step_of_a_sync_loses_and_doubles_nothing(tmp_path, poin
     assert len({tuple(sorted((f["path"], f["sha256"]) for f in v["files"])) for v in data}) == len(data)  # no double version
     local = LocalRepo(project / ".cairn")
     for name, versions in everything.items():
-        mine = {v["uid"]: v["version"] for v in local.versions("study", name)} if name in local.artifacts("study") else {}
+        mine = {v["uid"]: v["version"] for v in local.versions(OWN, name)} if name in local.artifacts(OWN) else {}
         assert all(on_remote[uid]["version"] == number for uid, number in mine.items()), name
     verify_clean(project, env)
     assert cli(project, "verify", "--repo", str(server.root)).returncode == 0
@@ -1035,7 +1040,7 @@ folder = pathlib.Path(sys.argv[1])
 folder.mkdir(parents=True)
 (folder / "a.txt").write_text(sys.argv[1])
 (folder / "big.bin").write_bytes(os.urandom(int(sys.argv[2]) << 20))
-version = cairn.connect().project().artifact(sys.argv[3]).publish(folder)
+version = cairn.connect().artifact(sys.argv[3]).publish(folder)
 print("DONE", version.uid, flush=True)
 """
 
@@ -1112,7 +1117,7 @@ def test_random_sigkills_of_concurrent_writers_gc_syncs_and_the_server(tmp_path,
         assert outbox_of(project) == [], cli(project, "status", env=env).stdout
         assert "nothing pending" in cli(project, "status", env=env).stdout
     truth = LocalRepo(server.root if server else project / ".cairn")
-    everything = check_numbers(truth)
+    everything = check_numbers(truth, "study" if server else OWN)
     known = {version["uid"]: version for versions in everything.values() for version in versions}
     for uid in finished:
         assert known[uid]["status"] == "completed", known.get(uid)
@@ -1147,8 +1152,9 @@ print("DONE", run.uid, out.version.uid, step, flush=True)
 
 
 def test_a_server_stopped_and_killed_mid_run_changes_nothing_for_runs(tmp_path):
-    """A client's live run and a run on the server's own machine (the server's repo opened directly) keep going while
-    the server is stopped, SIGKILLed, and started again; both complete, nothing is failed, every step is kept."""
+    """A client's live run and a run on the server's own machine (the server's repo opened directly: its own, unnamed
+    project, beside the served project `study`) keep going while the server is stopped, SIGKILLed, and started again;
+    both complete, nothing is failed, every step is kept."""
     server = RealServer(tmp_path / "remote").start()
     env = base_env(CAIRN_TOKEN=server.token)
     client = project_at(tmp_path, "client", server.url, extra="heartbeat_timeout = 600\n")
@@ -1184,12 +1190,14 @@ def test_a_server_stopped_and_killed_mid_run_changes_nothing_for_runs(tmp_path):
     assert synced.returncode == 0, synced.stdout + synced.stderr
     remote = LocalRepo(server.root)
     check_numbers(remote)
+    check_numbers(remote, OWN)
     for name, (run_uid, out_uid, steps) in results.items():
-        run = remote.get_version("study", f"runs/{name}", run_uid)
+        project = "study" if name == "remote-run" else OWN
+        run = remote.get_version(project, f"runs/{name}", run_uid)
         assert run["status"] == "completed", (name, run.get("error"))
-        lines = b"".join(remote.read_file("study", f"runs/{name}", run_uid, "metrics.jsonl").chunks).decode().splitlines()
+        lines = b"".join(remote.read_file(project, f"runs/{name}", run_uid, "metrics.jsonl").chunks).decode().splitlines()
         assert len(lines) == steps, (name, len(lines), steps)
-        assert remote.get_version("study", f"{name}-out", out_uid)["inputs"] == [f"study:runs/{name}@v{run['version']}"]
+        assert remote.get_version(project, f"{name}-out", out_uid)["inputs"] == [f"runs/{name}@v{run['version']}"]
     assert outbox_of(client) == []
     verify_clean(client, env)
     assert cli(client, "verify", "--repo", str(server.root)).returncode == 0
@@ -1215,7 +1223,7 @@ OFFLINE_WORK = """
 import json, pathlib, sys, cairn
 tag, count = sys.argv[1], int(sys.argv[2])
 made = []
-project = cairn.connect().project()
+project = cairn.connect()
 for index in range(count):
     folder = pathlib.Path(f"work-{tag}/{index}")
     folder.mkdir(parents=True)
@@ -1247,12 +1255,12 @@ def test_many_senders_of_one_outbox_and_two_machines_number_everything_once(tmp_
     made_b = json.loads(subprocess.run([sys.executable, "work.py", "b", "6"], cwd=b, capture_output=True, text=True, env=env,
                                        check=True).stdout)
     proxy.mode = "forward"  # A uses B's version while it reaches the remote, then works offline
-    used = subprocess.run([sys.executable, "consume.py", "a1", "study:b-own@latest"], cwd=a, capture_output=True, text=True, env=env)
+    used = subprocess.run([sys.executable, "consume.py", "a1", "b-own@latest"], cwd=a, capture_output=True, text=True, env=env)
     assert used.returncode == 0, used.stderr
     proxy.mode = "refuse"
     made_a = json.loads(subprocess.run([sys.executable, "work.py", "a", "30"], cwd=a, capture_output=True, text=True, env=env,
                                        check=True).stdout)
-    offline_use = subprocess.run([sys.executable, "consume.py", "a2", f"study:a-own@{made_a[0]}"], cwd=a, capture_output=True,
+    offline_use = subprocess.run([sys.executable, "consume.py", "a2", f"a-own@{made_a[0]}"], cwd=a, capture_output=True,
                                  text=True, env=env)
     assert offline_use.returncode == 0, offline_use.stderr
     assert len(outbox_of(a)) == 32  # 30 publishes, the offline run and its output
@@ -1272,7 +1280,7 @@ def test_many_senders_of_one_outbox_and_two_machines_number_everything_once(tmp_
     watcher.send_signal(signal.SIGINT)
     finish(watcher, 60)
     assert outbox_of(a) == [], cli(a, "status", env=env).stdout
-    b_reads = subprocess.run([sys.executable, "consume.py", "b1", f"study:a-own@{made_a[2]}"], cwd=b, capture_output=True,
+    b_reads = subprocess.run([sys.executable, "consume.py", "b1", f"a-own@{made_a[2]}"], cwd=b, capture_output=True,
                              text=True, env=env)
     assert b_reads.returncode == 0, b_reads.stderr
     assert json.loads(b_reads.stdout)["used"] == made_a[2]
@@ -1285,13 +1293,13 @@ def test_many_senders_of_one_outbox_and_two_machines_number_everything_once(tmp_
     assert len(everything["shared"]) == 15 + 3 + 10  # every publish once
     for project in (a, b):  # each repo's copies carry the remote's numbers
         local = LocalRepo(project / ".cairn")
-        for name in local.artifacts("study"):
-            for version in local.versions("study", name):
+        for name in local.artifacts(OWN):
+            for version in local.versions(OWN, name):
                 assert on_remote[version["uid"]]["version"] == version["version"], (project.name, name)
         verify_clean(project, env)
     derived = remote.versions("study", "derived-a2")[0]
     [run_ref] = derived["inputs"]
-    assert remote.resolve(run_ref)[2]["inputs"] == [f"study:a-own@v{on_remote[made_a[0]]['version']}"]  # pending input renumbered
+    assert remote.resolve("study", run_ref)[1]["inputs"] == [f"a-own@v{on_remote[made_a[0]]['version']}"]  # pending input renumbered
     proxy.close()
     server.stop()
 
@@ -1392,7 +1400,7 @@ def test_cluster_jobs_on_a_network_filesystem_with_a_login_node_and_a_flaky_remo
     assert len(runs) >= len(finished) // 2 and sum(v["status"] == "failed" for v in runs) <= killed
     for result in everything.get("result", []):  # each result names its own run, by the remote's number
         [run_ref] = result["inputs"]
-        assert remote.resolve(run_ref)[2]["metadata"]["kind"] == "run"
+        assert remote.resolve("study", run_ref)[1]["metadata"]["kind"] == "run"
     verify_clean(project, env)
     assert not database.exists()
     proxy.close()
@@ -1430,13 +1438,13 @@ def test_finding_the_repo_from_anywhere(tmp_path):
     outer = project_at(tmp_path, "outer")
     inner = outer / "sub" / "inner"
     inner.mkdir(parents=True)
-    (inner / "cairn.toml").write_text('[repo]\nproject = "inner"\n')
+    (inner / "cairn.toml").write_text("")
     deep = inner / "a" / "b"
     deep.mkdir(parents=True)
     assert publish_here(deep, "x", "inner").returncode == 0  # nested: the nearest project wins
-    assert LocalRepo(inner / ".cairn").versions("inner", "x")[0]["version"] == 1
+    assert LocalRepo(inner / ".cairn").versions(OWN, "x")[0]["version"] == 1
     assert publish_here(outer / "sub", "x", "outer").returncode == 0
-    assert LocalRepo(outer / ".cairn").versions("study", "x")[0]["version"] == 1
+    assert LocalRepo(outer / ".cairn").versions(OWN, "x")[0]["version"] == 1
 
     link = tmp_path / "link"  # a symlinked project folder: one repo, whichever path a process takes
     link.symlink_to(outer)
@@ -1449,14 +1457,14 @@ def test_finding_the_repo_from_anywhere(tmp_path):
     for writer in writers:
         out, err = finish(writer, 120)
         assert writer.returncode == 0, err
-    assert [v["version"] for v in LocalRepo(outer / ".cairn").versions("study", "shared")] == [1, 2, 3, 4, 5, 6]
+    assert [v["version"] for v in LocalRepo(outer / ".cairn").versions(OWN, "shared")] == [1, 2, 3, 4, 5, 6]
 
     hydra = outer / "outputs" / "2026-10-16" / "01-02-03"  # a Hydra job's fresh folder
     hydra.mkdir(parents=True)
     run = subprocess.run([sys.executable, "-c", "import cairn; r = cairn.init(name='h', code=False, system=False); r.finish(); print(r.uid)"],
                          cwd=hydra, capture_output=True, text=True, env=base_env())
     assert run.returncode == 0, run.stderr
-    assert LocalRepo(outer / ".cairn").get_version("study", "runs/h", run.stdout.split()[-1])["status"] == "completed"
+    assert LocalRepo(outer / ".cairn").get_version(OWN, "runs/h", run.stdout.split()[-1])["status"] == "completed"
 
     drafting = subprocess.run([sys.executable, "-c", textwrap.dedent("""
         import os, subprocess, sys, cairn
@@ -1468,7 +1476,7 @@ def test_finding_the_repo_from_anywhere(tmp_path):
         print(draft.version.ref)
     """)], cwd=outer, capture_output=True, text=True, env=base_env())
     assert drafting.returncode == 0, drafting.stderr
-    assert drafting.stdout.strip().startswith("study:inside@v1")
+    assert drafting.stdout.strip().startswith("inside@v1")
 
     elsewhere = tmp_path / "elsewhere"  # CAIRN_DIR: that folder is the repo, wherever the command runs
     elsewhere.mkdir()
@@ -1476,9 +1484,9 @@ def test_finding_the_repo_from_anywhere(tmp_path):
     env = base_env(CAIRN_DIR=named)
     assert cli(elsewhere, "init", env=env).returncode == 0
     assert publish_here(elsewhere, "y", "named", env=env).returncode == 0
-    assert LocalRepo(named).versions("elsewhere", "y")[0]["version"] == 1
+    assert LocalRepo(named).versions(OWN, "y")[0]["version"] == 1
     assert publish_here(deep, "z", "named too", env=env).returncode == 0  # inside a project: still CAIRN_DIR's repo
-    assert LocalRepo(named).versions("inner", "z")[0]["version"] == 1
+    assert LocalRepo(named).versions(OWN, "z")[0]["version"] == 1
 
     nowhere = tmp_path / "nowhere"  # read-only commands outside any repo refuse, and make nothing
     nowhere.mkdir()
@@ -1521,7 +1529,7 @@ def test_odd_names_empty_files_and_symlinks_publish_and_read_back_byte_identical
     result = cli(project, "publish", str(data), "odd")
     assert result.returncode == 0, result.stderr
     repo = LocalRepo(project / ".cairn")
-    version = repo.versions("study", "odd")[0]
+    version = repo.versions(OWN, "odd")[0]
     entries = {entry["path"]: entry for entry in version["files"]}
     assert {path: entries[path]["sha256"] for path in files} == {path: sha(content) for path, content in files.items()}
     assert entries["sub/inside"]["link"] == "../empty.txt" and entries["sub/self"]["link"] == "self"
@@ -1559,9 +1567,9 @@ def test_files_that_change_while_published_and_files_that_cannot_be_read(tmp_pat
         assert result.returncode == 0, result.stderr
     finish(writer)
     repo = LocalRepo(project / ".cairn")
-    for version in repo.versions("study", "changing"):  # each version has what was staged, consistently
+    for version in repo.versions(OWN, "changing"):  # each version has what was staged, consistently
         for entry in version["files"]:
-            content = b"".join(repo.read_file("study", "changing", f"v{version['version']}", entry["path"]).chunks)
+            content = b"".join(repo.read_file(OWN, "changing", f"v{version['version']}", entry["path"]).chunks)
             assert sha(content) == entry["sha256"] and len(content) == entry["size"], (version["version"], entry["path"])
         numbers.append(version["version"])
     assert numbers == list(range(1, len(numbers) + 1))
@@ -1577,7 +1585,7 @@ def test_files_that_change_while_published_and_files_that_cannot_be_read(tmp_pat
     finally:
         os.chmod(locked / "secret.txt", 0o644)
     assert result.returncode == 1 and "Permission denied" in result.stderr and "Traceback" not in result.stderr
-    assert "locked" not in repo.artifacts("study")
+    assert "locked" not in repo.artifacts(OWN)
     verify_clean(project)
 
 
@@ -1625,8 +1633,8 @@ def test_a_full_disk_fails_cleanly_and_the_repo_recovers(tmp_path):
         (small / "c.txt").write_text("after")
         assert cli(project, "publish", str(small), "small").returncode == 0
         repo = LocalRepo(project / ".cairn")
-        check_numbers(repo)
-        assert "two" not in repo.artifacts("study")
+        check_numbers(repo, OWN)
+        assert "two" not in repo.artifacts(OWN)
         verify_clean(project)
     finally:
         subprocess.run(["hdiutil", "detach", str(mount), "-force", "-quiet"], capture_output=True)
@@ -1688,7 +1696,7 @@ def test_a_gc_sweep_between_staging_and_a_live_sync_does_not_lose_the_run(tmp_pa
     assert run.returncode == 0, err
     _, uid, swept = out.split()
     assert swept != "None" and int(swept) >= 1  # the sweep did remove a staged blob
-    version = LocalRepo(project / ".cairn").get_version("study", "runs/swept", uid)
+    version = LocalRepo(project / ".cairn").get_version(OWN, "runs/swept", uid)
     assert version["status"] == "completed", version.get("error")
     assert len([entry for entry in version["files"] if entry["path"].startswith("files/")]) == 40
     verify_clean(project)
@@ -1721,7 +1729,7 @@ def test_a_slow_remote_with_a_backlog_holds_a_command_up_for_a_bounded_time(tmp_
 
 TWO_PUBLISHES = """
 import json, pathlib, sys, time, cairn
-artifact = cairn.connect().project().artifact("kept")
+artifact = cairn.connect().artifact("kept")
 numbers = []
 for index in range(2):
     folder = pathlib.Path(f"k{index}")
@@ -1825,7 +1833,7 @@ def test_a_run_ends_only_once_its_large_output_is_on_a_healthy_remote(tmp_path):
     assert outbox_of(project) == []  # synced and numbered before the process ended
     remote = LocalRepo(server.root)
     assert remote.get_version("study", "runs/big", row["uid"])["status"] == "completed"
-    assert err.count("cairn: sending") == 1 and "MB of study:runs/big" in err, err
+    assert err.count("cairn: sending") == 1 and "MB of runs/big" in err, err
     assert 8 < took < 60, took
 
     proxy.mode = "throttle"  # now the bytes stop moving partway through

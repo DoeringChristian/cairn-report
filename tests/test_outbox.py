@@ -44,7 +44,7 @@ def test_pending_lives_in_the_repo_and_survives_removing_the_read_only_folders(d
     shutil.rmtree(repo / "versions")  # derived from the blobs: removing it loses nothing
     capsys.readouterr()
     down.start()
-    assert f"uploaded study:data@v1 (uid {version.uid})" in run(capsys, "sync")[0]
+    assert f"uploaded data@v1 ({version.short_id})" in run(capsys, "sync")[0]
     assert outbox_versions(env) == []
 
 
@@ -57,17 +57,18 @@ def test_a_sent_version_gets_its_number_in_the_repo_under_the_same_uid(down, env
 
     down.start()
     out, _ = run(capsys, "sync")
-    assert f"uploaded study:data@v1 (uid {version.uid})" in out
+    assert f"uploaded data@v1 ({version.short_id})" in out
     assert outbox_versions(env) == []
-    copy = store.backend.copies.get_version("study", "data", 1)
-    assert (copy["uid"], copy["status"], copy["origin"]) == (version.uid, "completed", store.uid)
-    assert store.backend.copies.aliases("study", "data") == {"latest": 1, "best": 1}  # the remote's aliases, mirrored
+    copy = store.backend.copies.get_version("data", 1)
+    assert (copy["uid"], copy["status"], copy["origin"]) == (version.uid, "completed", f"{store.uid}/study")
+    assert copy["short_id"] == version.short_id  # the remote's short id, the same as the repo's
+    assert store.backend.copies.aliases("data") == {"latest": 1, "best": 1}  # the remote's aliases, mirrored
     assert [v["uid"] for v in down.versions()] == [version.uid]
     before = len(down.requests)
     path = cairn.pull(f"data@{version.uid}", record=False)  # in the repo: no download, no request
     assert path == env / ".cairn" / "versions" / version.uid / "files" and (path / "a.txt").read_text() == "kept"
     assert down.requests[before:] == []
-    assert version.refresh().number == 1 and version.ref == "study:data@v1"
+    assert version.refresh().number == 1 and version.ref == "data@v1"
 
 
 def test_pending_version_is_usable_before_upload(down, env, capsys, monkeypatch):
@@ -88,8 +89,9 @@ def test_pending_version_is_usable_before_upload(down, env, capsys, monkeypatch)
     monkeypatch.setenv("CAIRN_INPUTS", str(inputs))
     for ref in ("data@best", "data@first", "data", "data@latest"):  # by the alias the publish set, its label, latest
         assert (cairn.pull(ref) / "n.txt").read_text() == "41", ref
-    assert "study:data@best is study:data@" in capsys.readouterr().err
-    assert {json.loads(line)["ref"] for line in inputs.read_text().splitlines()} == {f"study:data@{uid}"}  # uid-exact lineage
+    assert "data@best is data@" in capsys.readouterr().err
+    assert {json.loads(line)["ref"] for line in inputs.read_text().splitlines()} == {f"data@{uid}"}  # uid-exact lineage
+    assert (cairn.pull(data.short_id, record=False) / "n.txt").read_text() == "41"  # a pending version by its short id
     with store.artifact("data").version(uid).open("n.txt") as handle:
         assert handle.read() == b"41"
     assert store.version("data@best").pending and store.version("data@best").status == "pending"
@@ -104,20 +106,20 @@ def test_pending_version_is_usable_before_upload(down, env, capsys, monkeypatch)
 
     (env / "job" / "fit.txt").write_text("fit")  # a consumer published while down, with the pending input
     fit = store.artifact("fit").publish(env / "job")
-    assert fit.inputs == [f"study:data@{uid}"]
+    assert fit.inputs == [f"data@{uid}"]
     out, _ = run(capsys, "status")
-    assert out.count("pending\tstudy:") == 2 and uid in out
+    assert out.count("pending\t") == 2 and uid in out
 
     down.start()
     run(capsys, "sync")
-    assert down.versions("fit")[0]["inputs"] == ["study:data@v1"]  # the server turned the uid input into the number
-    assert cairn.LocalRepo(down.root).lineage("study:data@v1")["consumers"] == ["study:fit@v1"]
+    assert down.versions("fit")[0]["inputs"] == ["data@v1"]  # the server turned the uid input into the number
+    assert cairn.LocalRepo(down.root).lineage("study", "data@v1")["consumers"] == ["fit@v1"]
     assert cairn.LocalRepo(down.root).aliases("study", "data")["best"] == 1
 
 
 def test_a_running_version_is_not_usable(down, env, capsys):
     store = cairn.connect()
-    record = store.backend._new_entry("running", "study", "live")
+    record = store.backend._new_entry("running", "live")
     with pytest.raises(cairn.StoreError, match="running"):
         store.artifact("live").version(record["uid"]).pull()
 
@@ -132,7 +134,7 @@ def test_heartbeat_expiry_fails_a_running_version_from_another_host(down, env, c
 
     (env / "cairn.toml").write_text((env / "cairn.toml").read_text() + "heartbeat_timeout = 30\n")
     store = cairn.connect()
-    record = store.backend._new_entry("running", "study", "sweep", label="job")
+    record = store.backend._new_entry("running", "sweep", label="job")
     for module in (outbox_module, folders_module, sync_module):  # from now on, this process is a login node elsewhere
         monkeypatch.setattr(module, "hostname", lambda: "login-node")
     down.start()
@@ -140,14 +142,14 @@ def test_heartbeat_expiry_fails_a_running_version_from_another_host(down, env, c
     assert "running versions are sent by the processes that run them" in out
     assert down.versions("sweep") == [] and outbox_versions(env) == [record["uid"]]
     status = run(capsys, "status")[0]
-    assert status.startswith("running\tstudy:sweep\t-\t") and re.search(r"\theartbeat \d+s ago", status)
+    assert status.startswith("running\tsweep\t-\t") and re.search(r"\theartbeat \d+s ago", status)
 
     heartbeat = env / ".cairn" / "outbox" / record["uid"] / "heartbeat"
     beat = json.loads(heartbeat.read_text())
     assert beat["host"] != "login-node" and beat["pid"] == os.getpid()
     heartbeat.write_text(json.dumps({**beat, "time": time.time() - 31}))  # its job went silent
     out, _ = run(capsys, "sync")
-    assert "failing study:sweep@" in out and "no heartbeat from" in out and "failed study:sweep@v1" in out
+    assert "failing sweep@" in out and "no heartbeat from" in out and "failed sweep@v1" in out
     assert [(v["status"], v["uid"]) for v in down.versions("sweep")] == [("failed", record["uid"])]
     assert outbox_versions(env) == []
 
@@ -208,7 +210,7 @@ def test_concurrent_senders_on_one_outbox_send_each_version_once(down, env, tmp_
     assert outbox_versions(env) == []
     assert not [path for path in (env / ".cairn").rglob("*") if ".tmp-" in path.name or ".flushing-" in path.name]
     numbers = sorted((copy["version"], name) for name in ("data0", "data1", "data2")
-                     for copy in store.backend.copies.versions("study", name))
+                     for copy in store.backend.copies.versions(name))
     assert len(numbers) == 8  # every one recorded in the repo with the remote's number
 
 
@@ -232,17 +234,17 @@ def test_sync_mirrors_the_remotes_aliases_into_the_repo(down, env, capsys, monke
     store.artifact("data").publish(folder(env, "d", {"a.txt": "one"}), aliases=["best"])
     with monkeypatch.context() as other:  # another machine publishes v2 and moves best
         other.setenv("CAIRN_DIR", str(env.parent / "other-repo"))
-        cairn.connect(down.url, token=down.token, project="study").artifact("data").publish(
+        cairn.connect(f"{down.url}/study", token=down.token).artifact("data").publish(
             folder(env, "d2", {"a.txt": "two"}), aliases=["best"])
     cairn.pull("data@v2", record=False)  # copied into the repo, but the repo still says best is v1
     out, err = run(capsys, "pull", "data@best", "--offline", "--no-record")
     assert (Path(out.strip()) / "a.txt").read_text() == "one"
     assert "mirrored the aliases of 1 artifacts" in run(capsys, "sync")[0]
     out, err = run(capsys, "pull", "data@best", "--offline", "--no-record")
-    assert (Path(out.strip()) / "a.txt").read_text() == "two" and "study:data@v2" in err
-    assert store.backend.copies.aliases("study", "data") == {"latest": 2, "best": 2}
+    assert (Path(out.strip()) / "a.txt").read_text() == "two" and "data@v2" in err
+    assert store.backend.copies.aliases("data") == {"latest": 2, "best": 2}
     known = json.loads((env / ".cairn" / "repo.json").read_text())["remote"]
-    assert known == {"url": down.url, "uid": store.uid}
+    assert known == {"url": f"{down.url}/study", "uid": store.uid}
     assert "nothing pending" in run(capsys, "status")[0]
 
 
@@ -281,7 +283,7 @@ def test_prune_removes_read_only_folders_by_last_access_and_never_pending_conten
     blobs = [path for path in (env / ".cairn" / "blobs").rglob("*") if path.is_file()]
     assert len(blobs) == 1  # only the pending version's: the remote has the others
     assert (cairn.pull(f"data@{pending.uid}", record=False) / "a.txt").read_text().startswith("pending")
-    assert store.backend.copies.get_version("study", "data", 1)["uid"] == old.uid  # the copies' metadata stays
+    assert store.backend.copies.get_version("data", 1)["uid"] == old.uid  # the copies' metadata stays
     down.start()
     assert (cairn.pull("data@v1//a.txt", record=False)).read_text().startswith("old")  # downloaded again
     store.sync()

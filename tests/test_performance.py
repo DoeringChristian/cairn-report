@@ -196,7 +196,7 @@ def test_writes_of_a_second_process_are_seen_at_once(tmp_path):
         "s.publish('p', 'x', e, metadata={'n': 2}); s.publish('p', 'y/z', e); s.set_alias('p', 'x', 'best', 1)\n")
     subprocess.run([sys.executable, "-c", script, str(root), sha], check=True)
     assert [v["metadata"]["n"] for v in store.versions("p", "x")] == [1, 2]
-    assert store.resolve("p:x")[2]["version"] == 2 and store.resolve("p:x@best")[2]["version"] == 1
+    assert store.resolve("p", "x")[1]["version"] == 2 and store.resolve("p", "x@best")[1]["version"] == 1
     summaries = {item["name"]: item for item in store.summaries("p")}
     assert set(summaries) == {"x", "y/z"} and summaries["x"]["versions"] == 2 and summaries["x"]["aliases"] == {"latest": 2, "best": 1}
     assert summaries["x"]["metadata"] == {"n": 2}

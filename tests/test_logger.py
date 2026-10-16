@@ -65,7 +65,7 @@ def test_report_reads_logged_run(tmp_path, monkeypatch):
     out = tmp_path / ".cairn" / "build" / "main"
     assert ">0.125</span>" in (out / "narrative.html").read_text()
     manifest = json.loads((out / "manifest.json").read_text())
-    assert "input:demo/metrics.jsonl" in manifest["sources"] and manifest["inputs"]["demo"]["resolved"] == f"{tmp_path.name}:demo@v1"
+    assert "input:demo/metrics.jsonl" in manifest["sources"] and manifest["inputs"]["demo"]["resolved"] == "demo@v1"
 
 
 def test_origin_capture_is_cheap(tmp_path):

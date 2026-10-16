@@ -161,6 +161,7 @@ def test_a_fresh_folder_gets_one_repo_at_the_launch_folder(hydra_project):
     assert list(hydra_project.rglob("repo.json")) == [hydra_project / ".cairn" / "repo.json"]
     repo = LocalRepo(hydra_project / ".cairn")
     [project] = [item["name"] for item in repo.projects()]
+    assert project == ""  # a project's repo holds one project, unnamed
     runs = repo.versions(project, "runs/demo")
     assert [v["status"] for v in runs] == ["completed"] * 4  # the single job, two trials, and the sweep's summary
     assert len([v for v in runs if (v["metadata"].get("sweep") or {}).get("trials")]) == 1

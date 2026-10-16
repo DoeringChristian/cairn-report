@@ -18,9 +18,19 @@ from cairn.store.digest import canonical, manifest_digest
 from cairn.store.errors import Conflict
 from cairn.store.fs import clone
 
+from cairn import Remote
+from cairn.store import OWN, LocalProject
+from cairn.client.http import Client
+
 from test_offline import down, run  # noqa: F401
-from test_server import api, server, use_remote  # noqa: F401
+from test_server import api, server  # noqa: F401
 from test_store import env, folder  # noqa: F401
+
+
+def use_remote(env, server, project="study") -> Remote:
+    """The project's remote: the project `project` on the server."""
+    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/{project}"\ninterval = 1\n')
+    return Remote(Client(server.url, server.token), project)
 
 
 def sha(text: str) -> str:
@@ -49,7 +59,7 @@ def test_digest_canonical_form_golden_value():
 
 
 def test_local_digest_depends_on_files_only(env):
-    local = LocalRepo(env / ".store", "study")
+    local = LocalRepo(env / ".store")
     for text in ("1", "2"):
         local.put_blob(sha(text), io.BytesIO(text.encode()), len(text))
     local.create_project("study")
@@ -85,7 +95,7 @@ def test_object_api_cli_and_pull_see_the_digest(env, capsys):
 
 def test_server_rejects_a_wrong_client_digest(server, env):
     r = use_remote(env, server)
-    r.create_project("study")
+    r.create()
     local = LocalRepo(server.root)
     entries = entries_of({"a.txt": "hi"})
     r.put_blob(sha("hi"), io.BytesIO(b"hi"), 2)
@@ -118,7 +128,7 @@ def test_clients_send_the_digest_and_the_pending_version_knows_it(server, env):
     with store.connect().artifact("run").publishing(folder(env, "r", {"x.txt": "1"})) as pub:
         pub.sync()
     assert store.connect().artifact("run").version(1).digest == manifest_digest(entries_of({"x.txt": "1"}))
-    assert r.get_version("study", "run", 1)["digest"] == manifest_digest(entries_of({"x.txt": "1"}))
+    assert r.get_version("run", 1)["digest"] == manifest_digest(entries_of({"x.txt": "1"}))
 
 
 def test_pending_version_has_its_digest_before_upload(down, env):
@@ -131,7 +141,7 @@ def test_pending_version_has_its_digest_before_upload(down, env):
 
 def test_existing_versions_get_digests_when_the_store_opens(tmp_path):
     root = tmp_path / "old"
-    local = LocalRepo(root, "study")
+    local = LocalRepo(root)
     local.create_project("study")
     local._blobs.put_blob(sha("hi"), io.BytesIO(b"hi"), 2)
     local.publish("study", "a", entries_of({"x.txt": "hi"}))
@@ -146,7 +156,7 @@ def test_existing_versions_get_digests_when_the_store_opens(tmp_path):
     connection.execute("DELETE FROM meta WHERE key = 'digests'")
     connection.commit()
     connection.close()
-    reopened = LocalRepo(root, "study")
+    reopened = LocalRepo(root)
     assert [version.get("digest") for version in reopened.versions("study", "a")] == [
         manifest_digest(entries_of({"x.txt": "hi"})), manifest_digest(entries_of({"y.txt": "hi"})), None]
     assert "digest" not in reopened.get_version("study", "a", running)
@@ -182,8 +192,8 @@ def can_clone(tmp_path) -> bool:
 
 
 def local_pull(env, text="hello"):
-    backend = LocalRepo(env / ".store", "study")
     version = store.connect(env / ".store").artifact("data").publish(folder(env, "d", {"a.txt": text}))
+    backend = LocalProject(LocalRepo(env / ".store"), OWN)
     return backend, version
 
 
@@ -230,11 +240,11 @@ def test_a_damaged_blob_fails_the_pull_and_leaves_no_partial_folder(env):
 
 def test_a_wrong_manifest_digest_fails_the_pull(env):
     backend, version = local_pull(env)
-    state = backend.get_version("study", "data", 1)
+    state = backend.get_version("data", 1)
     from cairn.store.folders import materialize_version
 
     with pytest.raises(StoreError, match="manifest digest"):
-        materialize_version(backend, "study", "data", {**state, "digest": "sha256:" + "1" * 64, "uid": "0190" + state["uid"][4:]}, backend.root)
+        materialize_version(backend, "data", {**state, "digest": "sha256:" + "1" * 64, "uid": "0190" + state["uid"][4:]}, backend.root)
     assert not [p for p in (backend.root / "versions").iterdir()]
 
 
@@ -243,10 +253,10 @@ def test_a_wrong_manifest_digest_fails_the_pull(env):
 
 def test_tampered_cache_blob_fails_the_pull_and_verify_repairs_it(server, env, capsys):
     r = use_remote(env, server)
-    store.publish("data", folder(env, "d", {"a.txt": "shared", "b.txt": "other"}), store=r)
-    path = store.pull("data@v1", store=r)
+    store.publish("data", folder(env, "d", {"a.txt": "shared", "b.txt": "other"}))
+    path = store.pull("data@v1")
     run(capsys, "verify")  # clean (exit 0)
-    uid = r.get_version("study", "data", 1)["uid"]
+    uid = r.get_version("data", 1)["uid"]
     blob = blob_path(env / ".cairn", sha("shared"))
     assert blob.is_file()
     os.chmod(blob, 0o644)
@@ -256,19 +266,19 @@ def test_tampered_cache_blob_fails_the_pull_and_verify_repairs_it(server, env, c
     # the pull of an unmaterialized version names the file
     cache_module.remove(cache_module.version_folder(env / ".cairn", uid))
     with pytest.raises(StoreError, match=r"a\.txt does not match its manifest"):
-        store.pull("data@v1", store=r)
+        store.pull("data@v1")
     assert not cache_module.version_folder(env / ".cairn", uid).exists()
     out, err = run(capsys, "verify", "--repair")  # repaired problems exit 0
     assert str(blob) in out and "(removed)" in out and not blob.exists()
-    assert (store.pull("data@v1", store=r) / "a.txt").read_text() == "shared"  # downloaded again
+    assert (store.pull("data@v1") / "a.txt").read_text() == "shared"  # downloaded again
     run(capsys, "verify")
 
 
 def test_verify_finds_a_tampered_materialized_file_and_repair_drops_the_version(server, env, capsys, monkeypatch):
     no_clone_no_link(monkeypatch)
     r = use_remote(env, server)
-    store.publish("data", folder(env, "d", {"a.txt": "one"}), store=r)
-    path = store.pull("data@v1", store=r)
+    store.publish("data", folder(env, "d", {"a.txt": "one"}))
+    path = store.pull("data@v1")
     os.chmod(path / "a.txt", 0o644)
     (path / "a.txt").write_text("edited")
     (path / "extra.txt").write_text("not in the manifest")
@@ -276,13 +286,13 @@ def test_verify_finds_a_tampered_materialized_file_and_repair_drops_the_version(
     assert "a.txt" in out and "extra.txt" in out
     run(capsys, "verify", "--repair")
     assert not path.exists()
-    assert (store.pull("data@v1", store=r) / "a.txt").read_text() == "one"
+    assert (store.pull("data@v1") / "a.txt").read_text() == "one"
 
 
 def test_verify_a_version_by_reference(server, env, capsys):
     r = use_remote(env, server)
-    store.publish("data", folder(env, "d", {"a.txt": "one"}), store=r)
-    path = store.pull("data@v1", store=r)
+    store.publish("data", folder(env, "d", {"a.txt": "one"}))
+    path = store.pull("data@v1")
     out, _ = run(capsys, "verify", "data@v1")
     assert "no problems" in out
     os.chmod(path / "a.txt", 0o644)
@@ -311,7 +321,7 @@ def test_verify_pending_versions(down, env, capsys):
 
 def make_store(tmp_path):
     root = tmp_path / "root"
-    local = LocalRepo(root, "study")
+    local = LocalRepo(root)
     local.create_project("study")
     for text in ("one", "two", "three"):
         local._blobs.put_blob(sha(text), io.BytesIO(text.encode()), len(text))
@@ -332,9 +342,9 @@ def test_verify_a_store_finds_corrupt_and_missing_blobs(tmp_path, capsys):
     report = local.verify()
     kinds = sorted((problem.kind, problem.path) for problem in report.problems)
     assert any(path == str(corrupt) for _, path in kinds)  # the blob does not match its name
-    assert any("study:b@v1" in path and "missing" in problem.message for problem in report.problems for path in [problem.path])
+    assert any("b@v1 (project study)" in path and "missing" in problem.message for problem in report.problems for path in [problem.path])
     out, err = run(capsys, "verify", "--repo", str(root), code=1)
-    assert str(corrupt) in out and "study:b@v1" in out and "problems" in err
+    assert str(corrupt) in out and "b@v1 (project study)" in out and "problems" in err
 
 
 def test_verify_a_store_checks_manifest_digests(tmp_path):
@@ -346,7 +356,7 @@ def test_verify_a_store_checks_manifest_digests(tmp_path):
     connection.execute("UPDATE versions SET manifest = ? WHERE name = 'a'", (json.dumps(state),))
     connection.commit()
     connection.close()
-    assert [problem.kind for problem in LocalRepo(root, "study").verify().problems] == ["digest"]
+    assert [problem.kind for problem in LocalRepo(root).verify().problems] == ["digest"]
 
 
 def test_object_api_verify(env):
