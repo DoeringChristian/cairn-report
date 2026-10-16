@@ -2,7 +2,8 @@
 
 Decided 2026-10-15 with the owner; projects, short ids and errors added 2026-10-16; simplified for its one user the
 same day (settings in `.cairn/config.toml` and `cairn remote`, one token, logins without timeouts, plain HTTP with a
-warning). Fixed: later work fits this design; it does not change it.
+warning). The version identity and the reference syntax were made foundational on 2026-10-16 (0.15.0: one id per
+version, git-like, and one parser). Fixed: later work fits this design; it does not change it.
 
 ## The rules
 
@@ -18,7 +19,7 @@ warning). Fixed: later work fits this design; it does not change it.
    project needs a remote, and each version goes through its own outbox folder (one writer per folder), which any
    node, including the login node, sends to the remote.
 4. **One source of truth for numbers, aliases and deletions.** With a remote, the remote's server; without
-   one, the repo. A version's **uid** is its identity everywhere; `vN` is the source of truth's name for it.
+   one, the repo. A version's **id** is its identity everywhere; `vN` is the source of truth's name for it.
 
 ## Vocabulary
 
@@ -29,7 +30,7 @@ warning). Fixed: later work fits this design; it does not change it.
 | remote | a project on a `cairn server`: `[remote] url = "https://host/<project>"` (`cairn remote set`), like a git remote |
 | project | what a repo holds: locally exactly one (unnamed), on a server many, each at `<server>/<project>` |
 | source of truth | the remote if configured, else the repo |
-| outbox | `<repo>/outbox/<uid>/`: one version on its way to the remote (manifest + state); one writer |
+| outbox | `<repo>/outbox/<id>/`: one version on its way to the remote (manifest + state); one writer |
 | synced | the remote has the version and assigned its number |
 
 ## Layout
@@ -40,12 +41,12 @@ warning). Fixed: later work fits this design; it does not change it.
 ├── config.toml              the project's settings (see Configuration)
 ├── metadata.sqlite3         versions, aliases, lineage (WAL)   — not on a network filesystem
 ├── blobs/<aa>/<sha256>      content-addressed files, written once (temp + rename), shared by all versions
-├── outbox/<uid>/            versions not yet on the remote (manifest, state); only with a remote
+├── outbox/<id>/            versions not yet on the remote (manifest, state); only with a remote
 ├── drafts/                  folders that become versions (runs, `cairn.draft`)
 ├── build/  share/  reviews/ report builds, shared pages, review state
 ├── token                    the one token: `cairn server`'s, or a client's for the remote
 ├── ui-token                 the login of the project's own `cairn ui` when there is no `token`
-├── heartbeats/<uid>         running versions' heartbeats
+├── heartbeats/<id>         running versions' heartbeats
 ├── server.lock              held by the one `cairn server` serving this repo
 └── tmp/
 ```
@@ -67,32 +68,65 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
   several projects need is published in each of them; the server stores its files once (content-addressed
   blobs), and so does a repo for a file in several versions.
 
-## Short ids
+## Identity and references
 
-- Every version has a **short id**: the first 7 hex digits of the SHA-256 of its uid (longer when needed
-  to be unique), fixed when the version is created and the same in the repo and on the remote.
-- `name@<id>` and a bare `<id>` (as in `cairn show 3f9a2c1`) name a version, by any unique prefix of
-  4 or more digits. Names, numbers, aliases and labels are matched first; an ambiguous prefix is an error
-  that lists the candidates.
+- **A version's id is its only identity**, as a commit's hash is in git: 64 lowercase hex digits, random
+  (256 bits from the operating system's generator), made by whoever creates the version (a script offline, a
+  CLI command, the server), never changed and never reused. The database, manifests, inputs and lineage, the
+  outbox and read-only folders (`outbox/<id>/`, `versions/<id>/`), heartbeats, the HTTP API, the UI's URLs and
+  reports all name a version by its id. There is no second identifier.
+- **A short id is a prefix of the id.** Cairn shows the shortest prefix of at least 7 digits that is unique in
+  the project; any unique prefix of 4 or more digits names the version; a prefix that matches several versions
+  is an error that lists them. The full id is shown by `cairn show` and on the version's page.
+- **Order never comes from ids.** Listings, `@latest`, and the order in which the outbox is sent come from the
+  version number and `created` (and a run's outputs follow their run), never from the id's digits.
+- **A reference has exactly one of four forms**, told apart by its shape alone, before anything is looked up:
+
+  | form | meaning |
+  |---|---|
+  | `<id>` | one version: 4 to 64 hex digits (a prefix of its id) |
+  | `<name>` | the artifact's newest completed version (`@latest`) |
+  | `<name>@v<n>` | version n of the artifact |
+  | `<name>@<word>` | the version an alias (`best`, `latest`) or a label (a run's timestamp) names |
+
+  A file inside a version follows after `//` (`descent@v3//figures/a.png`, `3f9a2c1//figures/a.png`).
+- **The forms cannot overlap:** an id has no `@`; `v<n>` is never a word; an artifact name, an alias and a
+  label are never 4 or more hex digits alone (`cafe`, `1234` and `deadbeef` are refused when a name, alias or
+  label is created), so a bare word is an id or a name by its shape, and a word after `@` is a number or a
+  word. An alias and a label cannot share a word (creating the second is refused).
+- **One parser** (`store/refs.py`) reads every reference, wherever it comes from: the CLI, the Python API,
+  report `inputs:`, `.cairn-inputs.jsonl`, the server, and the UI's URLs (`/p/<project>/a/<name>@v3`,
+  `/p/<project>/v/<id>`). Nothing rewrites a reference before it; no layer has a shortcut of its own.
+
+## Upgrading a 0.14 repo
+
+`cairn upgrade [repo]` converts a repo made by 0.14 (a project's `.cairn/`, or a server's repo folder) in place,
+once: every version gets a new id, and every place that named its uid (inputs, lineage, aliases, outbox entries,
+read-only folders, heartbeats) is rewritten to it; numbers, labels, aliases, files and blobs stay. It refuses to
+run while another process uses the repo (a running `cairn server`, an open run), writes a backup of the
+database first (`metadata.sqlite3.0.14.bak`), works in one transaction, and checks the result with
+`cairn verify` before it reports success. Every other command refuses a 0.14 repo with a message naming
+`cairn upgrade`. A server and its clients upgrade together (a 0.15 client refuses a 0.14 server and the other
+way round, with a message saying so). This is the one piece of compatibility code, kept until 0.16.
 
 ## Versions and numbers
 
 - **Without a remote** the repo assigns `vN` when a version starts, as a store does today.
 - **With a remote** the remote assigns `vN`. A version made while the remote answers gets its number at
   once (the version is started on the remote too). A version made offline is created in the repo with its
-  uid and no number ("pending"); it is written to the outbox, and when the remote takes it, the repo records
-  the remote's number. References by uid, by `@latest`, and the version objects work before that.
+  id and no number ("pending"); it is written to the outbox, and when the remote takes it, the repo records
+  the remote's number. References by id, by `@latest`, and the version objects work before that.
 - **Versions from the remote** that a process uses (`cairn.use`, `pull`, a report input) are copied into
-  the repo with the remote's number and uid: their blobs into `blobs/`, their metadata into the database.
+  the repo with the remote's number and id: their blobs into `blobs/`, their metadata into the database.
   The repo is the cache; there is no separate cache folder. `cairn prune` may drop copies of versions the
   remote has; it never drops a version that is not synced.
 - **`@latest` in the repo** is the newest completed version the repo knows: synced, pending, or copied.
-  On the remote it is the remote's latest. A report records the uid and number it resolved.
+  On the remote it is the remote's latest. A report records the id and number it resolved.
 - **Aliases and deletions with a remote** need the remote (they change the source of truth): set or
   removed there, then mirrored into the repo. Offline they fail with a clear message.
 - **Adding a remote to a repo** that already has numbered versions: the first sync sends them, oldest
-  first; the remote assigns its numbers and the repo takes them over (uids unchanged, so lineage and
-  reports, which record uids, stay valid).
+  first; the remote assigns its numbers and the repo takes them over (ids unchanged, so lineage and
+  reports, which record ids, stay valid).
 
 ## Sync
 
@@ -101,7 +135,7 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
   for a login node). Each attempt is quick to fail when the remote does not answer; nothing blocks a run.
 - **What:** each outbox entry (a version, and for a running version its newest state): missing blobs first,
   then the manifest; the remote's answer (number) is written to the repo, and the outbox entry is removed
-  only after that. Idempotent by uid: an interrupted or repeated sync never makes a second version.
+  only after that. Idempotent by id: an interrupted or repeated sync never makes a second version.
 - **Refusals** (the remote rejects a version for good, e.g. a name it does not allow): the entry stays as
   `rejected` with the reason, shown by `cairn status`; never silently dropped.
 - **`cairn status`** lists pending, running, and rejected entries; empty means the remote has everything.
