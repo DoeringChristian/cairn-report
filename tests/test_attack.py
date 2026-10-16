@@ -1243,3 +1243,124 @@ def test_many_senders_of_one_outbox_and_two_machines_number_everything_once(tmp_
     assert remote.resolve(run_ref)[2]["inputs"] == [f"study:a-own@v{on_remote[made_a[0]]['version']}"]  # pending input renumbered
     proxy.close()
     server.stop()
+
+
+# ====================================================================== 5. a cluster: the repo on a network filesystem
+
+NFS_HOOK = """
+import cairn.store.fs as fs
+import cairn.store.local as local
+import cairn.client.open as open_module
+fs.network_filesystem = local.network_filesystem = open_module.network_filesystem = lambda path: "nfs4"
+"""
+
+NFS_JOB = """
+import json, os, sys, time, cairn
+index, steps = int(sys.argv[1]), int(sys.argv[2])
+run = cairn.init(name="job", config={"index": index}, code=False, system=False)
+for step in range(steps):
+    run.add({"loss": 1.0 / (step + 1), "step": step})
+    time.sleep(0.02)
+with cairn.draft("result") as result:
+    result.add_json("value", {"index": index})
+    (result.path / "big.bin").write_bytes(os.urandom(2 << 20))
+run.finish()
+print("DONE", run.uid, result.version.uid, flush=True)
+"""
+
+
+def nfs_env(tmp_path: Path, **extra) -> dict:
+    hook = tmp_path / "nfs-hook"
+    hook.mkdir(exist_ok=True)
+    (hook / "sitecustomize.py").write_text(NFS_HOOK)
+    env = base_env(**extra)
+    env["PYTHONPATH"] = os.pathsep.join([str(hook), env.get("PYTHONPATH", "")])
+    return env
+
+
+def test_cluster_jobs_on_a_network_filesystem_with_a_login_node_and_a_flaky_remote(tmp_path):
+    """Jobs on "NFS" (the check patched) write runs and drafts while the remote comes and goes (some jobs reach it,
+    others do not); some are SIGKILLed; a login node runs `cairn sync --watch` all along and races the jobs that reach
+    the remote for the same entries. No database is ever made on the network filesystem, and the remote ends with
+    every finished version once and no run left running."""
+    server = RealServer(tmp_path / "remote").start()
+    proxy = FaultProxy(server.port, mode="refuse")
+    env = nfs_env(tmp_path, CAIRN_TOKEN=server.token)
+    project = project_at(tmp_path, "cluster", proxy.url)
+    script(project, "job.py", NFS_JOB)
+    database = project / ".cairn" / "metadata.sqlite3"
+    seen_database = []
+    stop = threading.Event()
+
+    def watch_database():
+        while not stop.wait(0.05):
+            if database.exists() or (project / ".cairn" / "metadata.sqlite3-wal").exists():
+                seen_database.append(time.time())
+
+    threading.Thread(target=watch_database, daemon=True).start()
+    rng = random.Random(7)
+    login = spawn(project, "-m", "cairn", "sync", "--watch", env=env)
+    finished, jobs, killed = [], [], 0
+    try:
+        for wave in range(4):
+            proxy.mode = rng.choice(["refuse", "forward", "hang", "forward"])
+            jobs = [spawn(project, "job.py", wave * 10 + index, rng.randint(5, 60), env=env) for index in range(6)]
+            time.sleep(rng.uniform(0.3, 1.5))
+            proxy.mode = rng.choice(["refuse", "forward"])
+            for job in jobs:
+                if rng.random() < 0.3:
+                    job.send_signal(signal.SIGKILL)
+            for job in jobs:
+                out, err = finish(job, 300)
+                if job.returncode == -signal.SIGKILL:
+                    killed += 1
+                    continue
+                assert job.returncode == 0, err
+                finished += out.split()[1:3]
+        proxy.mode = "forward"
+        deadline = time.time() + 180
+        while outbox_of(project) and time.time() < deadline:
+            time.sleep(0.3)
+        left = cli(project, "status", env=env).stdout
+    finally:
+        login.send_signal(signal.SIGINT)
+        finish(login, 60)
+        stop.set()
+    assert not seen_database and not database.exists()  # never a database on the network filesystem
+    assert outbox_of(project) == [], (left, {uid: sorted(path.name for path in (project / ".cairn" / "outbox" / uid).iterdir())
+                                             for uid in outbox_of(project)})
+    remote = LocalRepo(server.root)
+    everything = check_numbers(remote)
+    on_remote = {version["uid"]: version for versions in everything.values() for version in versions}
+    for uid in finished:
+        assert on_remote[uid]["status"] == "completed", on_remote.get(uid)
+    assert not [v for v in on_remote.values() if v["status"] == "running"]
+    runs = everything["runs/job"]
+    print(f"\ncluster: {len(finished) // 2} jobs finished, {killed} killed; the remote has {len(runs)} runs "
+          f"({sum(v['status'] == 'failed' for v in runs)} failed) and {len(everything.get('result', []))} results")
+    assert len(runs) >= len(finished) // 2 and sum(v["status"] == "failed" for v in runs) <= killed
+    for result in everything.get("result", []):  # each result names its own run, by the remote's number
+        [run_ref] = result["inputs"]
+        assert remote.resolve(run_ref)[2]["metadata"]["kind"] == "run"
+    verify_clean(project, env)
+    assert not database.exists()
+    proxy.close()
+    server.stop()
+
+
+def test_late_writes_never_bring_a_sent_entry_back(tmp_path):
+    """A sender's save, a heartbeat, or a claim refresh that comes after another sender removed the entry (it was sent)
+    must not make the folder again: as a pending entry it would be sent again, as a folder of leftovers it is junk that
+    `cairn status` does not explain."""
+    from cairn.store.outbox import Outbox
+    from cairn.store.uids import new_uid
+
+    outbox = Outbox(tmp_path)
+    record = {"uid": new_uid(), "sync": "running", "status": "running", "files": []}
+    outbox.create(record, running=True)
+    claim = outbox.claim(record["uid"], 600)
+    outbox.remove(record)  # another sender sent it
+    outbox.beat(record["uid"])
+    outbox.refresh_claim(claim)
+    assert outbox.save({**record, "sync": "pending", "status": "completed"}) is False
+    assert not outbox.folder_of(record["uid"]).exists() and outbox.records() == []

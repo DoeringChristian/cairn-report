@@ -26,6 +26,24 @@ from datetime import datetime
 from pathlib import Path
 
 from .folders import RECORD, hostname, pid_alive, read_json, read_record, remove, scratch, write_json
+
+
+def _put(path: Path, value) -> bool:
+    """Write-temp-and-rename into an entry's folder, never making the folder: once an entry was sent and removed, a
+    late write (a heartbeat, a claim, a sender's save) must not bring it back. False when the folder is gone."""
+    temporary = scratch(path)
+    try:
+        temporary.write_text(json.dumps(value, indent=1))
+    except FileNotFoundError:
+        return False
+    try:
+        os.replace(temporary, path)
+    except FileNotFoundError:
+        temporary.unlink(missing_ok=True)
+        return False
+    if not path.parent.is_dir():  # removed between the two steps (a rename into a folder being removed)
+        return False
+    return True
 from .refs import Ref
 
 OUTBOX = "outbox"
@@ -87,8 +105,9 @@ class Outbox:
         record = read_record(self.folder_of(uid))
         return record if record and record.get("sync") in ("pending", "running", "rejected") else None
 
-    def save(self, record: dict) -> None:
-        write_json(self.folder_of(record["uid"]) / RECORD, {key: value for key, value in record.items() if not key.startswith("_")})
+    def save(self, record: dict) -> bool:
+        """Rewrite an entry; False (and nothing written) when it is gone (sent and removed by another sender)."""
+        return _put(self.folder_of(record["uid"]) / RECORD, {key: value for key, value in record.items() if not key.startswith("_")})
 
     def create(self, record: dict, running: bool) -> None:
         """Put a new entry in place in one step (built under a scratch name, then renamed): it exists whole or not at all."""
@@ -131,10 +150,13 @@ class Outbox:
         if not folder.is_dir():
             return
         try:
-            write_json(folder / RECORD, {**{key: value for key, value in record.items() if not key.startswith("_")}, "sync": "synced"})
+            _put(folder / RECORD, {**{key: value for key, value in record.items() if not key.startswith("_")}, "sync": "synced"})
         except OSError:
             pass
-        remove(folder)
+        for _ in range(3):  # a late heartbeat or claim written while it was being removed: remove again
+            remove(folder)
+            if not folder.exists():
+                break
 
     # --------------------------------------------------------------- heartbeats
 
@@ -143,7 +165,7 @@ class Outbox:
         if not self.folder_of(uid).is_dir():
             return
         try:
-            write_json(self.folder_of(uid) / HEARTBEAT, {"time": time.time(), "host": hostname(), "pid": os.getpid()})
+            _put(self.folder_of(uid) / HEARTBEAT, {"time": time.time(), "host": hostname(), "pid": os.getpid()})
         except OSError:
             pass
 
@@ -231,7 +253,7 @@ class Outbox:
     def refresh_claim(path: Path | None) -> None:
         if path is not None:
             try:
-                write_json(path, {"time": time.time(), "host": hostname(), "pid": os.getpid()})
+                _put(path, {"time": time.time(), "host": hostname(), "pid": os.getpid()})
             except OSError:
                 pass
 
