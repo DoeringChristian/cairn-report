@@ -42,6 +42,11 @@ before it, so there is no migration and no compatibility code, and a project sta
 - **API:** `cairn.connect()` returns a `cairn.Repo` (was `Store`); `LocalRepo` (was `LocalStore`) and
   `Remote` (was `RemoteStore`) both implement the repo interface (`cairn.store.interface`); `cairn.open_repo`
   (was `open_store`). The server's `GET /api/v2/store` is `GET /api/v2/repo`.
+- **The token** of a client is looked for in `$CAIRN_TOKEN`, `[repo] token_file`, the repo's `token`
+  (`.cairn/token`), then `~/.config/cairn/token`; the first found wins, so copying the token file into
+  `.cairn/` or `~/.config/cairn/` is all a machine needs. Every token file other users can read is used with
+  a warning; a refused token's message names where it came from (never the token), and with none found
+  the message lists the four places.
 - **Layers:** `store/` (the repo core) changes a repo folder and knows nothing of HTTP or configuration;
   `client/remote.py` is the repo interface over HTTP; `client/sync.py` is the sync engine; `client/open.py`
   alone decides between no remote, a remote, and a network filesystem. `tests/test_boundaries.py` enforces it.

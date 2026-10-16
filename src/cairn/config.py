@@ -16,7 +16,8 @@ something, add a `cairn.toml` at the project root:
     [repo]                             # the repo's remote and what the repo publishes
     remote = "https://cairn.example.org/my-study"   # optional: a project on a `cairn server` (<server>/<project>),
                                        # the source of truth for numbers and aliases
-    token_file = "~/.config/cairn/token"   # or CAIRN_TOKEN; never the token itself
+    token_file = "secrets/cairn-token"  # where the token is; looked for: $CAIRN_TOKEN, this, <repo>/token,
+                                       # ~/.config/cairn/token (the first found wins); never the token itself
     allow_http = false                 # send the token over plain HTTP to a non-local remote (default: refuse)
     interval = 30                      # seconds between live syncs of a running version
     heartbeat_timeout = 600            # seconds without a heartbeat before a running version counts as dead

@@ -76,6 +76,7 @@ def isolated_roots(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.delenv("CAIRN_DIR", raising=False)
     monkeypatch.delenv("CAIRN_TOKEN", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))  # ~/.config/cairn/token is a place a client looks for its token
     monkeypatch.chdir(tmp_path)  # no project root above it: tests that need one make it (the `project` fixture)
     monkeypatch.delenv("CAIRN_RUN", raising=False)
     from cairn.client import drafts, repo, runs

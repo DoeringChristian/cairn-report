@@ -601,13 +601,27 @@ In a project that uses a remote:
 [repo]
 remote = "https://cairn.example.org"              # the source of truth (omit: the repo is)
 project = "my-study"                              # default: the folder name
-token_file = "~/.config/cairn/token"              # chmod 600; or CAIRN_TOKEN
+token_file = "secrets/cairn-token"                # optional (chmod 600): see "The token" below
 allow_http = false                                # plain HTTP to a non-local remote (default: refused)
 exclude = [".submitit/**/*.pkl"]                  # never published: gitignore-style globs on project paths
 interval = 30                                     # seconds between live syncs of a running version
 heartbeat_timeout = 600                           # seconds without a heartbeat before a running version is failed
 allow_network_fs = false                          # see "Clusters"
 ```
+
+**The token.** A client looks for its token in four places, and the first one found wins:
+
+1. `$CAIRN_TOKEN`;
+2. `[repo] token_file` (relative to the project folder);
+3. the repo's `token` file, `.cairn/token`;
+4. `~/.config/cairn/token`.
+
+So copying the token file into the project's `.cairn/` (or into `~/.config/cairn/` for every project of a
+user) is all a machine needs. A token file other users can read is used with a warning (`chmod 600`). When
+the remote refuses a token (401, 403), the message says where it came from, e.g. `the token from
+/work/me/study/.cairn/token was refused by https://cairn.example.org/my-study`, never the token itself;
+with none found, it lists the four places. (`.cairn/token` is also the owner token of a repo that
+`cairn server` serves; the server only ever reads its own repo's `token`.)
 
 ### Commands
 
@@ -1065,7 +1079,7 @@ dir = ".cairn"                     # the repo (default; or CAIRN_DIR)
 [repo]
 remote = "https://cairn.example.org"  # optional: the source of truth
 project = "my-study"                  # default: the project folder name
-token_file = "~/.config/cairn/token"  # or CAIRN_TOKEN
+token_file = "secrets/cairn-token"    # optional; the token is looked for in $CAIRN_TOKEN, this, .cairn/token, ~/.config/cairn/token
 allow_http = false                    # plain HTTP to a non-local remote
 interval = 30                         # seconds between live syncs of a running version
 heartbeat_timeout = 600               # seconds without a heartbeat before a running version is failed

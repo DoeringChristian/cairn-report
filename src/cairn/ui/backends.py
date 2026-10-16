@@ -189,7 +189,7 @@ def open_backend(remote: str | None = None, repo: str | Path | None = None, conf
 
     if remote:
         allowed = allow_http or bool(config and config.repo.get("allow_http"))
-        token = client(config, remote, allow_http=allowed).token if no_auth else ""  # CAIRN_TOKEN or [repo] token_file
+        token = client(config, remote, allow_http=allowed).token if no_auth else ""  # the first token open.find_token finds
         return RemoteBackend(remote, allowed, token)
     if repo is not None:
         return LocalBackend(Path(repo), no_auth)

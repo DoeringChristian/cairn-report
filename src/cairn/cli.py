@@ -465,7 +465,7 @@ def cmd_ui(args) -> None:
         from .client.open import client
 
         try:
-            login = client(config, args.remote, allow_http=args.allow_http).token  # CAIRN_TOKEN or [repo] token_file
+            login = client(config, args.remote, allow_http=args.allow_http).token  # the first token open.find_token finds
         except SystemExit:
             login = ""
     serve_ui(backend, host=args.host, port=args.port, no_auth=args.no_auth, secure_cookie=not args.insecure_cookies,

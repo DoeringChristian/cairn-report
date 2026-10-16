@@ -96,29 +96,68 @@ def existing_repo(config: Config) -> Path:
     return repo
 
 
+def home_token() -> Path:
+    """`~/.config/cairn/token`: the token of every project of this user (the last place looked)."""
+    return Path.home() / ".config" / "cairn" / "token"
+
+
+def _read_token(path: Path) -> str:
+    if path.stat().st_mode & 0o077:
+        print(f"warning: {path} is readable by other users; run chmod 600 {path}", file=sys.stderr)
+    return path.read_text().strip()
+
+
+def find_token(config: Config | None) -> tuple[str, str | None, str]:
+    """(token, where it came from, where it was looked for) for a client of the project's remote; the first found wins:
+
+        1. $CAIRN_TOKEN
+        2. [repo] token_file (relative to the project folder)
+        3. the repo's `token` file (`<repo>/token`, normally .cairn/token)
+        4. ~/.config/cairn/token
+
+    So copying the token file into the project's `.cairn/` or into `~/.config/cairn/` is all a machine needs. A token
+    file readable by other users is used with a warning. ("", None, places) when there is none. (`<repo>/token` is also
+    the owner token when `cairn server` serves that repo; the server itself only ever reads its own repo's `token`.)"""
+    settings = config.repo if config else {}
+    files: list[tuple[Path, str]] = []
+    if settings.get("token_file"):
+        token_file = Path(settings["token_file"]).expanduser()
+        if not token_file.is_absolute() and config:
+            token_file = config.project / token_file
+        if not token_file.is_file():
+            raise SystemExit(f"the token file {token_file} ([repo] token_file) does not exist")
+        files.append((token_file, "[repo] token_file"))
+    if config is not None:
+        files.append((Path(config.cairn_dir) / "token", "the repo's token file"))
+    files.append((home_token(), "~/.config/cairn/token"))
+    shown = [f"${TOKEN_ENV}"] + ([] if settings.get("token_file") else ["[repo] token_file (not set)"]) + \
+        [str(path) for path, _ in files]
+    places = f"looked in {', '.join(shown)}"
+    token = os.environ.get(TOKEN_ENV, "").strip()
+    if token:
+        return token, f"${TOKEN_ENV}", places
+    for path, _ in files:
+        if path.is_file():
+            token = _read_token(path)
+            if token:
+                return token, str(path), places
+    return "", None, places
+
+
 def client(config: Config | None, url: str | None = None, *, token: str | None = None, allow_http: bool = False,
            timeout: float = 120) -> Client:
-    """An HTTP client for the server `url` (default: the server of `[repo] remote`); the token is `token`, else
-    `$CAIRN_TOKEN`, else `[repo] token_file` (relative to the project folder)."""
+    """An HTTP client for the server `url` (default: the server of `[repo] remote`); the token is `token`, else the
+    first found of `find_token`. Without one only a server started with --no-auth answers, and a refusal lists where
+    a token was looked for."""
     settings = config.repo if config else {}
     url = url or (remote_parts(remote_url(config))[0] if remote_url(config) else None)
     if not url:
         raise SystemExit("no remote: set [repo] remote in cairn.toml")
-    source = "the caller"
+    source, places = "the caller", None
     if token is None:
-        token, source = os.environ.get(TOKEN_ENV, "").strip(), f"${TOKEN_ENV}"
-        if not token and settings.get("token_file"):
-            token_file = Path(settings["token_file"]).expanduser()
-            if not token_file.is_absolute() and config:
-                token_file = config.project / token_file
-            if not token_file.is_file():
-                raise SystemExit(f"the token file {token_file} ([repo] token_file) does not exist")
-            if token_file.stat().st_mode & 0o077:
-                print(f"warning: {token_file} is readable by other users; run chmod 600 {token_file}", file=sys.stderr)
-            token, source = token_file.read_text().strip(), str(token_file)
-    # without a token only a server started with --no-auth answers
+        token, source, places = find_token(config)
     return Client(url, token, allow_http=allow_http or bool(settings.get("allow_http")), timeout=timeout,
-                  token_source=source if token else None, token_places=f"set ${TOKEN_ENV} or [repo] token_file")
+                  token_source=source if token else None, token_places=places)
 
 
 def where(config: Config | None, root: Path) -> str:
