@@ -15,42 +15,49 @@ more such process. A new repo gets a fresh owner token on first launch; every la
 credential: it reaches every project and creates one on its first sync. The server speaks plain HTTP: bind localhost,
 or use it over a VPN (Tailscale) or an SSH tunnel, or put an HTTPS reverse proxy in front.
 
-Artifact names are slash paths (`datasets/crops`), so every route says where the name ends:
+Artifact names are slash paths (`datasets/crops`), so every route says where the name ends. A version in a path is
+`v<n>` or a whole id (`<sel>`, made by code: refs.version_segment); a reference in a query or a /files path is any of
+the four forms, parsed by store/refs.py alone.
 
     API (JSON, `Authorization: Bearer <token>`; a name is ONE percent-encoded path segment, `datasets%2Fcrops`)
-      GET  /api/v2/repo                                          {uid, version}: the repo's uid and the server's version
-      GET  /api/v2/projects                                      [{..., artifacts, updated}]   POST {name, title?, description?}
-      GET  /api/v2/projects/<p>                                  PATCH {title?, description?}
-      GET  /api/v2/projects/<p>/artifacts                        [{name, latest, versions, aliases, updated, metadata}]
-      GET  /api/v2/projects/<p>/artifacts/<name>                 that summary plus `latest_version` (its manifest, or null)
-      GET  /api/v2/projects/<p>/artifacts/<name>/versions        every version, full manifests
-      GET  /api/v2/projects/<p>/artifacts/<name>/versions/<n>    one manifest (<n>: a number or a uid)   .../files  {files: [entries]}
-      GET  /api/v2/projects/<p>/artifacts/<name>/aliases         {alias: version}
-      POST /api/v2/projects/<p>/artifacts/<name>/versions        {uid?, label?, metadata?, source?} -> {version, uid} (running)
-      POST .../versions/<n>/files {entries}   (409 + `missing` when blobs are absent)   .../complete {inputs?, digest?}   .../fail
-      POST .../versions/<n>/metadata {metadata}                  replace the metadata of a running version
-      POST /api/v2/projects/<p>/artifacts/<name>/publish         {uid?, entries, label?, metadata?, inputs?, aliases?, source?, digest?}
-                                                                 -> {version, uid, created}  (created=false: nothing changed,
-                                                                 or this uid was published already)
-      POST /api/v2/projects/<p>/artifacts/<name>/aliases         {alias, version}
-      GET  /api/v2/projects/<p>/resolve?ref=<ref>                {name, version: manifest}  (409 + `candidates`: an ambiguous short id)
-      GET  /api/v2/projects/<p>/ids?id=<hex>[&name=<name>]       {versions: [{name, version, uid, short_id, status}]}
-      GET  /api/v2/projects/<p>/lineage?ref=<ref>                {ref, inputs, consumers, deleted, nodes: {ref: {status, kind, short_id}}}
-      POST /api/v2/blobs/missing {sha256: [...]}                 PUT /api/v2/blobs/<sha256> (streamed, hash-verified)
+      GET  /api/v3/repo                                          {id, cairn, api}: the handshake (the repo's id, the
+                                                                 server's release, the API version: 3)
+      GET  /api/v3/projects                                      [{..., artifacts, updated}]   POST {name, title?, description?}
+      GET  /api/v3/projects/<p>                                  PATCH {title?, description?}
+      GET  /api/v3/projects/<p>/artifacts                        [{name, latest, versions, aliases, updated, metadata}]
+      GET  /api/v3/projects/<p>/artifacts/<name>                 that summary plus `latest_version` (its manifest, or null)
+      GET  /api/v3/projects/<p>/artifacts/<name>/versions        every version, full manifests
+      GET  /api/v3/projects/<p>/artifacts/<name>/versions/<sel>  one manifest   .../files  {files: [entries]}
+      GET  /api/v3/projects/<p>/artifacts/<name>/aliases         {alias: version}
+      POST /api/v3/projects/<p>/artifacts/<name>/versions        {id?, label?, metadata?, source?} -> {version, id} (running)
+      POST .../versions/<sel>/files {entries}   (409 + `missing` when blobs are absent)   .../complete {inputs?, digest?}   .../fail
+      POST .../versions/<sel>/metadata {metadata}                replace the metadata of a running version
+      POST /api/v3/projects/<p>/artifacts/<name>/publish         {id?, entries, label?, metadata?, inputs?, aliases?, source?, digest?}
+                                                                 -> {version, id, created}  (created=false: nothing changed,
+                                                                 or this id was published already)
+      POST /api/v3/projects/<p>/artifacts/<name>/aliases         {alias, version}
+      GET  /api/v3/projects/<p>/resolve?ref=<ref>                {name, version: manifest}: the completed version it names
+      GET  /api/v3/projects/<p>/find?ref=<ref>                   {name, version: manifest}: any status for an id or name@v<n>
+                                                                 (409 + `candidates`: an ambiguous id prefix, either route)
+      GET  /api/v3/projects/<p>/ids?prefix=<hex>[&name=<name>]   {versions: [{name, version, id, short_id, status}]}
+      POST /api/v3/projects/<p>/short-ids {ids: [...]}           {ids: {id: short id}}
+      GET  /api/v3/projects/<p>/lineage?ref=<ref>                {id, inputs, consumers, deleted, nodes: {id: {name, version,
+                                                                 status, kind, short_id}}}  (inputs, consumers: ids)
+      POST /api/v3/blobs/missing {sha256: [...]}                 PUT /api/v3/blobs/<sha256> (streamed, hash-verified)
     Deleting (`force=1` deletes protected versions too; 409 + `protected` when refused)
-      DELETE /api/v2/projects/<p>/artifacts/<name>/versions/<n>  [?force=1&reason=...] -> {deleted: [refs], skipped: []}
-      DELETE /api/v2/projects/<p>/artifacts/<name>               every version of it, under the same rules
-      DELETE /api/v2/projects/<p>                                only when no version is left (or force)
-      GET/PUT /api/v2/projects/<p>/retention                     {rules: [{prefix, keep_last, keep_days, keep_aliased}]}
-      POST /api/v2/gc {dry_run (default true), grace (seconds or "24h")}   retention rules, then the blob sweep
-    Files (the name ends at `@`; the path inside the artifact follows `//`)
-      GET  /files/<p>/<name>[@v<n>|@uid|@alias|@label]//<path>   ETag, Range, immutable for `@v<n>` or `@uid` of a
+      DELETE /api/v3/projects/<p>/artifacts/<name>/versions/<sel>  [?force=1&reason=...] -> {deleted: [refs], ids, skipped}
+      DELETE /api/v3/projects/<p>/artifacts/<name>               every version of it, under the same rules
+      DELETE /api/v3/projects/<p>                                only when no version is left (or force)
+      GET/PUT /api/v3/projects/<p>/retention                     {rules: [{prefix, keep_last, keep_days, keep_aliased}]}
+      POST /api/v3/gc {dry_run (default true), grace (seconds or "24h")}   retention rules, then the blob sweep
+    Files (the reference ends at `//`; the path inside the version follows)
+      GET  /files/<p>/<reference>//<path>                        ETag, Range, immutable for `name@v<n>` or a whole id of a
                                                                  completed version, `?download=1` for an attachment
+    Anything under /api/v2/ (Cairn 0.14's API) is refused with 400 and a message: a server and its clients upgrade
+    together.
 
-References in the API are `name[@selector]` (or a bare short id) inside the project of the route.
-A client may supply a version's `uid` (UUIDv7) when it creates it: sending the same version again is
-answered with the version it made (a repo sending its outbox can retry safely), and a known uid with different content
-is refused with 409.
+A client may supply a version's `id` when it creates it: sending the same version again is answered with the version
+it made (a repo sending its outbox can retry safely), and a known id with different content is refused with 409.
 
 Tokens are bearer tokens only: there are no cookies and no pages. A version never changes once final, except to
 be deleted (a tombstone: 410 Gone for its files and references); the server never executes pushed code. Files are served with `Content-Security-Policy: sandbox`.
@@ -81,7 +88,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, unquote
 
-from .._version import __version__
+from .._version import API, API_PREFIX, __version__
 from ..store import (
     OWN,
     Ambiguous,
@@ -101,7 +108,7 @@ from ..store.blobs import SHA256, clean_entries
 from ..store.db import ServerLock
 from ..store.digest import PREFIX as DIGEST_PREFIX
 from ..store.tokens import init_root, read_token
-from ..store.uids import UID, valid_uid
+from ..store.ids import valid_id
 from .auth import Auth, HttpError
 from .files import serve_file
 from ..hosts import LOCAL_HOSTS, url_host
@@ -118,6 +125,10 @@ else:
     MISSING = None
 
 MAX_JSON = 64 * 1024 * 1024
+OLD_CLIENT = (
+    f"this server runs Cairn {__version__} (API v{API}); this client is older (Cairn 0.14, API v2): a server and its "
+    "clients upgrade together: install Cairn 0.15 here too, then run `cairn upgrade` in each project"
+)
 UPLOAD_PIECE = 4 << 20  # uploads are hashed and written in pieces this large, in worker threads
 WORKERS = int(os.environ.get("CAIRN_SERVER_THREADS", "32"))  # worker threads for store work and file I/O
 DIGEST = re.compile(re.escape(DIGEST_PREFIX) + r"[0-9a-f]{64}")
@@ -231,7 +242,9 @@ class StoreApp:
                 self.auth.require(request.headers.get("authorization"))
                 query = parse_qs(request.scope.get("query_string", b"").decode("latin-1"))
                 return await serve_file(self, request, raw, query)
-            if method == "PUT" and raw.startswith("/api/v2/blobs/"):
+            if raw.startswith("/api/v2/") or raw == "/api/v2":
+                return self._response(_error(400, OLD_CLIENT))
+            if method == "PUT" and raw.startswith(f"{API_PREFIX}/blobs/"):
                 return self._response(await self._put(request, raw))
             if method not in METHODS:
                 return self._response(_error(501, f"unsupported method {method}"))
@@ -282,8 +295,8 @@ class StoreApp:
                     return self._revalidated(answer, if_none_match)
                 return answer
             segments = _segments(raw)
-            if segments[1:3] != ["api", "v2"]:
-                raise HttpError(404, "the API lives under /api/v2/")
+            if segments[1:3] != ["api", f"v{API}"]:
+                raise HttpError(404, f"the API lives under {API_PREFIX}/")
             payload = json.loads(body or b"{}")
             if not isinstance(payload, dict):
                 raise ValueError("payload must be a JSON object")
@@ -348,14 +361,16 @@ class StoreApp:
     def _get(self, raw: str, query: dict, authorization) -> Answer:
         segments = _segments(raw)
         if segments[1:2] != ["api"]:
-            raise HttpError(404, "this server has no pages: its API lives under /api/v2/ and its files under /files/")
+            raise HttpError(
+                404, f"this server has no pages: its API lives under {API_PREFIX}/ and its files under /files/"
+            )
         self.auth.require(authorization)
-        if segments[1:3] != ["api", "v2"]:
-            raise HttpError(404, "the API lives under /api/v2/")
+        if segments[1:3] != ["api", f"v{API}"]:
+            raise HttpError(404, f"the API lives under {API_PREFIX}/")
         store = self.store
         match segments[3:]:
             case ["repo"]:
-                return _json(200, {"uid": store.uid, "version": __version__})
+                return _json(200, {"id": store.id, "cairn": __version__, "api": API})
             case ["projects"]:
                 listed = [self._public(item) for item in store.overviews()]
                 return _json(200, [item for item in listed if item is not None])
@@ -379,26 +394,27 @@ class StoreApp:
                 return _json(200, {**summary, "latest_version": view.get_version(name, latest) if latest else None})
             case ["artifacts", name, "versions"]:
                 return _json(200, view.versions(name))
-            case ["artifacts", name, "versions", number] if number.isdigit() or UID.fullmatch(number):
-                version = view.get_version(name, int(number) if number.isdigit() else number)
+            case ["artifacts", name, "versions", selector]:
+                version = view.get_version(name, refs.version_key(selector))
                 return self._manifest(version, version)
-            case ["artifacts", name, "versions", number, "files"] if number.isdigit() or UID.fullmatch(number):
-                version = view.get_version(name, int(number) if number.isdigit() else number)
+            case ["artifacts", name, "versions", selector, "files"]:
+                version = view.get_version(name, refs.version_key(selector))
                 return self._manifest(version, {"files": version["files"]})
             case ["artifacts", name, "aliases"]:
                 return _json(200, view.aliases(name))
             case ["resolve"]:
                 name, version = view.resolve(refs.parse(query.get("ref", [""])[0]))
                 return _json(200, {"name": name, "version": version})
+            case ["find"]:
+                name, version = view.find(refs.parse(query.get("ref", [""])[0]))
+                return _json(200, {"name": name, "version": version})
             case ["ids"]:
                 name = query.get("name", [None])[0]
                 return _json(
-                    200, {"versions": view.ids(query.get("id", [""])[0], refs.valid_name(name) if name else None)}
+                    200, {"versions": view.ids(query.get("prefix", [""])[0], refs.valid_name(name) if name else None)}
                 )
-            case ["lineage"]:  # any status for an exact reference or a short id: a deleted version keeps its edges
-                name, version = view.find(refs.parse(query.get("ref", [""])[0]))
-                exact = refs.exact(name, version["version"])
-                return _json(200, {"ref": exact, **view.lineage(exact, marks=True)})
+            case ["lineage"]:  # any status for an id or name@v<n>: a deleted version keeps its edges
+                return _json(200, view.lineage(refs.parse(query.get("ref", [""])[0]), marks=True))
         raise HttpError(404, "no such API route")
 
     def _post(self, route: list[str], payload: dict) -> Answer:
@@ -420,6 +436,11 @@ class StoreApp:
                     raise ValueError("dry_run must be true or false")
                 grace = parse_duration(payload["grace"]) if payload.get("grace") is not None else GRACE
                 return _json(200, self.gc(dry_run, grace, by="owner"))
+            case ["projects", project, "short-ids"]:
+                ids = payload.get("ids")
+                if not isinstance(ids, list) or len(ids) > 10_000 or not all(isinstance(item, str) for item in ids):
+                    raise ValueError("ids must be a list of ids")
+                return _json(200, {"ids": self.view(project).short_ids([valid_id(item) for item in ids])})
             case ["projects"]:
                 name = payload.get("name")
                 if not isinstance(name, str):
@@ -439,32 +460,35 @@ class StoreApp:
                 label = payload.get("label")
                 if label is not None and not isinstance(label, str):
                     raise ValueError("label must be text")
-                number = view.start_version(name, label, payload.get("metadata"), source, uid=self._uid(payload))
-                uid = view.get_version(name, number)["uid"]
-                store.beat(uid, owner=False)  # a client's running version: alive while it syncs (see reap_schedule)
-                return _json(201, {"version": number, "uid": uid})
-            case ["projects", project, "artifacts", name, "versions", number, action] if number.isdigit():
-                number = int(number)
+                number = view.start_version(name, label, payload.get("metadata"), source, id=self._id(payload))
+                id = view.get_version(name, number)["id"]
+                store.beat(id, owner=False)  # a client's running version: alive while it syncs (see reap_schedule)
+                return _json(201, {"version": number, "id": id})
+            case ["projects", project, "artifacts", name, "versions", selector, action]:
+                number = refs.version_key(selector)  # a number or an id
                 if action == "files":
                     entries = clean_entries(payload.get("entries"), removals=True)
                     missing = store.missing(entries)
                     if missing:
                         return _json(409, {"error": "upload these blobs first", "missing": missing})
                     view.add_files(name, number, entries)  # no entries: a keep-alive of a running version
-                    store.beat(view.get_version(name, number)["uid"], owner=False)
+                    store.beat(view.get_version(name, number)["id"], owner=False)
                     return _json(200, {"files": len(entries)})
                 if action == "metadata":
                     view.set_metadata(name, number, payload.get("metadata"))
-                    store.beat(view.get_version(name, number)["uid"], owner=False)
-                    return _json(200, {"version": number})
+                    version = view.get_version(name, number)
+                    store.beat(version["id"], owner=False)
+                    return _json(200, {"version": version["version"], "id": version["id"]})
                 if action == "complete":
                     view.complete_version(
                         name, number, self._inputs(payload.get("inputs")), digest=self._digest(payload)
                     )
-                    return _json(200, {"version": number})
+                    version = view.get_version(name, number)
+                    return _json(200, {"version": version["version"], "id": version["id"]})
                 if action == "fail":
                     view.fail_version(name, number)
-                    return _json(200, {"version": number})
+                    version = view.get_version(name, number)
+                    return _json(200, {"version": version["version"], "id": version["id"]})
             case ["projects", project, "artifacts", name, "publish"]:
                 entries = clean_entries(payload.get("entries"))
                 missing = store.missing(entries)
@@ -484,13 +508,13 @@ class StoreApp:
                     inputs=self._inputs(payload.get("inputs")),
                     aliases=aliases,
                     source=payload.get("source"),
-                    uid=self._uid(payload),
+                    id=self._id(payload),
                     digest=self._digest(payload),
                 )
                 created = number > before  # new versions are numbered after every existing one
                 return _json(
                     201 if created else 200,
-                    {"version": number, "uid": view.get_version(name, number)["uid"], "created": created},
+                    {"version": number, "id": view.get_version(name, number)["id"], "created": created},
                 )
             case ["projects", project, "artifacts", name, "aliases"]:
                 alias, number = payload.get("alias"), payload.get("version")
@@ -501,7 +525,7 @@ class StoreApp:
         raise HttpError(404, "no such API route")
 
     def _patch(self, segments: list[str], payload: dict) -> Answer:
-        if segments[1:4] == ["api", "v2", "projects"] and len(segments) == 5:
+        if segments[1:4] == ["api", f"v{API}", "projects"] and len(segments) == 5:
             project = segments[4]
             for key in ("title", "description"):
                 if payload.get(key) is not None and not isinstance(payload[key], str):
@@ -517,14 +541,10 @@ class StoreApp:
             raise HttpError(404, "no such API route")
         view = self.view(route[1])
         match route:
-            case ["projects", project, "artifacts", name, "versions", number] if number.isdigit() or UID.fullmatch(
-                number
-            ):
+            case ["projects", project, "artifacts", name, "versions", selector]:
                 return _json(
                     200,
-                    view.delete_version(
-                        name, int(number) if number.isdigit() else number, reason=reason, force=force, by="owner"
-                    ),
+                    view.delete_version(name, refs.version_key(selector), reason=reason, force=force, by="owner"),
                 )
             case ["projects", project, "artifacts", name]:
                 return _json(200, view.delete_artifact(name, reason=reason, force=force, by="owner"))
@@ -557,8 +577,8 @@ class StoreApp:
         return digest
 
     @staticmethod
-    def _uid(payload: dict) -> str | None:
-        return None if payload.get("uid") is None else valid_uid(payload["uid"])
+    def _id(payload: dict) -> str | None:
+        return None if payload.get("id") is None else valid_id(payload["id"])
 
     @staticmethod
     def _inputs(items) -> list[str]:
@@ -572,12 +592,12 @@ class StoreApp:
     # ------------------------------------------------------------------ uploads (event loop + worker threads)
 
     async def _put(self, request: Request, raw: str) -> Answer:
-        """`PUT /api/v2/blobs/<sha256>`: the body streams into a BlobWriter in large pieces, written and hashed in a
+        """`PUT /api/v3/blobs/<sha256>`: the body streams into a BlobWriter in large pieces, written and hashed in a
         worker thread while the next piece arrives; fsynced, verified, and renamed into place at the end."""
         try:
             match = _segments(raw)
             self.auth.require(request.headers.get("authorization"))
-            if match[1:4] != ["api", "v2", "blobs"] or len(match) != 5 or not SHA256.fullmatch(match[4]):
+            if match[1:4] != ["api", f"v{API}", "blobs"] or len(match) != 5 or not SHA256.fullmatch(match[4]):
                 raise HttpError(404, "no such API route")
             try:
                 size = int(request.headers.get("content-length", ""))

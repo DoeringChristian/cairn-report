@@ -11,6 +11,7 @@ import os
 import secrets
 from pathlib import Path
 
+from .._version import API_PREFIX
 from ..client.http import Client, ClientError, split_remote
 from ..client.remote import Remote, Server
 from ..config import Config, load_config
@@ -175,7 +176,7 @@ def _server_or_project(url: str) -> tuple[str, str | None]:
     if project is None:
         return server, None
     try:
-        Client(url, "", timeout=10).json("GET", "/api/v2/repo")
+        Client(url, "", timeout=10).json("GET", f"{API_PREFIX}/repo")
         return url.rstrip("/"), None  # the API answers here: a server behind a path prefix
     except ClientError as error:
         if error.status == 401:

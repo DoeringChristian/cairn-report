@@ -7,8 +7,11 @@ reaches another project. HTTP, the token, and the HTTPS rule are `http.Client`'s
 percent-encoded in API paths (`datasets%2Fcrops`).
 
 A remote that does not answer raises `Unreachable` (a StoreError), which the repo catches: versions wait in the
-outbox, and reads fall back to the repo. `uid` is the server's repo uid (`GET /api/v2/repo`). Errors say on which
-remote they happened, and a refused token says where it came from (never the token).
+outbox, and reads fall back to the repo. `id` is the server's repo id, from the handshake (`GET /api/v3/repo`, which
+also says the server's API version: a server of another Cairn release is refused with Incompatible, a 0.14 one found
+by its `/api/v2/repo`). Errors say on which remote they happened, and a refused token says where it came from (never
+the token). References travel as text and are parsed by the server (store/refs.py); versions in API paths are made by
+code (`refs.version_segment`: `v<n>` or an id).
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import threading
 from pathlib import Path
 from urllib.parse import quote
 
+from .._version import API, API_PREFIX, __version__
 from ..store import refs
 from ..store.blobs import blob_path
 from ..store.folders import place, scratch
@@ -29,7 +33,7 @@ from ..store.errors import (
     Conflict,
     Deleted,
     Forbidden,
-    InvalidRef,
+    Incompatible,
     MissingBlobs,
     NotFound,
     Protected,
@@ -37,9 +41,9 @@ from ..store.errors import (
     Unauthorized,
     Unreachable,
 )
+from ..store.ids import valid_id
 from ..store.local import FileRead
 from ..store.refs import Ref
-from ..store.uids import UID
 from .http import BATCH, Client, ClientError, upload_missing
 
 ANNOUNCE = 3.0  # seconds after which an upload in progress is announced (once)
@@ -49,12 +53,42 @@ def q(text: str) -> str:
     return quote(text, safe="")
 
 
+def handshake(client: Client, url: str) -> str:
+    """The server's repo id, after making sure it speaks this client's API version (`GET /api/v3/repo`). A server of
+    another release is refused (Incompatible): a 0.14 server answers only `/api/v2/repo`."""
+    try:
+        answer = client.json("GET", f"{API_PREFIX}/repo")[1]
+    except ClientError as error:
+        if error.status in (400, 404, 410):
+            try:
+                old = client.json("GET", "/api/v2/repo")[1]
+            except ClientError:
+                old = None
+            if isinstance(old, dict) and old.get("uid"):
+                raise Incompatible(
+                    f"the remote {url} runs Cairn {old.get('version') or '0.14'} (API v2), and this is Cairn "
+                    f"{__version__} (API v{API}): a server and its clients upgrade together (on the server: install "
+                    "Cairn 0.15, stop `cairn server`, run `cairn upgrade <its repo>`, start it again)"
+                ) from None
+        raise _translate(error, url, client) from error
+    if not isinstance(answer, dict) or answer.get("api") != API:
+        theirs = answer.get("api") if isinstance(answer, dict) else None
+        raise Incompatible(
+            f"the remote {url} runs Cairn {answer.get('cairn') if isinstance(answer, dict) else '?'} (API v{theirs}), "
+            f"and this is Cairn {__version__} (API v{API}): install the same release on both"
+        )
+    try:
+        return valid_id(answer.get("id"))
+    except ValueError:
+        raise Incompatible(f"the remote {url} answered its handshake without an id: {answer!r}") from None
+
+
 class Server:
-    """A `cairn server` (`url`, with its path prefix if it has one): its uid, its projects, and each project as a Remote."""
+    """A `cairn server` (`url`, with its path prefix if it has one): its id, its projects, and each project as a Remote."""
 
     def __init__(self, client: Client):
         self.client, self.url = client, client.url
-        self._uid: str | None = None
+        self._id: str | None = None
 
     def __repr__(self) -> str:
         return f"<cairn.Server {self.url}>"
@@ -66,26 +100,27 @@ class Server:
             raise _translate(error, self.url, self.client) from error
 
     @property
-    def uid(self) -> str:
-        """The server's repo uid (asked once; Unreachable while it does not answer)."""
-        if self._uid is None:
-            self._uid = self._call("GET", "/api/v2/repo")["uid"]
-        return self._uid
+    def id(self) -> str:
+        """The server's repo id (the handshake, once; Unreachable while it does not answer)."""
+        if self._id is None:
+            self._id = handshake(self.client, self.url)
+        return self._id
 
     def projects(self) -> list[dict]:
         """The projects the token may read, with their artifact count and last update."""
-        return self._call("GET", "/api/v2/projects")
+        self.id  # noqa: B018  (the handshake first)
+        return self._call("GET", f"{API_PREFIX}/projects")
 
     overviews = projects
 
     def project(self, name: str) -> "Remote":
         remote = Remote(self.client, name)
-        remote._uid = self._uid
+        remote._id = self._id
         return remote
 
     def gc(self, dry_run: bool = True, grace: float | str | None = None) -> dict:
         """Garbage collection on the server (the owner token only)."""
-        return self._call("POST", "/api/v2/gc", {"dry_run": dry_run, "grace": grace})
+        return self._call("POST", f"{API_PREFIX}/gc", {"dry_run": dry_run, "grace": grace})
 
 
 class Remote:
@@ -94,17 +129,17 @@ class Remote:
     def __init__(self, client: Client, project: str):
         self.client, self.project = client, refs.valid_project(project)
         self.url = f"{client.url}/{project}"
-        self._uid: str | None = None
+        self._id: str | None = None
 
     def __repr__(self) -> str:
         return f"<cairn.Remote {self.url}>"
 
     @property
-    def uid(self) -> str:
-        """The server's repo uid (asked once; Unreachable while it does not answer)."""
-        if self._uid is None:
-            self._uid = self._call("GET", "/api/v2/repo")["uid"]
-        return self._uid
+    def id(self) -> str:
+        """The server's repo id (the handshake, once; Unreachable while it does not answer)."""
+        if self._id is None:
+            self._id = handshake(self.client, self.url)
+        return self._id
 
     def _call(self, method: str, path: str, value=None, expect=(200,)):
         try:
@@ -114,7 +149,7 @@ class Remote:
 
     @property
     def _base(self) -> str:
-        return f"/api/v2/projects/{q(self.project)}"
+        return f"{API_PREFIX}/projects/{q(self.project)}"
 
     # ------------------------------------------------------------------ blobs (the server's, shared by its projects)
 
@@ -161,7 +196,7 @@ class Remote:
         try:
             status, _ = self.client.request(
                 "PUT",
-                f"/api/v2/blobs/{sha}",
+                f"{API_PREFIX}/blobs/{sha}",
                 body=stream,
                 headers={"Content-Length": str(size), "Content-Type": "application/octet-stream"},
                 expect=(200, 201),
@@ -170,12 +205,14 @@ class Remote:
             raise _translate(error, self.url, self.client) from error
         return status == 201
 
-    def _file_path(self, name: str, selector: str, path: str) -> str:
-        return f"/files/{q(self.project)}/{quote(name)}@{selector}//{quote(path)}"
+    def _file_path(self, ref: Ref) -> str:
+        """`/files/<project>/<reference>//<path>`: the reference as text (the server parses it), quoted."""
+        head = ref.id if ref.id is not None else quote(str(Ref(ref.name, ref.selector)))
+        return f"/files/{q(self.project)}/{head}//{quote(ref.path)}"
 
     def blob_file(self, name: str, version: int | str, entry: dict, root) -> Path:
         """The entry's contents in the blobs of the repo `root`, downloaded (and verified) once; `version` is the
-        number (or uid) of a version that has the file.
+        number (or id) of a version that has the file.
 
         The download goes to a scratch name and is renamed into place, so concurrent jobs sharing the repo
         (on NFS too) never see a partial blob; when two download the same blob, the second rename is skipped."""
@@ -186,7 +223,10 @@ class Remote:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = scratch(target)
         try:
-            where = self._file_path(name, f"v{version}" if isinstance(version, int) else version, entry["path"])
+            ref = (
+                Ref(name, f"v{version}", entry["path"]) if isinstance(version, int) else Ref.of(version, entry["path"])
+            )
+            where = self._file_path(ref)
             try:
                 self.client.request("GET", where, stream_to=temporary)
             except ClientError as error:
@@ -202,9 +242,12 @@ class Remote:
             temporary.unlink(missing_ok=True)
         return target
 
-    def read_file(self, name: str, selector: str | None, path: str, range_header: str | None = None) -> FileRead:
+    def read_file(self, ref: Ref | str, range_header: str | None = None) -> FileRead:
         """`LocalRepo.read_file` through the server's `/files` route, which gets the Range header as is."""
-        where = self._file_path(name, selector or "latest", path)
+        ref = refs.parse(ref)
+        if not ref.path:
+            raise refs.InvalidRef(f"{ref} names a version, not a file in it (add //<path>)")
+        where = self._file_path(ref)
         try:
             status, headers, chunks = self.client.stream(where, {"Range": range_header} if range_header else None)
         except ClientError as error:
@@ -236,7 +279,7 @@ class Remote:
         """Make the project on the server if it is new."""
         return self._call(
             "POST",
-            "/api/v2/projects",
+            f"{API_PREFIX}/projects",
             {"name": self.project, "title": title, "description": description},
             expect=(200, 201),
         )
@@ -261,13 +304,12 @@ class Remote:
     def versions(self, name: str) -> list[dict]:
         return self._call("GET", f"{self._artifact(name)}/versions")
 
+    def _version(self, name: str, version: int | str) -> str:
+        return f"{self._artifact(name)}/versions/{refs.version_segment(version)}"
+
     def get_version(self, name: str, version: int | str) -> dict:
-        """One manifest by number or uid, whatever its status."""
-        if isinstance(version, str) and refs.VERSION.fullmatch(version):
-            version = int(version[1:])
-        if isinstance(version, str) and not UID.fullmatch(version):
-            raise InvalidRef(f"invalid version {version!r}")
-        return self._call("GET", f"{self._artifact(name)}/versions/{version}")
+        """One manifest by number or id, whatever its status."""
+        return self._call("GET", self._version(name, version))
 
     def aliases(self, name: str) -> dict[str, int]:
         return self._call("GET", f"{self._artifact(name)}/aliases")
@@ -278,38 +320,36 @@ class Remote:
         label: str | None = None,
         metadata: dict | None = None,
         source: dict | None = None,
-        uid: str | None = None,
+        id: str | None = None,
     ) -> int:
         return self._call(
             "POST",
             f"{self._artifact(name)}/versions",
-            {"label": label, "metadata": metadata, "source": source, "uid": uid},
+            {"label": label, "metadata": metadata, "source": source, "id": id},
             expect=(201,),
         )["version"]
 
-    def add_files(self, name: str, version: int, entries: list[dict]) -> None:
+    def add_files(self, name: str, version: int | str, entries: list[dict]) -> None:
         for start in range(0, len(entries), BATCH):
-            self._call(
-                "POST", f"{self._artifact(name)}/versions/{version}/files", {"entries": entries[start : start + BATCH]}
-            )
+            self._call("POST", f"{self._version(name, version)}/files", {"entries": entries[start : start + BATCH]})
 
-    def keep_alive(self, name: str, version: int) -> None:
+    def keep_alive(self, name: str, version: int | str) -> None:
         """Tell the remote a running version is still being synced (an empty file list), so it does not time it out."""
-        self._call("POST", f"{self._artifact(name)}/versions/{version}/files", {"entries": []})
+        self._call("POST", f"{self._version(name, version)}/files", {"entries": []})
 
-    def set_metadata(self, name: str, version: int, metadata: dict) -> None:
+    def set_metadata(self, name: str, version: int | str, metadata: dict) -> None:
         """Replace the metadata of a running version."""
-        self._call("POST", f"{self._artifact(name)}/versions/{version}/metadata", {"metadata": metadata})
+        self._call("POST", f"{self._version(name, version)}/metadata", {"metadata": metadata})
 
-    def complete_version(self, name: str, version: int, inputs=None, digest: str | None = None) -> None:
+    def complete_version(self, name: str, version: int | str, inputs=None, digest: str | None = None) -> None:
         """Complete the version; a `digest` (store.digest) of its files makes the server check them (409 on a mismatch)."""
         body = {"inputs": [str(item) for item in inputs or []]}
         if digest is not None:
             body["digest"] = digest
-        self._call("POST", f"{self._artifact(name)}/versions/{version}/complete", body)
+        self._call("POST", f"{self._version(name, version)}/complete", body)
 
-    def fail_version(self, name: str, version: int) -> None:
-        self._call("POST", f"{self._artifact(name)}/versions/{version}/fail", {})
+    def fail_version(self, name: str, version: int | str) -> None:
+        self._call("POST", f"{self._version(name, version)}/fail", {})
 
     def publish(
         self,
@@ -320,7 +360,7 @@ class Remote:
         inputs=None,
         aliases=(),
         source: dict | None = None,
-        uid: str | None = None,
+        id: str | None = None,
         digest: str | None = None,
     ) -> int:
         body = {
@@ -330,7 +370,7 @@ class Remote:
             "inputs": [str(item) for item in inputs or []],
             "aliases": list(aliases),
             "source": source,
-            "uid": uid,
+            "id": id,
         }
         if digest is not None:
             body["digest"] = digest
@@ -348,12 +388,9 @@ class Remote:
         return "?" + "&".join(flags) if flags else ""
 
     def delete_version(self, name: str, version: int | str, *, reason: str | None = None, force: bool = False) -> dict:
-        """`LocalRepo.delete_version` on the server (a write token; `force` needs the owner token)."""
-        if isinstance(version, str) and refs.VERSION.fullmatch(version):
-            version = int(version[1:])
-        if isinstance(version, str) and not UID.fullmatch(version):
-            raise InvalidRef(f"invalid version {version!r}")
-        return self._call("DELETE", f"{self._artifact(name)}/versions/{version}{self._flags(force, reason)}")
+        """`LocalRepo.delete_version` on the server (a write token; `force` needs the owner token); `version` is a
+        number or an id."""
+        return self._call("DELETE", f"{self._version(name, version)}{self._flags(force, reason)}")
 
     def delete_artifact(self, name: str, *, reason: str | None = None, force: bool = False) -> dict:
         return self._call("DELETE", f"{self._artifact(name)}{self._flags(force, reason)}")
@@ -366,21 +403,38 @@ class Remote:
 
     def gc(self, dry_run: bool = True, grace: float | str | None = None) -> dict:
         """Garbage collection on the whole server (the owner token only)."""
-        return self._call("POST", "/api/v2/gc", {"dry_run": dry_run, "grace": grace})
+        return self._call("POST", f"{API_PREFIX}/gc", {"dry_run": dry_run, "grace": grace})
 
     # ------------------------------------------------------------- resolving
 
     def resolve(self, ref: Ref | str) -> tuple[str, dict]:
-        answer = self._call("GET", f"{self._base}/resolve?ref={q(str(ref))}")
+        """(name, manifest) of the completed version a reference names (the server parses it)."""
+        answer = self._call("GET", f"{self._base}/resolve?ref={q(str(refs.parse(ref)))}")
         return answer["name"], answer["version"]
 
-    def ids(self, text: str, name: str | None = None) -> list[dict]:
-        """The versions of the project a short id (or uid) may name (refs.pick chooses among them)."""
-        return self._call("GET", f"{self._base}/ids?id={q(text)}" + (f"&name={q(name)}" if name else ""))["versions"]
+    def find(self, ref: Ref | str) -> tuple[str, dict]:
+        """(name, manifest) of the version a reference names, any status for an id or `name@v<n>`."""
+        answer = self._call("GET", f"{self._base}/find?ref={q(str(refs.parse(ref)))}")
+        return answer["name"], answer["version"]
+
+    def ids(self, prefix: str, name: str | None = None) -> list[dict]:
+        """The versions of the project whose id starts with `prefix` (refs.pick chooses among them)."""
+        return self._call("GET", f"{self._base}/ids?prefix={q(prefix)}" + (f"&name={q(name)}" if name else ""))[
+            "versions"
+        ]
+
+    def short_ids(self, ids) -> dict[str, str]:
+        """{id: short id} in the project, as the server computes them (an id it does not have: the prefix none of its
+        versions shares)."""
+        ids = list(dict.fromkeys(ids))
+        found: dict[str, str] = {}
+        for start in range(0, len(ids), 1000):
+            found.update(self._call("POST", f"{self._base}/short-ids", {"ids": ids[start : start + 1000]})["ids"])
+        return found
 
     def lineage(self, ref: Ref | str, marks: bool = False) -> dict[str, list[str]]:
-        answer = self._call("GET", f"{self._base}/lineage?ref={q(str(ref))}")
-        found = {"inputs": answer["inputs"], "consumers": answer["consumers"]}
+        answer = self._call("GET", f"{self._base}/lineage?ref={q(str(refs.parse(ref)))}")
+        found = {"id": answer["id"], "inputs": answer["inputs"], "consumers": answer["consumers"]}
         if marks:
             found["deleted"] = answer.get("deleted", [])
             found["nodes"] = answer.get("nodes", {})

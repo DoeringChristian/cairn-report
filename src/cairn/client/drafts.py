@@ -5,16 +5,17 @@
         model.add_file("model.pt")
     model.version                                # models/student@v<n> (a pending Version while the remote is down)
 
-A draft lives at `<repo>/drafts/<name>/<uid>/` (the project's `.cairn/`, git-ignored), with its record beside it,
-`<uid>.draft.json` (name, label, metadata, aliases, owner, state, run). It becomes a version of the project's repo. Every draft is an output of the process's run (cairn/client/runs.py): opening one
+A draft lives at `<repo>/drafts/<name>/<id>/` (the project's `.cairn/`, git-ignored), with its record beside it,
+`<id>.draft.json` (id, name, label, metadata, aliases, owner, state, run: the run's id). It becomes a version of the
+project's repo, with the draft's id. Every draft is an output of the process's run (cairn/client/runs.py): opening one
 starts the run if `cairn.init()` was not called, and the draft's one input is that run's version, named by its
-uid while the run is still running. What the process pulls is an input of the run, not of the draft. Leaving the
+id (also while the run is still running). What the process pulls is an input of the run, not of the draft. Leaving the
 block publishes the folder exactly like `cairn.publish(name, folder)` (the unchanged check, digest, aliases; the
 label defaults to the draft's start time) and removes it: its files now live in the repo's blobs (cloned, or
 hard-linked where the filesystem cannot clone, never copied when avoidable). An
 exception keeps the folder (state `kept`, one line on stderr) and marks a running version failed; `cairn drafts`
-lists kept and open drafts, `cairn drafts publish <uid>` publishes one later, `cairn drafts discard <uid>`
-removes it. A draft's version gets the draft's uid. `config=` (and, for a Hydra run dir, the resolved job config
+lists kept and open drafts, `cairn drafts publish <id>` publishes one later, `cairn drafts discard <id>`
+removes it (a unique start of the id names one). `config=` (and, for a Hydra run dir, the resolved job config
 and its overrides) becomes `metadata["config"]` (`metadata["overrides"]`).
 
 `watch=True` starts a running version at once and keeps it synced while the block runs (a `Publication`,
@@ -43,7 +44,7 @@ from ..store.folders import pid_alive as _pid_alive, read_json, write_json
 from ..term import short_path, warn
 from .http import credit_transfer, transferring
 from .open import repo_root
-from ..store.uids import UID, new_uid
+from ..store.ids import is_id, new_id
 from . import logger as _logger
 from .logger import Writer
 
@@ -74,23 +75,22 @@ def reserve(
     aliases=(),
     watch: bool = False,
     folder: Path | None = None,
-    uid: str | None = None,
+    id: str | None = None,
     **extra,
 ) -> tuple[Path, dict]:
-    """Make a draft's folder (`folder`, default `<drafts root>/<name>/<uid>/`, fresh) and write its record."""
-    target = refs.parse(name)
-    if target.selector or target.path:
-        raise refs.InvalidRef(f"a draft takes an artifact name, not {name!r}")
-    refs.valid_name(target.name)
+    """Make a draft's folder (`folder`, default `<drafts root>/<name>/<id>/`, fresh) and write its record."""
+    refs.valid_name(name)  # an artifact name (never 4 or more hex digits alone), not a reference
     label = label or _label()
-    refs.valid_label(label)
-    uid = uid or new_uid()
+    refs.new_label(label)
+    for alias in aliases:
+        refs.new_alias(alias)
+    id = id or new_id()
     given = folder is not None
-    folder = Path(folder) if given else drafts_root() / target.name / uid
+    folder = Path(folder) if given else drafts_root() / name / id
     folder.mkdir(parents=True, exist_ok=given)  # a given folder is a Hydra job's: Hydra made it
     record = {
-        "uid": uid,
-        "name": target.name,
+        "id": id,
+        "name": name,
         "label": label,
         "metadata": metadata,
         "aliases": list(aliases),
@@ -147,7 +147,7 @@ class Draft(Writer):
         Writer.__init__(self, path)
         self.project = find_project()  # origins are relative to the project the job runs in
         self.folder, self.record = folder, record
-        self.uid, self.name = record["uid"], record["name"]
+        self.id, self.name = record["id"], record["name"]
         self.trial = path != folder  # a view on a subfolder (a multirun trial): it never publishes itself
         self.version = None
         self._store_arg, self._store = store, None
@@ -161,7 +161,7 @@ class Draft(Writer):
         self._closed = False
 
     def __repr__(self) -> str:
-        return f"<cairn.{type(self).__name__} {self.name} {self.uid} {self.path}>"
+        return f"<cairn.{type(self).__name__} {self.name} {self.id[: refs.SHORT]} {self.path}>"
 
     # ------------------------------------------------------------ properties
 
@@ -172,7 +172,7 @@ class Draft(Writer):
 
     @property
     def label(self) -> str:
-        return self.record.get("label") or self.uid
+        return self.record.get("label")
 
     @property
     def watch(self) -> bool:
@@ -232,17 +232,23 @@ class Draft(Writer):
 
     @property
     def ref(self) -> str:
-        """`name@<uid>`: this draft's version, exactly, before and after it is published."""
-        return f"{self.name}@{self.uid}"
+        """The id of this draft's version: its exact reference, before and after it is published."""
+        return self.id
 
     @property
     def short_id(self) -> str:
-        """The short id of this draft's version (refs.short_id), before and after it is published."""
-        return refs.default_short_id(self.uid)
+        """The short id of this draft's version (refs.short_id): unique among the drafts here and the versions of the
+        project's repo this process opened, else the first 7 digits."""
+        others = [item.id for item in drafts()] if _root_exists() else []
+        short = refs.short_id(self.id, others)
+        if self._store is not None:
+            known = self._store.backend.short_ids([self.id]).get(self.id, "")
+            return known if len(known) > len(short) else short
+        return short
 
     @property
     def run_ref(self) -> str | None:
-        """The run this draft is an output of (`runs/<name>@<uid>`), once it is open."""
+        """The id of the run this draft is an output of, once it is open."""
         return self.record.get("run")
 
     # ------------------------------------------------------------ activation
@@ -297,7 +303,7 @@ class Draft(Writer):
         from . import runs
 
         current = runs.current()
-        if current is not None and current.uid == refs.parse(ref).selector:
+        if current is not None and current.id == refs.parse(ref).id:
             return True
         if os.environ.get(runs.RUN_ENV) == ref:
             return True
@@ -339,18 +345,18 @@ class Draft(Writer):
             aliases=self.record.get("aliases") or (),
             label=self.label,
             _repo=self.store.backend,
-            uid=self.uid,
+            id=self.id,
         )
         self._pub.start()
-        self.version = target.version(self._pub.uid)
-        self.record["running"] = {"uid": self._pub.uid, "number": self._pub.version}
+        self.version = target.version(self._pub.id)
+        self.record["running"] = {"id": self._pub.id, "number": self._pub.version}
         self._save()
         if not follow:
             return
         interval = float(self._interval if self._interval is not None else self._pub.config.repo.get("interval", 30))
         self._stop = threading.Event()
         self._watcher = threading.Thread(
-            target=self._follow, args=(self._stop, interval), name=f"cairn-draft {self.uid}", daemon=True
+            target=self._follow, args=(self._stop, interval), name=f"cairn-draft {self.id[: refs.SHORT]}", daemon=True
         )
         self._watcher.start()
 
@@ -393,7 +399,7 @@ class Draft(Writer):
 
     def _ensure_open(self) -> None:
         if self._closed:
-            raise StoreError(f"the draft {self.uid} was already published or discarded")
+            raise StoreError(f"the draft {self.name} ({self.id[: refs.SHORT]}) was already published or discarded")
         if self.trial:
             raise StoreError(
                 f"{self.path} is a trial of the draft {self.folder}: the whole draft is published (the study"
@@ -417,12 +423,12 @@ class Draft(Writer):
                 with self._lock:
                     self._pub.inputs = inputs
                     self._pub.complete()
-                version = self.target.version(self._pub.uid)
+                version = self.target.version(self._pub.id)
                 version.manifest  # noqa: B018  (load it now)
             else:
                 record = self.record
-                # the version takes the draft's uid, unless a running version (watch) or an earlier attempt took it
-                uid = None if record.get("running") or record.get("attempted") else self.uid
+                # the version takes the draft's id, unless a running version (watch) or an earlier attempt took it
+                id = None if record.get("running") or record.get("attempted") else self.id
                 record["attempted"] = True
                 self._save()
                 version = self.target.publish(
@@ -433,7 +439,7 @@ class Draft(Writer):
                     inputs=inputs,
                     allow_incomplete=allow_incomplete,
                     _link=True,
-                    _uid=uid,
+                    _id=id,
                 )
         except BaseException as error:
             self._keep(error)
@@ -485,7 +491,7 @@ class Draft(Writer):
             with self._lock:
                 self._pub.fail()
             self._pub = None
-        elif (self.record.get("running") or {}).get("uid"):
+        elif (self.record.get("running") or {}).get("id"):
             self._fail_running()
         self._remove()
 
@@ -494,8 +500,8 @@ class Draft(Writer):
         heartbeat expires)."""
         running = self.record["running"]
         try:
-            if self.store.backend.get_version(self.name, running["uid"])["status"] == "running":
-                self.store.backend.fail_version(self.name, running["uid"])
+            if self.store.backend.get_version(self.name, running["id"])["status"] == "running":
+                self.store.backend.fail_version(self.name, running["id"])
         except StoreError:
             pass
 
@@ -555,7 +561,7 @@ def draft(
 
     `label` defaults to the start time (`YYYY-MM-DD_HH-MM-SS`); `watch=True` keeps a running version synced while
     the block runs; the version goes to the project's repo. `config` (a plain dict) becomes `metadata["config"]`. The
-    version's uid is the draft's uid. The process's run starts now if it has not."""
+    version's id is the draft's id. The process's run starts now if it has not."""
     return Draft(name, label=label, metadata=metadata, aliases=aliases, watch=watch, config=config)
 
 
@@ -563,9 +569,9 @@ def find(path: Path | str) -> Draft | None:
     """The draft whose folder is `path` or holds it (a view on the subfolder when it is deeper), else None."""
     path = Path(path).resolve()
     for folder in [path, *path.parents]:
-        if UID.fullmatch(folder.name):
+        if is_id(folder.name):
             record = read_json(_record_path(folder))
-            if isinstance(record, dict) and record.get("uid") == folder.name:
+            if isinstance(record, dict) and record.get("id") == folder.name:
                 return Draft._at(folder, path, record)
     return None
 
@@ -579,26 +585,39 @@ def drafts(root: Path | None = None) -> list[Draft]:
     for directory, folders, files in os.walk(root):
         keep = []
         for name in folders:
-            if UID.fullmatch(name) and f"{name}{SUFFIX}" in files:
+            if is_id(name) and f"{name}{SUFFIX}" in files:
                 record = read_json(Path(directory) / f"{name}{SUFFIX}")
-                if isinstance(record, dict) and record.get("uid") == name:
+                if isinstance(record, dict) and record.get("id") == name:
                     folder = Path(directory) / name
                     found.append(Draft._at(folder, folder, record))
                     continue  # never descend into a draft's own files
             keep.append(name)
         folders[:] = keep
-    return sorted(found, key=lambda item: item.uid)
+    return sorted(found, key=lambda item: (item.record.get("created") or "", item.name))  # oldest first
+
+
+def _root_exists() -> bool:
+    try:
+        return drafts_root().is_dir()
+    except (StoreError, OSError):
+        return False
 
 
 def load(where: Path | str) -> Draft:
-    """A draft by its folder (or a path inside it) or by its uid (or a unique start of it)."""
+    """A draft by its folder (or a path inside it), or by its id (a unique prefix of 4 or more digits)."""
     text = str(where)
     if not Path(text).exists():
-        matches = [item for item in drafts() if item.uid.startswith(text)]
+        ref = refs.parse(text)  # the id form; anything else is no draft
+        if ref.id is None or ref.path:
+            raise StoreError(f"no draft {text!r}: name a draft by its folder or its id (`cairn drafts` lists them)")
+        matches = [item for item in drafts() if item.id.startswith(ref.id)]
         if len(matches) == 1:
             return matches[0]
+        listed = ", ".join(f"{item.name} ({item.id[:12]})" for item in matches)
         raise StoreError(
-            f"no draft {text!r}" if not matches else f"{text!r} names {len(matches)} drafts: give more of the uid"
+            f"no draft with the id {ref.id}"
+            if not matches
+            else f"the id {ref.id} names {len(matches)} drafts: {listed}; give more digits"
         )
     found = find(text)
     if found is None:
@@ -626,4 +645,4 @@ def age(seconds: float) -> str:
 def describe(item: Draft) -> str:
     created = item.created
     elapsed = age(time.time() - created.timestamp()) if created else "?"
-    return f"{item.name}\t{item.short_id}\t{item.uid}\t{item.state}\t{elapsed}\t{item.size / 1e6:.1f} MB\t{item.folder}"
+    return f"{item.name}\t{item.short_id}\t{item.id}\t{item.state}\t{elapsed}\t{item.size / 1e6:.1f} MB\t{item.folder}"

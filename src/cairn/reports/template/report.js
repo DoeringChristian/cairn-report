@@ -129,20 +129,22 @@ function showHeader(data) {
   if (!BUNDLE) $(".brand").href = siteRoot;  // the project index lists every report
   bundleLinks($(".hero"));
 }
-/* The Data panel: each input the report was built from, pinned to an exact version. The version carries its exact
-   reference (`name@v<n>`, in the report's own project) in data-artifact. Served by the store UI (`cairn ui`, under
-   /p/<project>/r/), it links to that version's artifact page in the same project (/p/<project>/a/<name>@v<n>); in local
-   and bundle modes it stays plain text. */
+/* The Data panel: each input the report was built from, pinned to an exact version: the build records its id, name,
+   number, and exact reference (`name@v<n>`, in the report's own project; data-artifact), so nothing here takes a
+   reference apart. Served by the store UI (`cairn ui`, under /p/<project>/r/), it links to that version's page in the
+   same project (/p/<project>/a/<name>@v<n>, or /p/<project>/v/<id>); in local and bundle modes it stays plain text. */
 const STORE_SERVED = !BUNDLE && /^\/p\/[^/]+\/r\//.test(location.pathname);
-function artifactPage(exact) {
-  const here = /^\/p\/([^/]+)\/r\//.exec(location.pathname), match = /^(.+)@(v\d+)$/.exec(exact);
-  return STORE_SERVED && here && match ? `/p/${here[1]}/a/${match[1].split("/").map(encodeURIComponent).join("/")}@${match[2]}` : null;
+function artifactPage(input) {
+  const here = /^\/p\/([^/]+)\/r\//.exec(location.pathname);
+  if (!STORE_SERVED || !here) return null;
+  if (input.name && input.version != null) return `/p/${here[1]}/a/${input.name.split("/").map(encodeURIComponent).join("/")}@v${input.version}`;
+  return input.id ? `/p/${here[1]}/v/${input.id}` : null;
 }
 function showData(inputs) {
   const panel = $("#data-panel"); if (!panel) return;
   const list = $("#data-list"); list.replaceChildren();
   Object.entries(inputs).forEach(([name, input]) => {
-    const page = artifactPage(input.resolved), row = el("li", "data-row"), version = el(page ? "a" : "span", "data-version", input.resolved.split(":").pop());
+    const page = artifactPage(input), row = el("li", "data-row"), version = el(page ? "a" : "span", "data-version", input.resolved);
     if (page) version.href = page;
     version.dataset.artifact = input.resolved; version.title = input.requested ? `declared as ${input.requested}` : input.resolved;
     const button = el("button", "image-copy"); button.type = "button"; button.title = "Copy exact version"; button.setAttribute("aria-label", "Copy exact version"); button.dataset.tooltip = "Copy exact version"; button.innerHTML = COPY_ICON;

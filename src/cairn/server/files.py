@@ -1,4 +1,5 @@
-"""`GET /files/<project>/<name>[@selector]//<path>`: a stored file with ETag, Range, and a sandbox policy.
+"""`GET /files/<project>/<reference>//<path>`: a stored file with ETag, Range, and a sandbox policy. The reference is any
+of the four forms (store/refs.py parses it): `<id>`, `<name>`, `<name>@v<n>`, `<name>@<alias or label>`.
 
 On Linux the body is sent without copying it through Python: the status line and headers go out through
 ASGI, then the kernel copies the blob straight to the socket (`os.sendfile`, in a worker thread, so the
@@ -40,12 +41,12 @@ def sendfile_enabled() -> bool:
     return choice == "1" if choice in ("0", "1") else sys.platform.startswith("linux")
 
 
-def opened(store, name: str, selector: str | None, path: str, range_header: str | None):
+def opened(store, ref: refs.Ref, range_header: str | None):
     """Resolve, open, and range-check a file of a project (`store`: a LocalProject; blocking: run it in a worker thread).
     Returns (sha256, immutable, descriptor, first, last, total, data): a body of at most SMALL bytes is read
     right away (`data`, with the descriptor closed), so a small request takes one trip to a worker thread.
     Raises NotFound or BadRange."""
-    entry, blob, immutable = store.open_file(name, selector, path)
+    entry, blob, immutable = store.open_file(ref)
     descriptor = os.open(blob, os.O_RDONLY)
     try:
         total = os.fstat(descriptor).st_size
@@ -78,7 +79,7 @@ def parse(raw_path: str) -> tuple[str, refs.Ref]:
     project, _, remainder = rest.partition("/")
     head, separator, inner = remainder.partition("//")
     if not separator:
-        raise HttpError(404, "file URLs look like /files/<project>/<name>@v<n>//<path>")
+        raise HttpError(404, "file URLs look like /files/<project>/<reference>//<path> (e.g. <name>@v<n>//<path>)")
     return project, refs.parse(f"{head}//{inner}")
 
 
@@ -88,7 +89,7 @@ async def serve_file(app, request, raw_path: str, query: dict):
     store = app.view(project)
     loop = asyncio.get_running_loop()
     sha, immutable, descriptor, first, last, total, data = await loop.run_in_executor(
-        app.executor, opened, store, ref.name, ref.selector, ref.path, request.headers.get("range")
+        app.executor, opened, store, ref, request.headers.get("range")
     )
     etag = f'"{sha}"'
     headers = {

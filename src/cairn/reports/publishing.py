@@ -42,7 +42,7 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
     )  # all: links are checked against the other pages
     data = json.loads((build.generated / "report-data.json").read_text())
     metadata = {field: data[field] for field in ("title", "status", "summary")}
-    inputs = list(dict.fromkeys(item["resolved"] for item in build.inputs.values()))
+    inputs = list(dict.fromkeys(item["id"] for item in build.inputs.values()))  # by id: exactly what was read
     name = f"reports/{slug}"
     store = open_repo(config)
     store.quiet_pending = True  # the line it prints says why a version is pending
@@ -58,7 +58,7 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
         before = max((v["version"] or 0 for v in store.versions(name)), default=0) if _exists(store, name) else 0
         latest = _same_source(store, name, stage / "source", config, inputs, metadata) if before else None
         if latest is not None:
-            say(published(name, latest, before), flush=True)
+            say(published(name, latest, store.short_id(latest["id"]), before), flush=True)
             return latest["version"]
         version = publish_version(
             store,
@@ -70,7 +70,11 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
             config=config,
         )
     line = published(
-        name, version.manifest, before, getattr(store, "pending_reasons", {}).get(version.manifest.get("uid"))
+        name,
+        version.manifest,
+        version.short_id,
+        before,
+        getattr(store, "pending_reasons", {}).get(version.manifest.get("id")),
     )
     new = version.number is not None and version.number > before
     say(line[:-1] + f"; {plural(len(inputs), 'input')})" if new and line.endswith(")") else line, flush=True)

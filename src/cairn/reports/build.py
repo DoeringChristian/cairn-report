@@ -474,7 +474,7 @@ class Build:
         self.meta: dict = {}
         self.inputs: dict[str, dict] = (
             {}
-        )  # local name -> requested, resolved (exact ref), files, path (read-only folder)
+        )  # local name -> requested, resolved (exact ref), id, name, version, files, path (read-only folder)
         self.store_root: Path | None = None
         self.line = None  # the report line being evaluated, for messages
         self.links: list[dict] = []
@@ -507,6 +507,10 @@ class Build:
             where = f"{self.markdown}: inputs.{name}"
             if not isinstance(name, str) or not INPUT_NAME.fullmatch(name):
                 raise BuildError(f"{where}: input names are lower-case identifiers ([a-z_][a-z0-9_]*)")
+            if not isinstance(text, str):  # YAML reads an unquoted 1234567 as a number (and 0012345 as octal)
+                raise BuildError(
+                    f"{where}: {text!r} is not text: quote the reference (e.g. '1234567'), YAML reads digits as a number"
+                )
             try:
                 ref = refs.parse(text)
             except ValueError as error:
@@ -524,7 +528,9 @@ class Build:
             self.inputs[name] = {
                 "requested": str(text),
                 "resolved": exact,
-                "uid": version["uid"],
+                "id": version["id"],
+                "name": artifact,
+                "version": version.get("version"),
                 "files": len(version["files"]),
                 "path": folder,
             }
@@ -586,7 +592,7 @@ class Build:
         shutil.copy2(resolved, target)
         if match:
             item = self.inputs[match.group(1)]
-            number = item["resolved"].rsplit("@", 1)[1]
+            number = f"v{item['version']}" if item["version"] is not None else item["id"][:7]
             label = f"{match.group(1)}@{number}//{resolved.relative_to(real(item['path'])).as_posix()}"
             trace = {"input": label, "artifact": item["resolved"], "label": label}
         else:
@@ -1224,7 +1230,7 @@ OWN_FILES = ("index.html", "narrative.html", "report-data.json", "manifest.json"
 def input_record(build: Build) -> dict:
     """The declared inputs as the manifest and report-data.json record them."""
     return {
-        name: {field: item[field] for field in ("requested", "resolved", "uid", "files")}
+        name: {field: item[field] for field in ("requested", "resolved", "id", "name", "version", "files")}
         for name, item in build.inputs.items()
     }
 

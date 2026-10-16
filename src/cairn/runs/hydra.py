@@ -22,11 +22,11 @@ Every job is a run (cairn/client/runs.py): `run_experiment` calls `cairn.init(na
 job config>, metadata={"overrides": [...]})`, calls `experiment.run(output_dir)`, and finishes the run when the
 experiment returns (failed, with the traceback, when it raises). Importing this module registers the resolvers:
 
-- `${cairn.run:}` reserves a run folder (`.cairn/drafts/runs/<run.name>/<uid>/`) for `hydra.run.dir`, so Hydra's job
+- `${cairn.run:}` reserves a run folder (`.cairn/drafts/runs/<run.name>/<id>/`) for `hydra.run.dir`, so Hydra's job
   folder IS the run's folder: `.hydra/`, `provenance/`, the job's outputs, and the run's logs, system metrics, and
   metrics.jsonl are one version of `runs/<run.name>`. Such a job writes no run.json: the version's status is the
   record. In `hydra.sweep.dir` the folder is the sweep's: each trial (`<sweep>/<n>`) is a run of its own, a version
-  of `runs/<run.name>` labelled `<sweep label>/<n>` with `metadata.sweep` = {uid, label, num}, published when the
+  of `runs/<run.name>` labelled `<sweep label>/<n>` with `metadata.sweep` = {id, label, num}, published when the
   trial ends (its folder then leaves the sweep's, and the trial is listed in the sweep's `trials.jsonl`).
   `StudyCompletion` (and `cairn finalize-study`) then publishes the sweep folder (multirun.yaml, trials.jsonl) as a
   run of its own, `metadata.kind = "run"` with `metadata.sweep.trials`, whose inputs are the trial runs; it is kept
@@ -132,8 +132,12 @@ def code_revision(root: Path) -> str:
 
 
 def validate_run_name(name: str) -> str:
+    from ..store import refs
+
     if not RUN_NAME.fullmatch(name):
         raise ValueError(f"run.name {name!r} must be a short lowercase slug ({RUN_NAME.pattern})")
+    if refs.hex_alone(name):
+        raise ValueError(f"run.name {name!r} is 4 or more hex digits alone, the shape of an id: add a word")
     return name
 
 
@@ -179,7 +183,7 @@ def _job_run(cfg: Any, output_dir: Path, overrides: list[str], multirun: bool, n
         if not found.trial:
             return runs.init(name, config=config, metadata=metadata, _adopt=found, code=False), "run"
         sweep = {
-            "uid": found.uid,
+            "id": found.id,
             "label": found.label,
             "num": int(num) if str(num).isdigit() else num,
             "ref": found.ref,
@@ -273,7 +277,7 @@ def _end_trial(run, kind, output_dir: Path, error) -> None:
             sweep = (run.record.get("metadata") or {}).get("sweep") or {}
             line = {
                 "num": sweep.get("num"),
-                "uid": run.uid,
+                "id": version.id if version is not None else run.id,  # stored as an input of the sweep: an id
                 "label": run.label,
                 "ref": version.ref if version is not None else run.ref,
                 "status": "failed" if error is not None or version is None else "completed",
@@ -359,11 +363,12 @@ def _complete_run_sweep(reserved, study: Path, name: str, trials: list[str], met
             "trial": number,
             "status": listed.get(number, {}).get("status", "missing"),
             "ref": listed.get(number, {}).get("ref"),
+            "id": listed.get(number, {}).get("id"),
         }
         for number in numbers
     ]
     complete = bool(rows) and all(row["status"] == "completed" for row in rows)
-    inputs = [row["ref"] for row in rows if row["status"] == "completed" and row["ref"]]
+    inputs = [row["id"] for row in rows if row["status"] == "completed" and row["id"]]
     summary = {
         **metadata,
         "sweep": {"trials": rows, **{key: value for key, value in extra.items() if value is not None}},
