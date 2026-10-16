@@ -25,7 +25,15 @@ repo numbered itself before it had a remote are sent once (client/sync.py adopts
 `forget_versions`) and come back as copies with the remote's numbers.
 
 Every version has a `uid` (a UUIDv7, see uids.py), made when it starts or supplied by the client
-that created it; a uid names one version for good, in the whole repo and on every remote.
+that created it; a uid names one version for good, in the whole repo and on every remote. Every version also has a
+`short_id` (refs.short_id): the first 7 hex digits of the SHA-256 of its uid, more when needed to tell it from the
+versions of its project made before it; fixed when the version is made (a copy keeps the remote's). References name a
+version by any unique prefix of 4 or more digits of that hash (`ids`, refs.pick), after names, aliases, and labels.
+
+Projects: a server's repo holds many, each served as if it were its own repo (store/project.py binds one), sharing
+the one database and the one `blobs/`, so a file several projects publish is stored once. A project's own repo
+(`.cairn/`) holds exactly one, which has no name: its rows have the project "" (`OWN`). References and the inputs
+and consumers recorded never name a project: they are `name@v<n>` inside the project they belong to.
 
 Every process on the repo's host opens the repo directly, whether or not `cairn server` serves it: scripts,
 commands, `cairn ui`, and the server itself. Any number may write at once: each write is one SQLite transaction
@@ -58,7 +66,7 @@ from .folders import pid_alive
 from .blobs import CHUNK, BlobStore, BlobWriter, clean_entries, now, resolve_entry
 from .db import RETENTION_TABLE, Database, export
 from .digest import manifest_digest
-from .errors import BadRange, Conflict, Deleted, Forbidden, MissingBlobs, NotFound, Protected, StoreError, Unauthorized  # noqa: F401
+from .errors import BadRange, Conflict, Deleted, Forbidden, InvalidRef, MissingBlobs, NotFound, Protected, StoreError, Unauthorized  # noqa: F401
 from .fs import network_filesystem, network_fs_message
 from .refs import Ref
 from .uids import UID, new_uid, valid_uid
@@ -104,6 +112,12 @@ def _check_digest(given: str | None, actual: str, what: str) -> None:
 
 REPO_FILE = "repo.json"
 LAYOUT = 1
+OWN = ""  # the project of a project's own repo, which has one and no name for it
+
+
+def valid_key(project: str) -> str:
+    """A project as the core stores it: OWN, or a project name (refs.valid_project)."""
+    return project if project == OWN else refs.valid_project(project)
 
 
 def repo_uid(root: Path) -> str:
@@ -205,14 +219,16 @@ _SUMMARY = "SELECT name, latest, versions, aliases, updated, metadata FROM artif
 
 
 class LocalRepo:
-    def __init__(self, root: Path | str, project: str | None = None, allow_network_fs: bool = False,
-                 heartbeat_timeout: float = 600.0):
-        """`project` is the default for references without one. A folder on a network filesystem is refused
-        (StoreError, before anything is written) unless `allow_network_fs`: the caller has made sure one process on
-        one host is its only writer (`[repo] allow_network_fs`, `cairn server --allow-network-fs`), or only reads it.
-        Opening the repo fails the running versions whose owner is gone (`reap`; `heartbeat_timeout` seconds without
-        a heartbeat, or its process dead on this host); what it failed is in `self.reaped`."""
-        self.root, self.project = Path(root), project
+    def __init__(self, root: Path | str, allow_network_fs: bool = False, heartbeat_timeout: float = 600.0,
+                 where: str | None = None):
+        """A folder on a network filesystem is refused (StoreError, before anything is written) unless
+        `allow_network_fs`: the caller has made sure one process on one host is its only writer (`[repo]
+        allow_network_fs`, `cairn server --allow-network-fs`), or only reads it. Opening the repo fails the running
+        versions whose owner is gone (`reap`; `heartbeat_timeout` seconds without a heartbeat, or its process dead on
+        this host); what it failed is in `self.reaped`. `where` says in messages where the repo's own project's
+        versions were looked for (default: `the repo <root>`; "" says nothing, as a server does)."""
+        self.root = Path(root)
+        self.where = f"the repo {self.root}" if where is None else where
         if not allow_network_fs:
             fstype = network_filesystem(self.root)
             if fstype:
@@ -297,11 +313,21 @@ class LocalRepo:
                     if found is not None and found[2]["status"] == "running":
                         project, name, state = found
                         self._save(connection, project, name, {**state, "status": "failed", "completed": now(), "error": reason})
-                        failed.append((refs.exact(project, name, state["version"]), reason))
+                        failed.append((self._named(project, refs.exact(name, state["version"])), reason))
             except (StoreError, sqlite3.OperationalError, OSError):
                 continue  # read-only or busy: the next open tries again
             self._clear_beat(path.name)
         return failed
+
+    def _in(self, project: str) -> str:
+        """Where a message says a version of `project` was looked for: ` in the repo ...` for the own project (`where`),
+        nothing for a named project of a server (its client says which remote)."""
+        return f" in {self.where}" if project == OWN and self.where else ""
+
+    @staticmethod
+    def _named(project: str, ref: str) -> str:
+        """A reference as a repo-wide report lists it (reap, gc): with its project on a server's repo."""
+        return ref if project == OWN else f"{ref} (project {project})"
 
     def _writing(self) -> None:
         """Every write passes here (the network filesystem was checked when the repo was opened)."""
@@ -332,20 +358,18 @@ class LocalRepo:
         return self.blob_path(entry["sha256"])
 
     def open_file(self, project: str, name: str, selector: str | None, path: str) -> tuple[dict, Path, bool]:
-        """(entry, blob path, immutable) of a file of the version `selector` names (`v<n>` or a uid of any status,
-        else an alias or label of a completed one). `immutable`: an exact selector of a completed version."""
-        if selector and refs.VERSION.fullmatch(selector):
-            version = self.get_version(project, name, int(selector[1:]))
-        elif selector and UID.fullmatch(selector):
-            version = self.get_version(project, name, selector)
-        else:
-            version = self.resolve(Ref(project, name, selector))[2]
+        """(entry, blob path, immutable) of a file of the version `selector` names (`v<n>`, a uid, or a short id of any
+        status, else an alias or label of a completed one). `immutable`: an exact selector of a completed version."""
+        ref = Ref(refs.valid_name(name), selector)
+        if selector is not None:
+            refs.parse(str(ref))  # a well-formed selector
+        _, version = self.find(project, ref)
         if version["status"] == "deleted":
             raise self._gone(project, name, version)
         entry = resolve_entry(version["files"], path)
         if entry is None:
-            raise NotFound(f"{name} has no file {path}")
-        immutable = version["status"] == "completed" and bool(selector) and bool(refs.VERSION.fullmatch(selector) or UID.fullmatch(selector))
+            raise NotFound(f"{refs.exact(name, version['version'])} has no file {path}{self._in(project)}")
+        immutable = version["status"] == "completed" and ref.exact
         return entry, self.blob_path(entry["sha256"]), immutable
 
     def read_file(self, project: str, name: str, selector: str | None, path: str, range_header: str | None = None) -> FileRead:
@@ -398,16 +422,18 @@ class LocalRepo:
 
     # --------------------------------------------------------------- projects
 
-    @staticmethod
-    def _record_of(connection: sqlite3.Connection, project: str) -> dict:
-        row = connection.execute("SELECT record FROM projects WHERE name = ?", (refs.valid_project(project),)).fetchone()
+    def _record_of(self, connection: sqlite3.Connection, project: str) -> dict:
+        row = connection.execute("SELECT record FROM projects WHERE name = ?", (valid_key(project),)).fetchone()
         if row is None:
-            raise NotFound(f"unknown project {project!r}")
+            raise NotFound(self._unknown(project))
         return json.loads(row[0])
 
+    def _unknown(self, project: str) -> str:
+        return f"no project {project!r}" if project != OWN else f"nothing published yet{self._in(project)}"
+
     def create_project(self, name: str, title: str | None = None, description: str = "") -> dict:
-        """Create a project; an existing one is returned unchanged."""
-        refs.valid_project(name)
+        """Create a project (OWN: the repo's own); an existing one is returned unchanged."""
+        valid_key(name)
         with self._db.read() as connection:
             row = connection.execute("SELECT record FROM projects WHERE name = ?", (name,)).fetchone()
         if row is not None:
@@ -449,10 +475,9 @@ class LocalRepo:
 
     # --------------------------------------------------------------- artifacts
 
-    @staticmethod
-    def _project(connection: sqlite3.Connection, project: str) -> None:
-        if connection.execute("SELECT 1 FROM projects WHERE name = ?", (refs.valid_project(project),)).fetchone() is None:
-            raise NotFound(f"unknown project {project!r}")
+    def _project(self, connection: sqlite3.Connection, project: str) -> None:
+        if connection.execute("SELECT 1 FROM projects WHERE name = ?", (valid_key(project),)).fetchone() is None:
+            raise NotFound(self._unknown(project))
 
     def _check(self, connection: sqlite3.Connection, project: str, name: str) -> None:
         self._project(connection, project)
@@ -477,7 +502,7 @@ class LocalRepo:
 
     @staticmethod
     def _by_uid(connection, uid: str) -> tuple[str, str, dict] | None:
-        """(project, name, record) of the version with this uid, anywhere in the store."""
+        """(project, name, record) of the version with this uid, anywhere in the repo (a uid is unique in it)."""
         row = connection.execute("SELECT project, name, manifest FROM versions WHERE uid = ?", (uid,)).fetchone()
         return (row[0], row[1], json.loads(row[2])) if row else None
 
@@ -505,17 +530,10 @@ class LocalRepo:
             return list(self._states(connection, project, name).values())
 
     def get_version(self, project: str, name: str, version: int | str) -> dict:
-        """One version's manifest, by number or uid, whatever its status."""
+        """One version's manifest, by number, `v<n>`, or uid, whatever its status."""
         with self._db.read() as connection:
             self._check(connection, project, name)
-            if isinstance(version, str):
-                found = self._by_uid(connection, version)
-                state = found[2] if found and found[:2] == (project, name) else None
-            else:
-                state = self._state(connection, project, name, version)
-        if state is None:
-            raise NotFound(f"{project}:{name} has no version {version if isinstance(version, str) else f'v{version}'}")
-        return state
+            return self._lookup(connection, project, name, version)
 
     @staticmethod
     def _summary(row) -> dict:
@@ -539,9 +557,9 @@ class LocalRepo:
         """(stamp, summaries): the stamp changes whenever the listing may have (the project's generation, which
         every write to the project bumps), so callers may cache on it; the list is cached here the same way."""
         with self._db.read() as connection:
-            row = connection.execute("SELECT generation FROM projects WHERE name = ?", (refs.valid_project(project),)).fetchone()
+            row = connection.execute("SELECT generation FROM projects WHERE name = ?", (valid_key(project),)).fetchone()
             if row is None:
-                raise NotFound(f"unknown project {project!r}")
+                raise NotFound(self._unknown(project))
             cached = self._listings.get(project)
             if cached is None or cached[0] != row[0]:
                 rows = connection.execute(f"{_SUMMARY} WHERE project = ? AND versions > 0 ORDER BY name", (project,)).fetchall()
@@ -569,7 +587,8 @@ class LocalRepo:
         """Store a version's record, and keep the artifact's summary row and the project's generation current."""
         values = (state["uid"], state["label"], state["status"], json.dumps(state), project, name, state["version"])
         if created:
-            connection.execute("INSERT INTO versions (uid, label, status, manifest, project, name, number) VALUES (?, ?, ?, ?, ?, ?, ?)", values)
+            connection.execute("INSERT INTO versions (uid, label, status, manifest, project, name, number, idhash) "
+                               "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (*values, refs.id_hash(state["uid"])))
             connection.execute("INSERT INTO artifacts (project, name, versions, updated) VALUES (?, ?, 1, ?) ON CONFLICT (project, name) "
                                "DO UPDATE SET versions = versions + 1, updated = max(updated, excluded.updated)", (project, name, _stamp(state)))
         else:
@@ -581,32 +600,38 @@ class LocalRepo:
         """The record of a running version, by number, `v<n>`, or uid (StoreError if it is final)."""
         state = self._lookup(connection, project, name, version)
         if state["status"] != "running":
-            raise StoreError(f"{refs.exact(project, name, state['version'])} is {state['status']} and can no longer change")
+            raise StoreError(f"{refs.exact(name, state['version'])} is {state['status']} and can no longer change")
         return state
 
-    def _exact_inputs(self, connection, inputs) -> list[str]:
-        """Exact `project:name@v<n>` strings for input references; each must resolve to a completed version, or, named
-        by its exact uid, to a running one (the run a job's outputs come from, which completes after them). Unknown,
-        failed, and deleted inputs are refused."""
+    def _exact_inputs(self, connection, project: str, inputs) -> list[str]:
+        """Exact `name@v<n>` strings for input references (of the same project); each must resolve to a completed
+        version, or, named by its exact uid, to a running one (the run a job's outputs come from, which completes
+        after them). Unknown, failed, and deleted inputs are refused."""
         exact: list[str] = []
         for item in inputs or []:
             ref = refs.parse(item) if isinstance(item, str) else item
             if ref.uid:
-                project = ref.project or self.project
-                found = self._by_uid(connection, ref.uid) if project else None
+                found = self._by_uid(connection, ref.uid)
                 if found is not None and found[:2] == (project, ref.name) and found[2]["status"] == "running":
-                    text = refs.exact(project, ref.name, found[2]["version"])
+                    text = refs.exact(ref.name, found[2]["version"])
                     if text not in exact:
                         exact.append(text)
                     continue
-            project, name, version = self._resolve(connection, ref)
-            text = refs.exact(project, name, version["version"])
+            name, version = self._resolve(connection, project, ref)
+            text = refs.exact(name, version["version"])
             if text not in exact:
                 exact.append(text)
         return exact
 
+    @staticmethod
+    def _taken(connection, project: str, prefix: str) -> bool:
+        """Whether a version of the project has a uid whose hash starts with `prefix` (short ids, refs.short_id)."""
+        return connection.execute("SELECT 1 FROM versions WHERE project = ? AND idhash >= ? AND idhash < ? LIMIT 1",
+                                  (project, prefix, prefix + "g")).fetchone() is not None
+
     def _new(self, connection, project, name, label, metadata, source, uid=None) -> dict:
-        """A new running version's record, numbered next (unique: this runs inside a write transaction)."""
+        """A new running version's record, numbered next and given its short id (unique: this runs inside a write
+        transaction)."""
         if label is not None:
             refs.valid_label(label)
         metadata = {} if metadata is None else metadata
@@ -616,11 +641,12 @@ class LocalRepo:
         uid = new_uid() if uid is None else valid_uid(uid)
         other = self._by_uid(connection, uid)
         if other is not None:
-            raise Conflict(f"uid {uid} already names {refs.exact(other[0], other[1], other[2]['version'])}")
+            raise Conflict(f"uid {uid} already names {self._named(other[0], refs.exact(other[1], other[2]['version']))}")
         number = connection.execute("SELECT coalesce(max(number), 0) + 1 FROM versions WHERE project = ? AND name = ?",
                                     (project, name)).fetchone()[0]
-        return {"version": number, "uid": uid, "label": label, "status": "running", "created": now(), "files": [],
-                "metadata": metadata, "inputs": [], "source": source}
+        short = refs.short_id(uid, lambda prefix: self._taken(connection, project, prefix))
+        return {"version": number, "uid": uid, "short_id": short, "label": label, "status": "running", "created": now(),
+                "files": [], "metadata": metadata, "inputs": [], "source": source}
 
     def _merged(self, state: dict, entries) -> dict:
         clean = clean_entries(entries)
@@ -636,9 +662,10 @@ class LocalRepo:
     def _completed(self, connection, project, name, version, exact) -> None:
         """After a version completed: `latest` moves to it, and the versions it consumed learn of it."""
         self._move_alias(connection, project, name, "latest", version)
-        me = refs.exact(project, name, version)
+        me = refs.exact(name, version)
         for text in exact:
-            connection.execute("INSERT OR IGNORE INTO consumers (input, consumer, time) VALUES (?, ?, ?)", (text, me, now()))
+            connection.execute("INSERT OR IGNORE INTO consumers (project, input, consumer, time) VALUES (?, ?, ?, ?)",
+                               (project, text, me, now()))
 
     def _move_alias(self, connection, project, name, alias, version) -> None:
         row = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = ?", (project, name, alias)).fetchone()
@@ -669,10 +696,10 @@ class LocalRepo:
                 if known is not None and known[:2] == (project, name):
                     state = known[2]
                     if state["status"] == "deleted":
-                        raise Conflict(f"uid {uid} named {project}:{name}@v{state['version']}, which was deleted: a uid is never used again")
+                        raise Conflict(f"uid {uid} named {name}@v{state['version']}, which was deleted: a uid is never used again")
                     if state["label"] != label or state["metadata"] != (metadata or {}):
                         if state["status"] != "running":
-                            raise Conflict(f"uid {uid} already names {project}:{name}@v{state['version']} with another label or metadata")
+                            raise Conflict(f"uid {uid} already names {name}@v{state['version']} with another label or metadata")
                         # started before, and its answer lost; its metadata changed since: a running version may change
                         self._save(connection, project, name, {**state, "label": label, "metadata": metadata or {}})
                     return state["version"]
@@ -704,9 +731,9 @@ class LocalRepo:
         with self._write() as connection:
             self._check(connection, project, name)
             state = self._running(connection, project, name, version)
-            exact = self._exact_inputs(connection, inputs)
+            exact = self._exact_inputs(connection, project, inputs)
             actual = manifest_digest(state["files"])
-            _check_digest(digest, actual, refs.exact(project, name, state["version"]))
+            _check_digest(digest, actual, refs.exact(name, state["version"]))
             self._save(connection, project, name, {**state, "status": "completed", "completed": now(), "inputs": exact, "digest": actual})
             self._completed(connection, project, name, state["version"], exact)
         self._clear_beat(state["uid"])
@@ -738,24 +765,25 @@ class LocalRepo:
         for alias in aliases:
             refs.valid_word(alias, "alias")
         actual = manifest_digest(clean)
-        _check_digest(digest, actual, f"{project}:{name}")
+        _check_digest(digest, actual, name)
         with self._write() as connection:
             self._check(connection, project, name)
             if self._sweeps(connection) != sweeps:  # a blob sweep ran since the check: check again, inside the transaction
                 missing = self.missing(clean)
                 if missing:
                     raise MissingBlobs(missing)
-            exact = self._exact_inputs(connection, inputs)
+            exact = self._exact_inputs(connection, project, inputs)
             known = self._by_uid(connection, valid_uid(uid)) if uid is not None else None
             head = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = 'latest'",
                                       (project, name)).fetchone()
             state = self._state(connection, project, name, head[0]) if head else None
             if known is not None:
                 if known[2]["status"] == "deleted":
-                    raise Conflict(f"uid {uid} named {refs.exact(known[0], known[1], known[2]['version'])}, which was deleted: "
-                                   "a uid is never used again")
+                    raise Conflict(f"uid {uid} named {self._named(known[0], refs.exact(known[1], known[2]['version']))}, which "
+                                   "was deleted: a uid is never used again")
                 if known[:2] != (project, name) or known[2]["status"] != "completed" or not _same(known[2], actual, exact, metadata or {}):
-                    raise Conflict(f"uid {uid} already names {refs.exact(known[0], known[1], known[2]['version'])} with other content")
+                    raise Conflict(f"uid {uid} already names {self._named(known[0], refs.exact(known[1], known[2]['version']))} "
+                                   "with other content")
                 version = known[2]["version"]
             elif state is not None and _same(state, actual, exact, metadata or {}):
                 version = state["version"]
@@ -774,7 +802,7 @@ class LocalRepo:
         refs.valid_word(alias, "alias")
         state = self._state(connection, project, name, version)
         if state is None or state["status"] != "completed":
-            raise StoreError(f"alias {alias!r}: {project}:{name}@v{version} is not a completed version")
+            raise StoreError(f"alias {alias!r}: {name}@v{version} is not a completed version{self._in(project)}")
         self._move_alias(connection, project, name, alias, version)
 
     def set_alias(self, project: str, name: str, alias: str, version: int) -> None:
@@ -805,7 +833,7 @@ class LocalRepo:
         if state is None or state["uid"] == uid:
             return
         if not state.get("origin"):
-            raise Conflict(f"{refs.exact(project, name, number)} in the repo {self.root} is a version of this repo that the remote "
+            raise Conflict(f"{refs.exact(name, number)} in the repo {self.root} is a version of this repo that the remote "
                            "does not have yet; it is sent first")
         self._drop_rows(connection, [(project, name, state)])
 
@@ -813,11 +841,11 @@ class LocalRepo:
         """Forget versions (not tombstones: they are gone from this repo), with their aliases and the edges they recorded."""
         touched = set()
         for project, name, state in rows:
-            me = refs.exact(project, name, state["version"])
+            me = refs.exact(name, state["version"])
             connection.execute("DELETE FROM versions WHERE uid = ?", (state["uid"],))
             if state["status"] != "deleted":
                 connection.execute("UPDATE artifacts SET versions = versions - 1 WHERE project = ? AND name = ?", (project, name))
-            connection.execute("DELETE FROM consumers WHERE consumer = ?", (me,))
+            connection.execute("DELETE FROM consumers WHERE project = ? AND consumer = ?", (project, me))
             for alias, number in self._aliases(connection, project, name).items():
                 if number == state["version"]:
                     self._remove_alias(connection, project, name, alias)
@@ -843,24 +871,24 @@ class LocalRepo:
         """Record a version as the remote `origin` (its uid) answered it: a copy, numbered by the remote. Only final
         versions are copied (completed, failed, deleted); a copy that is already here as given is left alone. A
         tombstone replaces a copy. `latest` moves to a completed copy newer than the one it names (`mirror_aliases`
-        sets it exactly). Returns whether anything changed. One transaction."""
+        sets it exactly). The copy keeps the remote's short id. Returns whether anything changed. One transaction."""
         number, uid, status = manifest.get("version"), manifest.get("uid"), manifest.get("status")
         if isinstance(number, bool) or not isinstance(number, int) or not isinstance(uid, str) or \
                 status not in ("completed", "failed", "deleted"):
             return False
         valid_uid(uid)
-        refs.valid_project(project)
+        valid_key(project)
         refs.valid_name(name)
         record = {key: value for key, value in manifest.items() if key not in ("pending", "sync", "aliases", "copied")}
         record["origin"] = origin
+        record.setdefault("short_id", refs.default_short_id(uid))
         with self._write() as connection:
             if connection.execute("SELECT 1 FROM projects WHERE name = ?", (project,)).fetchone() is None:
                 connection.execute("INSERT INTO projects (name, record) VALUES (?, ?)",
                                    (project, json.dumps({"name": project, "title": project, "description": "", "created": now()})))
             known = self._by_uid(connection, uid)
             if known is not None and known[:2] != (project, name):
-                raise Conflict(f"uid {uid} names {refs.exact(known[0], known[1], known[2]['version'])} in this repo, "
-                               f"not a version of {project}:{name}")
+                raise Conflict(f"uid {uid} names {refs.exact(known[1], known[2]['version'])} in this repo, not a version of {name}")
             if known is not None:
                 state = known[2]
                 if {k: v for k, v in state.items() if k != "copied"} == record:
@@ -878,9 +906,10 @@ class LocalRepo:
                 self._save(connection, project, name, record, created=True)
                 if status == "deleted":
                     connection.execute("UPDATE artifacts SET versions = versions - 1 WHERE project = ? AND name = ?", (project, name))
-            me = refs.exact(project, name, number)
+            me = refs.exact(name, number)
             for text in record.get("inputs") or []:
-                connection.execute("INSERT OR IGNORE INTO consumers (input, consumer, time) VALUES (?, ?, ?)", (text, me, now()))
+                connection.execute("INSERT OR IGNORE INTO consumers (project, input, consumer, time) VALUES (?, ?, ?, ?)",
+                                   (project, text, me, now()))
             if status == "completed":
                 head = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = 'latest'",
                                           (project, name)).fetchone()
@@ -909,12 +938,13 @@ class LocalRepo:
                     self._remove_alias(connection, project, name, alias)
             self._fix_latest(connection, project, name)
 
-    def local_versions(self) -> list[tuple[str, str, dict]]:
-        """(project, name, record) of every version this repo numbered itself (no `origin`: not a remote's copy),
-        oldest first (by uid, which is creation order)."""
+    def local_versions(self, project: str) -> list[tuple[str, dict]]:
+        """(name, record) of every version of the project this repo numbered itself (no `origin`: not a remote's
+        copy), oldest first (by uid, which is creation order)."""
         with self._db.read() as connection:
-            rows = [(row[0], row[1], json.loads(row[2])) for row in connection.execute(
-                "SELECT project, name, manifest FROM versions WHERE json_extract(manifest, '$.origin') IS NULL ORDER BY uid")]
+            rows = [(row[0], json.loads(row[1])) for row in connection.execute(
+                "SELECT name, manifest FROM versions WHERE project = ? AND json_extract(manifest, '$.origin') IS NULL "
+                "ORDER BY uid", (project,))]
         return rows
 
     def forget_versions(self, uids) -> int:
@@ -928,82 +958,115 @@ class LocalRepo:
             self._drop_rows(connection, rows)
             return len(rows)
 
-    def copies(self) -> list[tuple[str, str, dict]]:
-        """(project, name, record) of every copy of a remote's version in this repo."""
+    def copies(self, project: str) -> list[tuple[str, dict]]:
+        """(name, record) of every copy of a remote's version in the project."""
         with self._db.read() as connection:
-            return [(row[0], row[1], json.loads(row[2])) for row in connection.execute(
-                "SELECT project, name, manifest FROM versions WHERE json_extract(manifest, '$.origin') IS NOT NULL ORDER BY uid")]
+            return [(row[0], json.loads(row[1])) for row in connection.execute(
+                "SELECT name, manifest FROM versions WHERE project = ? AND json_extract(manifest, '$.origin') IS NOT NULL "
+                "ORDER BY uid", (project,))]
 
     # ------------------------------------------------------------- resolving
 
-    def _resolve(self, connection, ref: Ref | str) -> tuple[str, str, dict]:
+    def _has_artifact(self, connection, project: str, name: str) -> bool:
+        return connection.execute("SELECT 1 FROM artifacts WHERE project = ? AND name = ?", (project, name)).fetchone() is not None
+
+    def _candidates(self, connection, project: str, text: str, name: str | None = None) -> list[dict]:
+        """The versions of the project (of one artifact, with `name`) whose uid a short id or uid may name."""
+        if UID.fullmatch(text):
+            query, values = "SELECT name, manifest FROM versions WHERE project = ? AND uid = ?", [project, text]
+        else:
+            query, values = "SELECT name, manifest FROM versions WHERE project = ? AND idhash >= ? AND idhash < ?", [project, text, text + "g"]
+        if name is not None:
+            query, values = query + " AND name = ?", [*values, name]
+        return [refs.candidate(row[0], json.loads(row[1])) for row in connection.execute(query + " ORDER BY name, number LIMIT 50", values)]
+
+    def ids(self, project: str, text: str, name: str | None = None) -> list[dict]:
+        """The versions (any status) whose uid the short id or uid `text` may name: [{name, version, uid, short_id,
+        status}] (refs.pick chooses among them)."""
+        if not (refs.HEX.fullmatch(text) or UID.fullmatch(text)):
+            raise InvalidRef(f"invalid id {text!r}: 4 or more hex digits, or a uid")
+        with self._db.read() as connection:
+            self._project(connection, project)
+            return self._candidates(connection, project, text, name)
+
+    def _find(self, connection, project: str, ref: Ref | str) -> tuple[str, dict]:
+        """(name, record) of the version a reference names: `v<n>`, a uid, or a short id of any status (a deleted one as
+        its tombstone), an alias, a label, or `latest` of a completed one. Names, numbers, aliases, and labels are
+        matched before short ids (refs.py)."""
         ref = refs.parse(ref) if isinstance(ref, str) else ref
-        project = ref.project or self.project
-        if project is None:
-            raise StoreError(f"reference {ref} has no project and the store has no default")
-        self._check(connection, project, ref.name)
-        if connection.execute("SELECT 1 FROM artifacts WHERE project = ? AND name = ?", (project, ref.name)).fetchone() is None:
-            raise NotFound(f"no artifact {project}:{ref.name}")
+        self._project(connection, project)
+        where = self._in(project)
+        if ref.bare and not self._has_artifact(connection, project, ref.name):  # a version of any artifact, by its id
+            found = refs.pick(ref.id, self._candidates(connection, project, ref.id), where)
+            ref = Ref(found["name"], found["uid"], ref.path)
+        refs.valid_name(ref.name)
+        if not self._has_artifact(connection, project, ref.name):
+            raise NotFound(f"no artifact {ref.name}{where}")
         if ref.exact:
-            if ref.version is not None:
-                state = self._state(connection, project, ref.name, ref.version)
-            else:
-                found = self._by_uid(connection, ref.uid)
-                state = found[2] if found and found[:2] == (project, ref.name) else None
-            if state is None:
-                raise NotFound(f"{project}:{ref.name} has no version {ref.selector}")
-            if state["status"] == "deleted":
-                raise self._gone(project, ref.name, state)
-            if state["status"] != "completed":
-                raise StoreError(f"{project}:{ref.name}@{ref.selector} is {state['status']}, not completed")
-            return project, ref.name, state
+            return ref.name, self._lookup(connection, project, ref.name, ref.selector)
         selector = ref.selector or "latest"
         row = connection.execute("SELECT number FROM aliases WHERE project = ? AND name = ? AND alias = ?",
                                  (project, ref.name, selector)).fetchone()
         if row is None:
             row = connection.execute("SELECT max(number) FROM versions WHERE project = ? AND name = ? AND label = ? AND status = 'completed'",
                                      (project, ref.name, selector)).fetchone()
-        if row is None or row[0] is None:
-            raise NotFound(f"{project}:{ref.name}@{selector} matches no completed version")
-        return project, ref.name, self._state(connection, project, ref.name, row[0])
+        if row is not None and row[0] is not None:
+            return ref.name, self._state(connection, project, ref.name, row[0])
+        if ref.id is not None and selector != "latest":
+            candidates = self._candidates(connection, project, ref.id, ref.name)
+            if candidates:
+                found = refs.pick(ref.id, candidates, where)
+                return ref.name, self._lookup(connection, project, ref.name, found["uid"])
+        raise NotFound(f"{ref.name}@{selector} matches no completed version{where}")
 
-    def resolve(self, ref: Ref | str) -> tuple[str, str, dict]:
-        """(project, name, version record) for a reference; no selector means `latest`."""
+    def _resolve(self, connection, project: str, ref: Ref | str) -> tuple[str, dict]:
+        """(name, record) of the completed version a reference names (Deleted, or StoreError for another status)."""
+        name, state = self._find(connection, project, ref)
+        if state["status"] == "deleted":
+            raise self._gone(project, name, state)
+        if state["status"] != "completed":
+            raise StoreError(f"{refs.exact(name, state['version'])} is {state['status']}, not completed{self._in(project)}")
+        return name, state
+
+    def find(self, project: str, ref: Ref | str) -> tuple[str, dict]:
+        """(name, version record) of the version a reference names, whatever its status for an exact reference or a
+        short id (see `_find`); no selector means `latest`."""
         with self._db.read() as connection:
-            return self._resolve(connection, ref)
+            return self._find(connection, project, ref)
 
-    def lineage(self, ref: Ref | str, marks: bool = False) -> dict[str, list[str]]:
+    def resolve(self, project: str, ref: Ref | str) -> tuple[str, dict]:
+        """(name, version record) of the completed version a reference names; no selector means `latest`."""
+        with self._db.read() as connection:
+            return self._resolve(connection, project, ref)
+
+    def lineage(self, project: str, ref: Ref | str, marks: bool = False) -> dict[str, list[str]]:
         """The versions this one consumed and the versions that consumed it, as exact references. Deleting a version
-        keeps its edges: an exact reference to a deleted version answers too. With `marks`, `deleted` lists the
-        references among them (and the version itself) that were deleted."""
-        ref = refs.parse(ref) if isinstance(ref, str) else ref
+        keeps its edges: an exact reference to a deleted version answers too (and one to a running run). With
+        `marks`, `deleted` lists the references among them (and the version itself) that were deleted, and `nodes`
+        {ref: {status, kind, short_id}} describes them."""
         with self._db.read() as connection:
-            if ref.exact:  # an exact version of any status: a running run already has consumers
-                project, name = ref.project or self.project, ref.name
-                self._check(connection, project, name)
-                version = self._lookup(connection, project, name, ref.selector)
-            else:
-                project, name, version = self._resolve(connection, ref)
-            me = refs.exact(project, name, version["version"])
-            consumers = [row[0] for row in connection.execute("SELECT consumer FROM consumers WHERE input = ? ORDER BY seq", (me,))]
+            name, version = self._find(connection, project, ref)
+            me = refs.exact(name, version["version"])
+            consumers = [row[0] for row in connection.execute(
+                "SELECT consumer FROM consumers WHERE project = ? AND input = ? ORDER BY seq", (project, me))]
             found = {"inputs": list(version["inputs"]), "consumers": consumers}
             if marks:
-                found["deleted"] = [item for item in [me, *found["inputs"], *consumers] if self._tombstoned(connection, item)]
-                found["nodes"] = self._node_marks(connection, [me, *found["inputs"], *consumers])
+                found["deleted"] = [item for item in [me, *found["inputs"], *consumers] if self._tombstoned(connection, project, item)]
+                found["nodes"] = self._node_marks(connection, project, [me, *found["inputs"], *consumers])
         return found
 
-    def _node_marks(self, connection, items: list[str]) -> dict[str, dict]:
-        """{ref: {"status", "kind"}} for lineage references (status of the version, kind from its metadata, e.g. "run")."""
+    def _node_marks(self, connection, project: str, items: list[str]) -> dict[str, dict]:
+        """{ref: {"status", "kind", "short_id"}} for lineage references (kind from the version's metadata, e.g. "run")."""
         marks: dict[str, dict] = {}
         for item in items:
             if item in marks:
                 continue
             try:
                 ref = refs.parse(item)
-                state = self._lookup(connection, ref.project or self.project, ref.name, ref.selector)
+                state = self._lookup(connection, project, ref.name, ref.selector)
             except (StoreError, ValueError):
                 continue
-            mark = {"status": state["status"]}
+            mark = {"status": state["status"], "short_id": refs.short_of(state)}
             kind = (state.get("metadata") or {}).get("kind")
             if isinstance(kind, str):
                 mark["kind"] = kind
@@ -1017,47 +1080,50 @@ class LocalRepo:
         when = (state.get("deleted_at") or "")[:19]
         by = f" by {state['deleted_by']}" if state.get("deleted_by") else ""
         why = f": {state['reason']}" if state.get("reason") else ""
-        return Deleted(f"{refs.exact(project, name, state['version'])} was deleted ({when}{by}){why}")
+        return Deleted(f"{refs.exact(name, state['version'])} was deleted ({when}{by}){why}")
 
     def _lookup(self, connection, project: str, name: str, version: int | str | None) -> dict:
         """A version's record by number, `v<n>`, or uid, whatever its status (NotFound if there is none)."""
         if isinstance(version, str) and refs.VERSION.fullmatch(version):
             version = int(version[1:])
         if isinstance(version, bool) or not isinstance(version, (int, str)):
-            raise ValueError(f"a version is a number, 'v<n>', or a uid, not {version!r}")
+            raise InvalidRef(f"a version is a number, 'v<n>', or a uid, not {version!r}")
         if isinstance(version, int):
             state = self._state(connection, project, name, version)
         else:
             found = self._by_uid(connection, valid_uid(version))
             state = found[2] if found and found[:2] == (project, name) else None
         if state is None:
-            raise NotFound(f"{project}:{name} has no version {version if isinstance(version, str) else f'v{version}'}")
+            if not self._has_artifact(connection, project, name):
+                raise NotFound(f"no artifact {name}{self._in(project)}")
+            raise NotFound(f"{name} has no version {version if isinstance(version, str) else f'v{version}'}{self._in(project)}")
         return state
 
     @staticmethod
-    def _row_status(connection, ref: str) -> str | None:
-        """The status of the version an exact `project:name@v<n>` names (None: no such version)."""
+    def _row_status(connection, project: str, ref: str) -> str | None:
+        """The status of the version an exact `name@v<n>` of the project names (None: no such version)."""
         try:
             parsed = refs.parse(ref)
         except ValueError:
             return None
-        if parsed.project is None or parsed.version is None:
+        if parsed.version is None:
             return None
         row = connection.execute("SELECT status FROM versions WHERE project = ? AND name = ? AND number = ?",
-                                 (parsed.project, parsed.name, parsed.version)).fetchone()
+                                 (project, parsed.name, parsed.version)).fetchone()
         return row[0] if row else None
 
-    def _tombstoned(self, connection, ref: str) -> bool:
-        return self._row_status(connection, ref) == "deleted"
+    def _tombstoned(self, connection, project: str, ref: str) -> bool:
+        return self._row_status(connection, project, ref) == "deleted"
 
     def _protection(self, connection, project: str, name: str, state: dict, aliases: dict[str, int], deleting: set[str]) -> list[str]:
         """Why a version may not be deleted without force: it is running, an alias other than `latest` points at it,
-        or it is an input of a version that is not deleted (in any project; `deleting` are going too)."""
+        or it is an input of a version of its project that is not deleted (`deleting` are going too)."""
         reasons = ["running"] if state["status"] == "running" else []
         reasons += [f"alias {alias}" for alias, number in aliases.items() if number == state["version"] and alias != "latest"]
-        me = refs.exact(project, name, state["version"])
-        for (consumer,) in connection.execute("SELECT consumer FROM consumers WHERE input = ? ORDER BY seq", (me,)):
-            status = self._row_status(connection, consumer)
+        me = refs.exact(name, state["version"])
+        for (consumer,) in connection.execute("SELECT consumer FROM consumers WHERE project = ? AND input = ? ORDER BY seq",
+                                              (project, me)):
+            status = self._row_status(connection, project, consumer)
             if consumer not in deleting and status not in (None, "deleted"):
                 reasons.append(f"input of {consumer}")
         return reasons
@@ -1083,13 +1149,13 @@ class LocalRepo:
         aliases_of: dict[tuple[str, str], dict[str, int]] = {}
         chosen, protected = list(targets), []
         while True:  # leaving a protected version out can protect its inputs: repeat until nothing changes
-            deleting = {refs.exact(project, name, state["version"]) for project, name, state in chosen}
+            deleting = {refs.exact(name, state["version"]) for project, name, state in chosen}
             keep, kept = [], []
             for project, name, state in chosen:
                 aliases = aliases_of.setdefault((project, name), self._aliases(connection, project, name))
                 reasons = self._protection(connection, project, name, state, aliases, deleting)
                 if reasons and not force:
-                    kept.append({"ref": refs.exact(project, name, state["version"]), "reasons": reasons})
+                    kept.append({"ref": refs.exact(name, state["version"]), "reasons": reasons})
                 else:
                     keep.append((project, name, state))
             protected += kept
@@ -1126,7 +1192,7 @@ class LocalRepo:
                 elif row is not None:
                     self._remove_alias(connection, project, name, "latest")
             connection.execute("UPDATE projects SET generation = generation + 1 WHERE name = ?", (project,))
-        return {"deleted": [refs.exact(project, name, state["version"]) for project, name, state in chosen], "skipped": protected}
+        return {"deleted": [refs.exact(name, state["version"]) for project, name, state in chosen], "skipped": protected}
 
     @staticmethod
     def _reason(reason) -> str | None:
@@ -1155,10 +1221,10 @@ class LocalRepo:
             self._check(connection, project, name)
             states = self._states(connection, project, name)
             if not states:
-                raise NotFound(f"no artifact {project}:{name}")
+                raise NotFound(f"no artifact {name}{self._in(project)}")
             live = [(project, name, state) for state in states.values() if state["status"] != "deleted"]
             if not live:
-                raise Deleted(f"every version of {project}:{name} was deleted already")
+                raise Deleted(f"every version of {name} was deleted already")
             return self._tombstone(connection, live, reason=reason, force=force, by=by or _who())
 
     def delete_project(self, project: str, *, reason: str | None = None, force: bool = False, by: str | None = None) -> dict:
@@ -1220,15 +1286,16 @@ class LocalRepo:
         return Database.meta(connection, "sweeps")
 
     @staticmethod
-    def _referenced(connection, projects: list[str] | None, excluded: set[str]) -> set[str]:
-        """The blobs named by versions that are not deleted (of `projects`, or all), leaving out `excluded` refs."""
+    def _referenced(connection, projects: list[str] | None, excluded: set[tuple[str, str]]) -> set[str]:
+        """The blobs named by versions that are not deleted (of `projects`, or all), leaving out the `excluded`
+        (project, ref) pairs."""
         query, values = "SELECT project, name, number, manifest FROM versions WHERE status != 'deleted'", ()
         if projects is not None:
             query += f" AND project IN ({', '.join('?' for _ in projects)})"
             values = tuple(projects)
         found: set[str] = set()
         for project, name, number, manifest in connection.execute(query, values):
-            if excluded and refs.exact(project, name, number) in excluded:
+            if excluded and (project, refs.exact(name, number)) in excluded:
                 continue
             found.update(entry["sha256"] for entry in json.loads(manifest)["files"] if "sha256" in entry)
         return found
@@ -1237,11 +1304,13 @@ class LocalRepo:
         """Apply the retention rules, then remove the blobs no version names that are older than `grace` (seconds,
         or text like `24h`), and stale temporary uploads. `dry_run` (the default) changes nothing and says what would
         go. Safe beside concurrent publishes (gc.py says how). Returns {dry_run, grace, deleted: [refs],
-        skipped: [{ref, reasons}], blobs, bytes, temporary, temporary_bytes}."""
+        skipped: [{ref, reasons}], blobs, bytes, temporary, temporary_bytes}; a ref of a named project (a server's repo)
+        says its project."""
         grace = gc.parse_duration(grace)
         clock = gc.now() if now is None else now
         report = {"dry_run": bool(dry_run), "grace": grace, "deleted": [], "skipped": [], "blobs": 0, "bytes": 0,
                   "temporary": 0, "temporary_bytes": 0}
+        going: set[tuple[str, str]] = set()
         with self._db.read() as connection:
             rules = self._rules(connection)
         for project, project_rules in rules.items():  # one transaction per project
@@ -1259,12 +1328,13 @@ class LocalRepo:
                 if targets:
                     result = self._tombstone(connection, targets, reason="retention rule", force=False, by=by, skip=True,
                                              apply=not dry_run)
-                    report["deleted"] += result["deleted"]
-                    report["skipped"] += result["skipped"]
+                    going.update((project, ref) for ref in result["deleted"])
+                    report["deleted"] += [self._named(project, ref) for ref in result["deleted"]]
+                    report["skipped"] += [{**item, "ref": self._named(project, item["ref"])} for item in result["skipped"]]
         cutoff = clock - grace
         with self._db.read() as connection:
             generations = dict(connection.execute("SELECT name, generation FROM projects").fetchall())
-            referenced = self._referenced(connection, None, set(report["deleted"]) if dry_run else set())
+            referenced = self._referenced(connection, None, going if dry_run else set())
         referenced |= outbox_blobs(self.root)  # versions on their way to the remote: never garbage
         found = gc.candidates(self._blobs.blobs_name, referenced, cutoff)
         temporaries = gc.stale_temporaries(self._blobs.tmp_name, clock - max(grace, gc.STALE_UPLOAD))  # never a live upload

@@ -104,15 +104,17 @@ class Tokens:
         return next((self._principal(row) for row in self.active() if row["id"] == identifier), None)
 
 
-def create_token(root: Path, project: str, write: bool = False, name: str | None = None) -> str:
-    """A new scoped token for `project` (created if it does not exist); returns the token, which is shown only now."""
+def create_token(root: Path, project: str, write: bool = False, name: str | None = None, own: str | None = None) -> str:
+    """A new scoped token for `project` (created if it does not exist; `own`: the name the repo's own project is served
+    under, which exists already); returns the token, which is shown only now."""
     from .local import LocalRepo
 
     root = Path(root)
     if not (root / "token").is_file():
         raise SystemExit(f"{root} is not a repo with a token; `cairn server {root}` creates one")
     refs.valid_project(project)
-    LocalRepo(root).create_project(project)
+    if project != own:
+        LocalRepo(root, where="").create_project(project)
     tokens = Tokens(root)
     identifier = secrets.token_hex(4)
     name = name or f"{project}-{'write' if write else 'read'}-{identifier}"

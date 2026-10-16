@@ -1,4 +1,8 @@
-"""The store's errors; the server maps them to HTTP statuses and the client raises them back."""
+"""The store's errors; the server maps them to HTTP statuses and the client raises them back.
+
+Every error Cairn raises on purpose (an unknown artifact, a refused alias, a remote that does not answer, an invalid
+reference, ...) is a StoreError. The public functions and methods raise them from the caller's call (cairn/api.py),
+so a traceback ends at the user's line and that one call."""
 
 from __future__ import annotations
 
@@ -7,12 +11,28 @@ class StoreError(ValueError):
     pass
 
 
+class InvalidRef(StoreError):
+    """A reference, artifact name, alias, or label that is not well formed."""
+
+
 class IncompleteRun(StoreError):
     """The folder's run.json says the run is not completed."""
 
 
+class NoRun(StoreError, RuntimeError):
+    """`cairn.run` used in a process that has no run."""
+
+
 class NotFound(StoreError, LookupError):
     pass
+
+
+class Ambiguous(StoreError, LookupError):
+    """A short id that names several versions; `candidates` lists them ({name, version, uid, short_id, status})."""
+
+    def __init__(self, message: str, candidates=()):
+        super().__init__(message)
+        self.candidates = list(candidates)
 
 
 class Forbidden(StoreError):

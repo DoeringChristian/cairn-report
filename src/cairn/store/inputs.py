@@ -52,7 +52,7 @@ def _reference(row: dict) -> str | None:
         parsed = refs.parse(ref)
     except ValueError:
         return ref
-    return str(refs.Ref(parsed.project, parsed.name, uid, parsed.path)) if parsed.project else ref
+    return str(refs.Ref(parsed.name, uid, parsed.path))
 
 
 def open_sink(path: Path) -> None:

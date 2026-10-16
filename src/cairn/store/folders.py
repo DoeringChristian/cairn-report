@@ -1,12 +1,12 @@
 """The read-only folders of versions that `pull` returns, in a repo, keyed by version uid.
 
     <repo>/versions/<uid>/manifest.json   the record: {"uid", "sync": "synced", "repo" (the uid of the repo or remote
-                                          the version is from), "project", "name", "version", "manifest",
+                                          the version is from), "name", "version", "manifest",
                                           "accessed", "accessed_at"}
     <repo>/versions/<uid>/files/          the version's files, read-only: what `pull` returns
     <repo>/blobs/<aa>/<sha256>            the contents they are made from (blobs.py)
 
-A version folder is named by its uid, never by project, name, and number, so versions from several projects never collide. The folders are
+A version folder is named by its uid, never by name and number, so versions never collide. The folders are
 derived from the blobs: deleting one loses nothing (the next pull makes it again), and `cairn prune` trims them.
 
 The repo may sit on a network filesystem (a cluster's shared project space, with an outbox and no database) and be
@@ -206,7 +206,7 @@ def install(build: Path, folder: Path) -> None:
             raise
 
 
-def materialize_version(store, project: str, name: str, version: dict, root: Path | str) -> Path:
+def materialize_version(store, name: str, version: dict, root: Path | str) -> Path:
     """Write a resolved version's files into the repo `root` (once) and return its `files/` folder.
 
     Files are cloned (copy-on-write) from the repo's blobs (`store.blob_file` downloads a remote's into them
@@ -216,7 +216,7 @@ def materialize_version(store, project: str, name: str, version: dict, root: Pat
     """
     uid = version.get("uid")
     if not uid:
-        raise StoreError(f"{project}:{name}@v{version['version']} has no uid")
+        raise StoreError(f"{name}@v{version['version']} has no uid")
     folder = version_folder(root, uid)
     record = read_record(folder)
     if record and (folder / FILES).is_dir():
@@ -226,11 +226,11 @@ def materialize_version(store, project: str, name: str, version: dict, root: Pat
     build = scratch(folder)
     try:
         build.mkdir()
-        label = refs.exact(project, name, version["version"]) if version.get("version") is not None else f"{project}:{name}@{uid}"
-        link_files(version["files"], build / FILES, lambda entry: store.blob_file(project, name, version["version"], entry, root),
+        label = refs.exact(name, version["version"]) if version.get("version") is not None else f"{name}@{uid}"
+        link_files(version["files"], build / FILES, lambda entry: store.blob_file(name, version["version"], entry, root),
                    version.get("digest"), label)
-        write_json(build / RECORD, {"uid": uid, "sync": "synced", "repo": getattr(store, "uid", None), "project": project,
-                                    "name": name, "version": version["version"], "manifest": version, "accessed": now(),
+        write_json(build / RECORD, {"uid": uid, "sync": "synced", "repo": getattr(store, "uid", None), "name": name,
+                                    "version": version["version"], "manifest": version, "accessed": now(),
                                     "accessed_at": time.time()})
         install(build, folder)
     finally:
@@ -256,21 +256,22 @@ def inside(folder: Path, ref: refs.Ref, label: str) -> Path:
 def materialize(store, ref, root: Path | str) -> Path:
     """Resolve `ref`, materialize its version in the repo `root`, and return the `files/` folder (or the file after `//`)."""
     ref = refs.parse(ref) if isinstance(ref, str) else ref
-    project, name, version = store.resolve(ref)
-    folder = materialize_version(store, project, name, version, root)
-    return inside(folder, ref, refs.exact(project, name, version["version"]))
+    name, version = store.resolve(ref)
+    folder = materialize_version(store, name, version, root)
+    return inside(folder, ref, refs.exact(name, version["version"]))
 
 
 def pull(store, ref: str, record: bool = True) -> Path:
-    """A read-only local copy of an artifact version (or of the file after `//`) from an open repo (LocalRepo).
+    """A read-only local copy of an artifact version (or of the file after `//`) from a project of an open repo
+    (a LocalProject).
 
     `record=False` leaves the inputs file alone: the report builder records a report's inputs in the
     report's own manifest instead. (`cairn.pull` adds the outbox's pending versions and the remote.)
     """
     parsed = refs.parse(ref)
-    project, name, version = store.resolve(parsed)
-    folder = materialize_version(store, project, name, version, store.root)
-    path = inside(folder, parsed, refs.exact(project, name, version["version"]))
+    name, version = store.resolve(parsed)
+    folder = materialize_version(store, name, version, store.root)
+    path = inside(folder, parsed, refs.exact(name, version["version"]))
     if record:
-        record_input(refs.exact(project, name, version["version"]), version["uid"])
+        record_input(refs.exact(name, version["version"]), version["uid"])
     return path

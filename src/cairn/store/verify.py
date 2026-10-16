@@ -27,7 +27,7 @@ from .digest import manifest_digest, sha256_file
 @dataclass
 class Problem:
     kind: str       # blob | file | link | digest | version
-    path: str       # the file or folder concerned (or `project:name@vN` for a store's version)
+    path: str       # the file or folder concerned (or `name@vN` for a repo's version)
     message: str
     repaired: bool = False
 
@@ -158,7 +158,7 @@ def verify_folders(root: Path | str, repair: bool = False) -> Report:
         manifest = record.get("manifest") or {}
         entries, digest = manifest.get("files") or [], manifest.get("digest")
         report.count("versions")
-        label = f"{record.get('project')}:{record.get('name')}@{record['uid']}"
+        label = f"{record.get('name')}@{record['uid']}"
         files = folder / FILES
         if not files.is_dir():
             problem = report.add("version", folder, f"{label} has no files folder")
@@ -175,14 +175,14 @@ def verify_folders(root: Path | str, repair: bool = False) -> Report:
 
 
 def verify_store(store) -> Report:
-    """A LocalRepo: every blob matches its name; every version's blobs exist (with the recorded size) and a
-    completed version's manifest digest matches its files."""
+    """A LocalRepo (every project of it): every blob matches its name; every version's blobs exist (with the recorded
+    size) and a completed version's manifest digest matches its files."""
     report = Report()
     check_blobs(store.root / "blobs", report)
     for project in store.projects():
         for name in store.artifacts(project["name"]):
             for version in store.versions(project["name"], name):
-                label = f"{project['name']}:{name}@v{version['version']}"
+                label = f"{name}@v{version['version']}" + (f" (project {project['name']})" if project["name"] else "")
                 report.count("versions")
                 for entry in version["files"]:
                     if "sha256" not in entry:
@@ -210,7 +210,7 @@ def verify_outbox(outbox, root: Path) -> Report:
 
     report = Report()
     for record in outbox.records():
-        label = f"{record['project']}:{record['name']}@{record['uid']}"
+        label = f"{record['name']}@{record['uid']}"
         report.count("versions")
         entries = record.get("files") or []
         if record.get("status") == "completed" and record.get("digest") and manifest_digest(entries) != record["digest"]:
@@ -222,13 +222,14 @@ def verify_outbox(outbox, root: Path) -> Report:
     return report
 
 
-def verify_copies(copies: list[tuple[str, str, dict]]) -> Report:
-    """Copies of a remote's versions: a completed one's digest against its file list (their blobs are fetched when needed)."""
+def verify_copies(copies: list[tuple[str, dict]]) -> Report:
+    """Copies of a remote's versions, (name, record): a completed one's digest against its file list (their blobs are
+    fetched when needed)."""
     report = Report()
-    for project, name, state in copies:
+    for name, state in copies:
         report.count("versions")
         if state["status"] == "completed" and state.get("digest") and manifest_digest(state["files"]) != state["digest"]:
-            report.add("digest", f"{project}:{name}@v{state['version']}",
+            report.add("digest", f"{name}@v{state['version']}",
                        f"its files hash to {manifest_digest(state['files'])}, not the recorded {state['digest']}")
     return report
 

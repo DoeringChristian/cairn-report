@@ -5,7 +5,8 @@
     <repo>/outbox/<uid>/.flushing-<host>-<pid>   a sender's claim on it: {"time", "host", "pid"}
     <repo>/blobs/<aa>/<sha256>                   the contents the entries need (shared with the rest of the repo)
 
-An entry holds project, name, the manifest entries, label, metadata, inputs, aliases, and source, plus `sync`
+An entry holds the artifact name, the manifest entries, label, metadata, inputs, aliases, and source, plus `url` (the
+remote it is for: `<server>/<project>`), `sync`
 (pending | running | rejected), `status` (the version's own: completed | running | failed), `owner` (host, pid),
 `number` (None until the remote assigns it), and `error`. A version is pending from the moment its entry exists
 until the remote has it: then its number is written into the repo (a copy, store/local.py) and only after that is
@@ -25,6 +26,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from . import refs
 from .folders import RECORD, hostname, pid_alive, read_json, read_record, remove, scratch, write_json
 
 
@@ -70,7 +72,8 @@ def belongs(record: dict, url: str, uid: str | None) -> bool:
 def manifest_of(record: dict) -> dict:
     """A version-style manifest for an entry (what `Version`, the UI, and `pull` read): number None, `pending` set."""
     status = "pending" if record["status"] == "completed" else record["status"]
-    return {"version": record.get("number"), "uid": record["uid"], "label": record.get("label"), "status": status,
+    return {"version": record.get("number"), "uid": record["uid"], "short_id": refs.default_short_id(record["uid"]),
+            "label": record.get("label"), "status": status,
             "created": record["created"], "completed": record.get("completed"), "files": list(record["files"]),
             "metadata": record.get("metadata") or {}, "inputs": record.get("inputs") or [], "source": record.get("source"),
             "digest": record.get("digest"), "pending": True, "sync": record["sync"], "aliases": record.get("aliases") or [],
@@ -82,10 +85,10 @@ def usable(record: dict | None) -> bool:
     return bool(record) and record.get("sync") == "pending" and record.get("status") == "completed"
 
 
-def exact_ref(project: str, name: str, manifest: dict) -> str:
-    """`project:name@v<n>`, or `project:name@<uid>` while the remote has not numbered the version."""
+def exact_ref(name: str, manifest: dict) -> str:
+    """`name@v<n>`, or `name@<uid>` while the remote has not numbered the version."""
     number = manifest.get("version")
-    return str(Ref(project, name, f"v{number}" if number is not None else manifest["uid"]))
+    return str(Ref(name, f"v{number}" if number is not None else manifest["uid"]))
 
 
 _PARSED: dict[str, tuple[tuple, dict]] = {}  # manifest path -> ((inode, size, mtime_ns), record): `Outbox.records`

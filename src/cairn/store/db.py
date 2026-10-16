@@ -4,15 +4,16 @@ summary row per artifact, in one SQLite file (`<root>/metadata.sqlite3`, WAL mod
     projects   (name) -> record (JSON: name, title, description, created), generation (bumped by every write
                to the project, so a listing can be cached until it changes)
     artifacts  (project, name) -> latest, versions, updated, metadata (of latest), aliases (JSON, current)
-    versions   (project, name, number) -> uid, label, status, manifest (JSON: the whole version record);
-               indexed by uid and by label
+    versions   (project, name, number) -> uid, label, status, manifest (JSON: the whole version record), idhash
+               (the SHA-256 of the uid, which short ids are prefixes of); indexed by uid, by label, and by idhash
     aliases    (project, name, alias) -> number, position (aliases keep the order they first appeared in)
     alias_log  every alias move, in order: project, name, alias, number, time
-    consumers  input ref -> consumer ref, in the order they were recorded
+    consumers  (project, input ref) -> consumer ref, in the order they were recorded (refs: `name@v<n>`)
     retention  (project, prefix) -> rule (JSON: keep_last, keep_days, keep_aliased; see gc.py); made when first set
     meta       schema, sweeps (how many blob sweeps ran; gc.py)
 
-A deleted version stays in `versions` as a tombstone (status `deleted`, its file list dropped), so its number and
+A server's repo holds many projects; a project's own repo (`.cairn/`) holds one, under the project name "" (local.py,
+OWN). A deleted version stays in `versions` as a tombstone (status `deleted`, its file list dropped), so its number and
 uid are never handed out again; `artifacts.versions` counts the versions that are not deleted.
 
 Every write is one short transaction (`BEGIN IMMEDIATE`), so a crash leaves either all of a publish or
@@ -45,8 +46,9 @@ CREATE TABLE IF NOT EXISTS artifacts (
     PRIMARY KEY (project, name)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS versions (
     project TEXT NOT NULL, name TEXT NOT NULL, number INTEGER NOT NULL, uid TEXT NOT NULL, label TEXT,
-    status TEXT NOT NULL, manifest TEXT NOT NULL, PRIMARY KEY (project, name, number)) WITHOUT ROWID;
+    status TEXT NOT NULL, manifest TEXT NOT NULL, idhash TEXT NOT NULL, PRIMARY KEY (project, name, number)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS versions_by_uid ON versions (uid);
+CREATE INDEX IF NOT EXISTS versions_by_idhash ON versions (project, idhash);
 CREATE INDEX IF NOT EXISTS versions_by_label ON versions (project, name, label, status);
 CREATE TABLE IF NOT EXISTS aliases (
     project TEXT NOT NULL, name TEXT NOT NULL, alias TEXT NOT NULL, number INTEGER NOT NULL, position INTEGER NOT NULL,
@@ -56,7 +58,8 @@ CREATE TABLE IF NOT EXISTS alias_log (
     time TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS alias_log_by_artifact ON alias_log (project, name, seq);
 CREATE TABLE IF NOT EXISTS consumers (
-    seq INTEGER PRIMARY KEY, input TEXT NOT NULL, consumer TEXT NOT NULL, time TEXT NOT NULL, UNIQUE (input, consumer));
+    seq INTEGER PRIMARY KEY, project TEXT NOT NULL, input TEXT NOT NULL, consumer TEXT NOT NULL, time TEXT NOT NULL,
+    UNIQUE (project, input, consumer));
 """
 RETENTION_TABLE = ("CREATE TABLE IF NOT EXISTS retention (project TEXT NOT NULL, prefix TEXT NOT NULL, rule TEXT NOT NULL, "
                    "PRIMARY KEY (project, prefix)) WITHOUT ROWID")
@@ -167,8 +170,8 @@ def export(database: Database, folder: Path) -> dict[str, int]:
                                lambda row: {"project": row[0], "name": row[1], **json.loads(row[2])}),
             "aliases.jsonl": ("SELECT project, name, alias, number, time FROM alias_log ORDER BY seq",
                               lambda row: {"project": row[0], "name": row[1], "alias": row[2], "version": row[3], "time": row[4]}),
-            "consumers.jsonl": ("SELECT input, consumer, time FROM consumers ORDER BY seq",
-                                lambda row: {"input": row[0], "consumer": row[1], "time": row[2]}),
+            "consumers.jsonl": ("SELECT project, input, consumer, time FROM consumers ORDER BY seq",
+                                lambda row: {"project": row[0], "input": row[1], "consumer": row[2], "time": row[3]}),
         }
         for file, (query, shape) in queries.items():
             temporary = folder / f".{file}.tmp"
