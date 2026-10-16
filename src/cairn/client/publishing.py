@@ -156,6 +156,7 @@ class Publication:
         self.version: int | None = None  # the number; None while the source of truth has not numbered the version
         self.id: str | None = id  # the version's id (default: a new one, made when it starts)
         self.queued = False  # pending: the remote has not taken it yet
+        self.manifest: dict | None = None  # the version as the last start or completion answered it
         self.started = False
         self._sent: dict[str, tuple] = {}
         self._beating: threading.Event | None = None
@@ -171,6 +172,7 @@ class Publication:
         return refs.exact(self.name, self.version) if self.version is not None else self.id
 
     def _apply(self, manifest: dict) -> None:
+        self.manifest = manifest
         self.version, self.id = manifest.get("version"), manifest["id"]
         self.queued = bool(manifest.get("pending"))
 

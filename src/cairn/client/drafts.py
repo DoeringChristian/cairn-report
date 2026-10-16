@@ -423,8 +423,11 @@ class Draft(Writer):
                 with self._lock:
                     self._pub.inputs = inputs
                     self._pub.complete()
-                version = self.target.version(self._pub.id)
-                version.manifest  # noqa: B018  (load it now)
+                # the version as its completion answered (not read back: once another sender sent it, the outbox no
+                # longer has it, and a remote that does not answer and a repo without copies could not say)
+                from .objects import Version
+
+                version = Version(self.target, self._pub.manifest)
             else:
                 record = self.record
                 # the version takes the draft's id, unless a running version (watch) or an earlier attempt took it

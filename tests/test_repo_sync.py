@@ -929,7 +929,7 @@ def unreachable_once_gone(self, *args, **kwargs):
 
 def sent_by_another_sender(self, record, claim=True):
     sent = send(self, record, claim)  # the version reaches the remote and leaves the outbox (a login node sent it)
-    if record["name"] == "result":
+    if record["name"] == sys.argv[1] and record["status"] == "completed":
         gone.append(True)  # and then the remote stops answering this job: its own answer is lost
         raise Unreachable(f"{self.remote.url} not reachable: connection reset")
     return sent
@@ -939,22 +939,38 @@ remote.Remote._call, sync.Sync.send = unreachable_once_gone, sent_by_another_sen
 run = cairn.init(name="job", code=False, system=False)
 with cairn.draft("result") as result:
     result.add_json("value", {"n": 1})
-print(result.version.id)
+run.finish()
+print(result.version.id, run.version.id)
 """
 
 
-def test_a_job_whose_version_another_sender_sent_while_the_remote_went_away_does_not_fail(server, tmp_path):
-    """On a network filesystem (no database, so no copies): a job's publish loses the remote's answer, while the
-    version did reach the remote and left the outbox (the login node sent it); the remote then stops answering. The
-    job must go on with its version (the remote has it), not fail with Unreachable."""
+@pytest.mark.parametrize("lost", ["result", "runs/job"], ids=["a-draft", "its-run"])
+def test_a_job_whose_version_another_sender_sent_while_the_remote_went_away_does_not_fail(server, tmp_path, lost):
+    """On a network filesystem (no database, so no copies): a job's publish (a draft, or the end of its run) loses the
+    remote's answer, while the version did reach the remote and left the outbox (the login node sent it); the remote
+    then stops answering. The job must go on with its version (the remote has it), not fail with Unreachable or
+    NotFound (reading the version back from a remote that does not answer and a repo that keeps no copy)."""
     server.start()
     project = project_at(tmp_path, "study", server.url)
     (project / "job.py").write_text(LOST_ANSWER)
-    done = subprocess.run([sys.executable, "job.py"], cwd=project, capture_output=True, text=True, timeout=120)
+    done = subprocess.run([sys.executable, "job.py", lost], cwd=project, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr
     assert not (project / ".cairn" / "metadata.sqlite3").exists()
+    result_id, run_id = done.stdout.split()[-2:]
+    login = python(  # the login node sends what the job left (its run's end, when the remote went away before it)
+        project,
+        """
+        import cairn.client.open as open_module, cairn.store.fs as fs, cairn.store.local as local
+        fs.network_filesystem = local.network_filesystem = open_module.network_filesystem = lambda path: "nfs4"
+        from cairn.cli import main
+        main(["sync"])
+        """,
+    )
+    assert login.returncode == 0, login.stdout + login.stderr
     [result] = remote_versions(server, "result")
-    assert result["id"] == done.stdout.split()[-1] and result["status"] == "completed"
+    assert result["id"] == result_id and result["status"] == "completed"
+    [run] = remote_versions(server, "runs/job")
+    assert run["id"] == run_id and run["status"] == "completed"
 
 
 def test_a_script_adopts_the_repos_own_versions_before_it_reads(server, tmp_path, monkeypatch):
