@@ -97,7 +97,7 @@ def test_offline_publishes_wait_and_the_next_command_syncs_them_once_even_after_
     for index in range(3):
         data = folder(tmp_path, f"d{index}", {"a.txt": f"version {index}", "big.bin": f"{index}" * 200_000})
         result = cairn_cli(project, "publish", str(data), "data")
-        assert result.returncode == 0 and "pending data" in result.stdout, result.stderr
+        assert result.returncode == 0 and "pending data" in result.stdout + result.stderr, result.stderr
     pending = outbox(project)
     assert len(pending) == 3
     status = cairn_cli(project, "status").stdout
@@ -544,7 +544,7 @@ def test_changes_to_the_source_of_truth_fail_clearly_offline(server, tmp_path, m
     server.stop()
     for argv in (["alias", "data@v1", "best"], ["delete", "data@v1", "--force"]):
         result = cairn_cli(project, *argv)
-        assert result.returncode == 1 and "needs the remote" in result.stderr and "does not answer" in result.stderr, argv
+        assert result.returncode == 1 and "needs the remote" in result.stderr and "not reachable" in result.stderr, argv
     server.start()
     assert cairn_cli(project, "alias", "data@v1", "best").returncode == 0
     assert LocalRepo(project / ".cairn").aliases(OWN, "data")["best"] == 1  # set there, then mirrored here

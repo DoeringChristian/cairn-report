@@ -2,6 +2,7 @@
 the run (descent.py, a fresh interpreter), and the report, each a command run from the example's folder."""
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -53,7 +54,7 @@ def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
     assert "data         datasets/quadratic@v1" in shown and "reports/descent-study@v1" in shown
     cairn("show", "runs/descent@latest")
     shown = capsys.readouterr().out
-    assert "config\n  dataset = \"datasets/quadratic@latest\"\n  learning_rate = 0.15\n  steps = 60\n" in shown
+    assert re.search(r'config\n  dataset += "datasets/quadratic@latest"\n  learning_rate += 0.15\n  steps += 60\n', shown), shown
     assert "inputs       datasets/quadratic@v1" in shown and "logs/stdout.txt" in shown
 
     built = (project / ".cairn" / "build" / "descent-study" / "narrative.html").read_text()

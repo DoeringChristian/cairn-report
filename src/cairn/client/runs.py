@@ -56,6 +56,7 @@ from ..store import INPUTS_ENV, INPUTS_FILE, StoreError
 from ..store.inputs import close_sink, open_sink
 from . import logger as _logger
 from .drafts import _ACTIVE, Draft, reserve
+from ..term import cause, short_path, warn
 from .http import budget
 
 START_BUDGET = 3.0  # seconds a run's start may wait for the remote, in all (the version is pending after that)
@@ -139,7 +140,7 @@ class Run(Draft):
         return (self.record.get("metadata") or {}).get("config")
 
     def _kept_line(self) -> str:
-        return "cairn: the run failed; its folder is kept (cairn drafts lists it)"
+        return "cairn: run failed; folder kept (cairn drafts)"
 
     # ------------------------------------------------------------ starting
 
@@ -169,7 +170,7 @@ class Run(Draft):
                 try:
                     self._captures.append(Capture(which, self.folder / "logs" / f"{which}.txt", fd_level=fd_level))
                 except OSError as error:
-                    print(f"warning: cairn could not capture {which} ({error})", file=sys.stderr, flush=True)
+                    warn(f"could not capture {which} ({cause(error)})")
         system = self.options["system"]
         if system:
             from .system import Sampler, info
@@ -193,7 +194,7 @@ class Run(Draft):
         try:
             write_environment(root or Path.cwd(), self.folder / "environment")
         except OSError as error:
-            print(f"warning: cairn could not record the environment ({error})", file=sys.stderr, flush=True)
+            warn(f"could not record the environment ({cause(error)})")
         code = self.folder / "code"
         if root is None:
             code.mkdir(parents=True, exist_ok=True)
@@ -237,7 +238,7 @@ class Run(Draft):
             try:
                 other.fail(error, quiet=True) if error is not None else other.publish()  # the run's line says it
             except Exception as failure:  # noqa: BLE001  (one draft must not keep the run from ending)
-                print(f"warning: could not close the draft {other.folder} ({failure})", file=sys.stderr, flush=True)
+                warn(f"could not close the draft {short_path(other.folder)} ({failure})")
         self._release()
         if _CURRENT is self:
             _CURRENT = None
@@ -361,8 +362,7 @@ def input_for(draft: Draft) -> str | None:
     if run is None:
         return os.environ.get(RUN_ENV)
     if not _same_store(run.store, draft.store):
-        print(f"warning: {draft.name}@{draft.uid} goes to another repo than the run {run.ref}: it gets no run input",
-              file=sys.stderr, flush=True)
+        warn(f"{draft.name} ({draft.short_id}) goes to another repo than the run {run.ref}: it gets no run input")
         return None
     return run.ref
 
@@ -484,5 +484,5 @@ def _at_exit() -> None:
                 pass
         run.finish()
     except BaseException as error:  # noqa: BLE001  (never a traceback at interpreter exit)
-        print(f"cairn: could not finish the run {run.name}@{run.uid} ({error}); its folder is {run.folder}",
+        print(f"cairn: could not finish the run {run.name} ({run.short_id}): {error}; folder {short_path(run.folder)}",
               file=sys.__stderr__, flush=True)

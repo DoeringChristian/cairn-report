@@ -84,7 +84,7 @@ def test_an_exception_keeps_the_folder_and_publishes_nothing(configured, env, ca
             (run.path / "partial.txt").write_text("half")
             raise RuntimeError("diverged")
     assert (run.path / "partial.txt").read_text() == "half"
-    assert "cairn: the draft descent failed; its folder is kept (cairn drafts lists it)\n" in capsys.readouterr().err
+    assert "cairn: draft descent failed; folder kept (cairn drafts)\n" in capsys.readouterr().err
     assert run.version is None and cairn.connect().artifact("descent").versions() == []
     assert os.environ["CAIRN_INPUTS"] == str(cairn.run.path / ".cairn-inputs.jsonl")  # the run goes on
     [kept] = [item for item in drafts.drafts() if item.record.get("kind") != "run"]
@@ -394,7 +394,7 @@ def test_hydra_single_run_publishes_its_draft(hydra_project):
 
 def test_hydra_failed_run_keeps_its_draft(hydra_project):
     result = hydra(hydra_project, "experiment.fail=true")
-    assert result.returncode != 0 and "cairn: the run failed; its folder is kept (cairn drafts lists it)" in result.stderr
+    assert result.returncode != 0 and "cairn: run failed; folder kept (cairn drafts)" in result.stderr
     kept = {item.name: item for item in drafts.drafts()}
     assert set(kept) == {"demo", "runs/demo"} and kept["demo"].state == kept["runs/demo"].state == "kept"
     assert json.loads((kept["demo"].folder / "run.json").read_text())["status"] == "failed"

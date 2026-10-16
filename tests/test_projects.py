@@ -364,7 +364,7 @@ def test_cairn_remote_set_checks_the_token_and_asks_for_it(server, tmp_path, mon
     monkeypatch.chdir(folder)
     main(["init"])
     main(["remote", "set", f"{server.url}/demo"])  # $CAIRN_TOKEN holds the server's token
-    assert f"token: accepted by {server.url} (from $CAIRN_TOKEN)" in capsys.readouterr().out
+    assert "token   accepted (from $CAIRN_TOKEN)" in capsys.readouterr().out
     monkeypatch.setenv("CAIRN_TOKEN", "wrong")
     main(["remote", "set", f"{server.url}/demo"])
     assert "$CAIRN_TOKEN wins over every token file" in capsys.readouterr().out
@@ -379,8 +379,8 @@ def test_cairn_remote_set_checks_the_token_and_asks_for_it(server, tmp_path, mon
     monkeypatch.setattr("getpass.getpass", lambda prompt: next(answers))
     main(["remote", "set", f"{server.url}/demo"])
     out = capsys.readouterr().out
-    assert "refused; try again" in out and "token: accepted, saved to" in out
+    assert "refused; try again" in out and "token   accepted, saved to .cairn/token" in out
     saved = folder / ".cairn" / "token"
     assert saved.read_text().strip() == server.token and oct(saved.stat().st_mode & 0o777) == "0o600"
     main(["remote", "set", f"{server.url}/demo"])
-    assert f"token: accepted by {server.url} (from {saved})" in capsys.readouterr().out
+    assert "token   accepted (from .cairn/token)" in capsys.readouterr().out

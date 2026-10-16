@@ -40,6 +40,7 @@ from pathlib import Path
 from ..api import public, surface
 from ..store import StoreError, refs
 from ..store.folders import pid_alive as _pid_alive, read_json, write_json
+from ..term import short_path, warn
 from .http import credit_transfer, transferring
 from .open import repo_root
 from ..store.uids import UID, new_uid
@@ -270,13 +271,11 @@ class Draft(Writer):
         try:
             status = self.store.version(ref).status
         except StoreError as error:
-            print(f"warning: {self.name}@{self.uid}: its run {ref} is not available ({error}); publishing it without",
-                  file=sys.stderr, flush=True)
+            warn(f"{self.name} ({self.short_id}): its run {ref} is not available ({error}); published without it")
             return False
         if status in ("running", "completed"):
             return True
-        print(f"warning: {self.name}@{self.uid}: its run {ref} is {status}; publishing it without that input",
-              file=sys.stderr, flush=True)
+        warn(f"{self.name} ({self.short_id}): its run {ref} is {status}; published without it")
         return False
 
     @property
@@ -330,7 +329,7 @@ class Draft(Writer):
                         self._moved += transferring() - moved
                     seen = current
             except (StoreError, OSError) as error:
-                print(f"warning: syncing the draft {self.folder} failed ({error}); retrying", file=sys.stderr, flush=True)
+                warn(f"syncing the draft {short_path(self.folder)} failed ({error}); retrying", once=False)
 
     def _stop_watch(self) -> None:
         """Stop following the folder, once the sync in progress ended (its waits for the remote are bounded; a transfer
@@ -405,7 +404,7 @@ class Draft(Writer):
         self._keep(error, quiet)
 
     def _kept_line(self) -> str:
-        return f"cairn: the draft {self.name} failed; its folder is kept (cairn drafts lists it)"
+        return f"cairn: draft {self.name} failed; folder kept (cairn drafts)"
 
     def _keep(self, error, quiet: bool = False) -> None:
         if self._pub is not None:
@@ -417,7 +416,7 @@ class Draft(Writer):
                         self._pub.fail()
             except (StoreError, OSError) as failure:
                 if not quiet:
-                    print(f"warning: could not mark {self._pub.ref} failed ({failure})", file=sys.stderr, flush=True)
+                    warn(f"could not mark {self._pub.ref} failed ({failure})")
             self._pub = None
         _unshare(self.folder)
         reason = f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else error

@@ -46,17 +46,17 @@ def cmd_publish(args) -> None:
     meta, command = parse_meta(args.meta), args.command or None
     if args.folder is not None and is_report_folder(config, Path(args.folder)):
         if args.name or args.watch or command or args.label or args.alias or meta:
-            raise SystemExit("a report folder publishes as reports/<slug> on its own: no NAME, --label, --alias, --meta, or --watch")
+            raise SystemExit("cairn: a report folder publishes as reports/<slug>: no NAME, --label, --alias, --meta, or --watch")
         return publish_report(config, Path(args.folder))
     if args.folder is None or args.name is None:
-        raise SystemExit("publish takes FOLDER NAME (or a report folder reports/<slug>)")
+        raise SystemExit("cairn: publish takes FOLDER NAME (or a report folder reports/<slug>)")
     folder = Path(args.folder)
     if args.watch or command:
         raise SystemExit(watch_folder(config, folder, args.name, args.label, args.alias, meta, command, args.interval))
     try:
         publish_folder(config, folder, args.name, args.label, args.alias, meta, args.allow_incomplete)
     except IncompleteRun as error:
-        raise SystemExit(f"error: {error}")
+        raise SystemExit(f"cairn: {error}")
 
 
 def cmd_pull(args) -> None:
@@ -74,7 +74,7 @@ def cmd_pull(args) -> None:
         shutil.copyfile(path, target / path.name)
         return print(target / path.name)
     if target.exists() and any(target.iterdir()):
-        raise SystemExit(f"{target} is not empty")
+        raise SystemExit(f"cairn: {term().short_path(target)} is not empty")
     shutil.copytree(path, target, symlinks=True, copy_function=shutil.copyfile, dirs_exist_ok=True)
     print(target)
 
@@ -87,8 +87,15 @@ def open_objects(args):
     return Repo(open_repo(load_config(args.directory)))
 
 
+def term():
+    """How Cairn prints (term.py), imported when a command prints."""
+    from . import term as module
+
+    return module
+
+
 def report(line: str) -> None:
-    print(f"cairn: {line}", file=sys.stderr, flush=True)
+    print(line, file=sys.stderr, flush=True)
 
 
 def sync_quietly(args) -> None:
@@ -105,27 +112,40 @@ def sync_quietly(args) -> None:
 def cmd_artifacts(args) -> None:
     store = open_objects(args)
     artifacts = store.artifacts(prefix=args.prefix)
+    rows = []
     for artifact in artifacts:
         summary = artifact.summary
         latest = summary.get("latest")
         aliases = ", ".join(f"{name}->v{number}" for name, number in sorted(summary.get("aliases", {}).items()) if name != "latest")
-        print(f"{artifact.name}\t{f'v{latest}' if latest else '-'}\t{summary.get('versions', 0)} versions\t"
-              f"{(summary.get('updated') or '')[:19]}" + (f"\t{aliases}" if aliases else ""))
+        rows.append([artifact.name, f"v{latest}" if latest else "-", summary.get("versions", 0),
+                     _when(summary.get("updated")), aliases])
+    for line in term().table(["NAME", "LATEST", "VERSIONS", "UPDATED", "ALIASES"], rows, shrink=(4,)) if rows else []:
+        print(line)
     if not artifacts:
         print("no artifacts" + (f" starting with {args.prefix!r}" if args.prefix else ""))
 
 
 def _size(files) -> str:
-    return f"{len(files)} files, {sum(item.size for item in files) / 1e6:.1f} MB"
+    return term().files(files)
+
+
+def _when(stamp) -> str:
+    """A time as `2026-10-16 11:01` (the repo's ISO time, shortened)."""
+    return (stamp or "")[:16].replace("T", " ")
 
 
 def cmd_versions(args) -> None:
     store = open_objects(args)
     versions = store.artifact(args.name).versions()
+    rows = []
     for version in versions:
-        number = f"v{version.number}" if version.number is not None else "pending"
-        print(f"{number}\t{version.short_id}\t{version.status}\t{version.label or ''}\t{(version.created or '')[:19]}\t{version.uid}\t"
-              f"{_size(version.files)}")
+        files = version.files
+        rows.append([f"v{version.number}" if version.number is not None else "pending", version.short_id, version.status,
+                     version.label or "", _when(version.created), term().plural(len(files), "file"),
+                     term().size(sum(item.size for item in files)), version.uid])
+    for line in term().table(["VERSION", "ID", "STATUS", "LABEL", "CREATED", "FILES", "SIZE", "UID"], rows, shrink=(7, 3)) \
+            if rows else []:
+        print(line)
     if not versions:
         print(f"no versions of {args.name}")
 
@@ -138,45 +158,48 @@ def cmd_show(args) -> None:
     store = open_objects(args)
     version = store.version(args.ref, offline=args.offline)
     aliases = [] if version.number is None else sorted(name for name, number in version.artifact.aliases.items() if number == version.number)
-    print(f"ref          {version.ref}")
-    print(f"id           {version.short_id}")
-    print(f"uid          {version.uid}")
-    print(f"status       {version.status}")
-    print(f"digest       {version.digest or '-'}")
-    print(f"label        {version.label or ''}")
-    print(f"created      {version.created or ''}")
+    rows = [("ref", version.ref), ("id", version.short_id), ("uid", version.uid), ("status", version.status),
+            ("digest", version.digest or "-"), ("label", version.label or ""), ("created", version.created or "")]
     if aliases:
-        print(f"aliases      {', '.join(aliases)}")
+        rows.append(("aliases", ", ".join(aliases)))
     if version.source:
-        print(f"source       {version.source.get('host', '')}:{version.source.get('folder', '')}")
+        folder = version.source.get("folder", "")
+        rows.append(("source", f"{version.source.get('host', '')}:{term().short_path(folder) if folder else ''}"))
     metadata = version.metadata
     config, overrides = metadata.pop("config", None), metadata.pop("overrides", None)
     if not isinstance(config, dict):
         metadata, config = ({**metadata, "config": config} if config is not None else metadata), None
-    print(f"metadata     {json.dumps(metadata, sort_keys=True)}")
+    rows.append(("metadata", json.dumps(metadata, sort_keys=True)))
     if overrides is not None:
-        print(f"overrides    {' '.join(map(str, overrides)) if isinstance(overrides, list) else json.dumps(overrides)}")
-    if config is not None:
-        print("config")
-        for key, value in _flatten(config):
-            print(f"  {key} = {value}")
-    print(f"inputs       {', '.join(version.inputs) or '-'}")
+        rows.append(("overrides", " ".join(map(str, overrides)) if isinstance(overrides, list) else json.dumps(overrides)))
+    tail = [("inputs", ", ".join(version.inputs) or "-")]
     if not version.is_run:
         try:
             run = version.run
             if run is not None:
-                print(f"run          {run.ref} ({run.short_id}, {run.status})")
-                print(f"data         {', '.join(item.ref for item in version.upstream()) or '-'}")
+                tail.append(("run", f"{run.ref} ({run.short_id}, {run.status})"))
+                tail.append(("data", ", ".join(item.ref for item in version.upstream()) or "-"))
         except StoreError as error:
-            print(f"run          (unknown: {error})")
+            tail.append(("run", f"(unknown: {error})"))
     try:
         consumers = version.consumers
     except StoreError as error:
         consumers = [f"(unknown: {error})"]
-    print(f"consumers    {', '.join(consumers) or '-'}")
-    print(f"files        {_size(version.files)}")
-    for item in version.files:
-        print(f"  {item.path}\t{'-> ' + item.link if item.link else item.size}")
+    tail.append(("consumers", ", ".join(consumers) or "-"))
+    tail.append(("files", _size(version.files)))
+    keys = rows + tail + [("overrides", "")]
+    column = max(len(key) for key, _ in keys) + 4  # one value column for the whole block
+    for key, value in rows:
+        print(term().field(key, value, column).rstrip())
+    if config is not None:
+        print("config")
+        for line in term().block([(f"  {key}", f"= {value}") for key, value in _flatten(config)], gap=1):
+            print(line)
+    for key, value in tail:
+        print(term().field(key, value, column).rstrip())
+    listed = [(f"  {item.path}", "-> " + item.link if item.link else term().size(item.size)) for item in version.files]
+    for line in term().block(listed):
+        print(line)
 
 
 def _flatten(value, prefix: str = "") -> list[tuple[str, str]]:
@@ -196,27 +219,31 @@ def cmd_drafts(args) -> None:
     action = getattr(args, "drafts_command", None) or "list"
     if action == "list":
         found = drafts.drafts()
-        for item in found:
-            print(drafts.describe(item))
+        rows = [drafts.describe(item).split("\t") for item in found]
+        for row in rows:
+            row[6] = term().short_path(row[6])
+        for line in term().table(["NAME", "ID", "UID", "STATE", "AGE", "SIZE", "FOLDER"], rows, shrink=(2,)) if rows else []:
+            print(line)
         if not found:
-            print(f"no drafts in {drafts.drafts_root()}")
+            print(f"no drafts in {term().short_path(drafts.drafts_root())}")
         return
     draft = drafts.load(args.draft)
     if draft.trial:
-        raise SystemExit(f"cairn: {args.draft} is inside the draft {draft.folder}: give the draft itself")
+        raise SystemExit(f"cairn: {args.draft} is inside the draft {term().short_path(draft.folder)}: give the draft itself")
     if action == "discard":
         draft.discard()
-        print(f"discarded the draft {draft.name}@{draft.uid}")
+        print(f"discarded the draft {draft.name} ({draft.short_id})")
         return
     if draft.state == "open":
-        raise SystemExit(f"cairn: the draft {draft.uid} is still open (its process {draft.record.get('owner')} may write to it)")
+        raise SystemExit(f"cairn: the draft {draft.name} ({draft.short_id}) is still open (its process {draft.record.get('owner')} "
+                         "may write to it)")
     version = draft.publish(allow_incomplete=args.allow_incomplete)
     if version is None:
-        print(f"the draft {draft.uid} waits for its inputs")
+        print(f"waiting {draft.name} ({draft.short_id}): its inputs are not published yet")
     elif version.number is None:
-        print(f"pending {version.ref} ({version.short_id}): the remote does not answer; `cairn status` lists it, `cairn sync` sends it")
+        print(f"pending {version.artifact.name} ({version.short_id}): remote not reachable\n" + term().hint("run `cairn sync` to send it now"))
     else:
-        print(f"published {version.ref} ({version.short_id}; {_size(version.files)})")
+        print(f"published {version.ref} ({version.short_id}, {_size(version.files)})")
 
 
 def _store_errors(action):
@@ -232,7 +259,7 @@ def _store_errors(action):
 def cmd_delete(args) -> None:
     store = open_objects(args)
     if (args.ref is None) == (args.artifact is None):
-        raise SystemExit("delete takes a REF (one version) or --artifact NAME (every version of it)")
+        raise SystemExit("cairn: delete takes a REF (one version) or --artifact NAME (every version of it)")
     if args.artifact:
         result = _store_errors(lambda: store.artifact(args.artifact).delete(force=args.force, reason=args.reason))
     else:
@@ -248,28 +275,28 @@ def cmd_alias(args) -> None:
     print(f"{version.artifact.name}@{args.alias} -> v{version.number} ({version.short_id})")
 
 
-def _rule_text(rule: dict) -> str:
+def _rule_text(rule: dict) -> tuple[str, str]:
     parts = [f"keep_last={rule['keep_last']}" if rule.get("keep_last") is not None else "",
              f"keep_days={rule['keep_days']:g}" if rule.get("keep_days") is not None else "",
              "" if rule.get("keep_aliased", True) else "keep_aliased=false"]
-    return f"{rule['prefix'] or '(every artifact)'}\t" + " ".join(part for part in parts if part)
+    return rule["prefix"] or "(every artifact)", " ".join(part for part in parts if part)
 
 
 def cmd_retention(args) -> None:
     repo = open_objects(args)
     if args.retention_command == "set":
         if args.keep_last is None and args.keep_days is None:
-            raise SystemExit("set takes --keep-last and/or --keep-days")
+            raise SystemExit("cairn: set takes --keep-last and/or --keep-days")
         _store_errors(lambda: repo.set_retention(args.prefix or "", keep_last=args.keep_last, keep_days=args.keep_days,
                                                     keep_aliased=not args.no_keep_aliased))
     elif args.retention_command == "clear":
         rules = _store_errors(lambda: repo.retention)
         _store_errors(lambda: setattr(repo, "retention", [rule for rule in rules if rule["prefix"] != (args.prefix or "")]))
     rules = _store_errors(lambda: repo.retention)
-    for rule in rules:
-        print(_rule_text(rule))
+    for line in term().block([_rule_text(rule) for rule in rules]):
+        print(line)
     if not rules:
-        print("no retention rules: nothing is deleted by `cairn gc` but blobs no version names")
+        print("no retention rules (`cairn gc` removes only blobs no version names)")
 
 
 def cmd_gc(args) -> None:
@@ -279,10 +306,10 @@ def cmd_gc(args) -> None:
     try:
         grace = parse_duration(args.grace)
     except ValueError as error:
-        raise SystemExit(str(error)) from None
+        raise SystemExit(f"cairn: {error}") from None
     if args.root is not None:
         if not (args.root / "repo.json").is_file():
-            raise SystemExit(f"{args.root} is not a repo (no repo.json)")
+            raise SystemExit(f"cairn: {term().short_path(args.root)} is not a repo (no repo.json)")
         backend = LocalRepo(args.root)
         result = _store_errors(lambda: backend.gc(dry_run=args.dry_run, grace=grace))
     else:
@@ -294,7 +321,7 @@ def cmd_gc(args) -> None:
     for item in result["skipped"]:
         print(f"kept {item['ref']} (protected: {', '.join(item['reasons'])})")
     print(f"{verb} {len(result['deleted'])} versions; {'would remove' if args.dry_run else 'removed'} {result['blobs']} blobs "
-          f"({describe_bytes(result['bytes'])} {'to free' if args.dry_run else 'freed'}) and {result['temporary']} stale uploads "
+          f"({describe_bytes(result['bytes'])} {'to free' if args.dry_run else 'freed'}), {result['temporary']} stale uploads "
           f"({describe_bytes(result['temporary_bytes'])}); grace {grace / 3600:g} h")
 
 
@@ -322,9 +349,9 @@ def cmd_init(args) -> None:
     else:
         repo = Path.cwd().resolve() / BASE_NAME
     if (repo / REPO_FILE).is_file():
-        return print(f"the repo {repo} exists already")
+        return print(f"the repo {term().short_path(repo)} exists already")
     make_repo(repo)
-    print(f"created the repo {repo} (settings: {repo / 'config.toml'}; `cairn remote set <url>` adds a remote)")
+    print(f"created the repo {term().short_path(repo)} (settings: {term().short_path(repo / 'config.toml')})")
 
 
 def cmd_remote(args) -> None:
@@ -335,26 +362,22 @@ def cmd_remote(args) -> None:
     action = getattr(args, "remote_command", None)
     current = remote_url(config)
     if action is None:
-        return print(current or "no remote")
+        return print(f"remote  {current}" if current else "no remote")
     if action == "set":
         url = valid_remote(args.url)
         if not (config.cairn_dir / "repo.json").is_file():
             make_repo(config.cairn_dir)
-            print(f"created the repo {config.cairn_dir}")
+            print(f"created the repo {term().short_path(config.cairn_dir)}")
         set_remote(config.source, url)
-        print(f"remote: {url}")
+        print(f"remote  {url}")
         _check_token(load_config(args.directory), url)
         if url != current:
-            print("The next cairn command that uses the repo syncs with it (or run `cairn sync` now): versions this repo "
-                  "numbered itself are adopted, sent oldest first and renumbered by the remote (their uids stay, so "
-                  "lineage and reports stay valid). The token is $CAIRN_TOKEN, .cairn/token, or ~/.config/cairn/token.")
+            print(term().hint("run `cairn sync` to sync now (versions numbered here get the remote's numbers)"))
         return
     if current is None:
         return print("no remote")
     set_remote(config.source, None)
-    print(f"removed the remote {current}: this repo is the source of truth again. Versions keep their numbers (copies of "
-          "the remote's too), and pending ones stay pending: they wait in the outbox, unnumbered, until a remote is "
-          "set again.")
+    print(f"removed the remote {current}; pending versions wait until one is set again")
 
 
 def _check_token(config, url: str) -> None:
@@ -367,6 +390,7 @@ def _check_token(config, url: str) -> None:
 
     server = remote_parts(url)[0]
     token, source, _ = find_token(config)
+    hint, short = term().hint, term().short_path
 
     def answer(candidate: str) -> str:
         try:
@@ -379,25 +403,25 @@ def _check_token(config, url: str) -> None:
                 return "refused"
             raise SystemExit(f"cairn: the remote answered {error.status}: {error}") from None
 
+    def where(place) -> str:
+        return place if place is None or place.startswith("$") else short(place)
+
     state = answer(token)
     if state == "ok":
-        return print(f"token: accepted by {server}" + (f" (from {source})" if source else " (it needs none)"))
+        return print("token   accepted" + (f" (from {where(source)})" if source else " (none needed)"))
     if state == "unreachable":
-        return print(f"warning: {server} does not answer now; the token is checked when it does (the next command "
-                     "syncs then)")
-    told = f"the token from {source} was refused by {server}" if token else f"no token for {server}"
+        return print(f"token   not checked: {server} not reachable (the next command checks it)")
+    told = f"token from {where(source)} refused by {server}" if token else f"no token for {server}"
     if source == "$CAIRN_TOKEN":
-        return print(f"warning: {told}: $CAIRN_TOKEN wins over every token file, so set it to the server's token "
-                     "or unset it")
+        return print(f"warning: {told}\n" + hint("$CAIRN_TOKEN wins over every token file: set it to the server's token or unset it"))
     target = Path(config.cairn_dir) / "token"
     if not sys.stdin.isatty():
-        return print(f"warning: {told}. Copy the server's token file (its repo's `token`) to {target} or "
-                     "~/.config/cairn/token, or set CAIRN_TOKEN")
-    print(f"{told}.")
+        return print(f"warning: {told}\n" + hint(f"Copy the server's token file to {short(target)}, or set CAIRN_TOKEN"))
+    print(f"{told}")
     for _ in range(3):
-        candidate = getpass.getpass(f"Token for {server} (`cairn server` prints it; empty to skip): ").strip()
+        candidate = getpass.getpass(f"Token for {server} (empty skips): ").strip()
         if not candidate:
-            return print(f"skipped: copy the server's token to {target} later, or set CAIRN_TOKEN")
+            return print(f"skipped\n" + hint(f"copy the server's token to {short(target)} later, or set CAIRN_TOKEN"))
         state = answer(candidate)
         if state == "ok":
             temporary = target.with_name(f".token.{os.getpid()}.tmp")
@@ -405,9 +429,9 @@ def _check_token(config, url: str) -> None:
             with os.fdopen(descriptor, "w") as handle:
                 handle.write(candidate + "\n")
             os.replace(temporary, target)
-            return print(f"token: accepted, saved to {target} (owner-only)")
+            return print(f"token   accepted, saved to {short(target)} (owner-only)")
         if state == "unreachable":
-            return print(f"warning: {server} stopped answering; nothing saved")
+            return print(f"warning: {server} not reachable; nothing saved")
         print("refused; try again")
     raise SystemExit(f"cairn: no token accepted by {server}; nothing saved")
 
@@ -420,20 +444,20 @@ def cmd_sync(args) -> None:
     while True:
         result = store.sync(report=lambda line: print(line, flush=True))
         if result["remote"] is None:
-            return print("this repo has no remote (`cairn remote set <url>`): there is nothing to sync")
+            return print("no remote: nothing to sync\n" + term().hint("`cairn remote set <server>/<project>` sets one"))
         waiting = [record for record in result["waiting"] if record["sync"] != "running"]
         running = [record for record in result["waiting"] if record["sync"] == "running"]
         if not args.watch:
             break
         time.sleep(float(config.repo.get("interval", 30)))
     if not (result["sent"] or result["rejected"] or result["waiting"]):
-        print("nothing to sync: the remote has every version of this repo")
+        print("nothing to sync")
     if waiting:
-        print(f"{len(waiting)} versions still pending: the remote at {result['remote']} does not answer", file=sys.stderr)
+        print(f"pending {term().plural(len(waiting), 'version')}: {result['remote']} not reachable", file=sys.stderr)
     if running:
-        print(f"{len(running)} running versions are sent by the processes that run them", flush=True)
+        print(f"running {term().plural(len(running), 'version')} (their processes send them)", flush=True)
     if result.get("refreshed"):
-        print(f"mirrored the aliases of {result['refreshed']} artifacts", flush=True)
+        print(f"mirrored the aliases of {term().plural(result['refreshed'], 'artifact')}", flush=True)
     if waiting or result["rejected"]:
         raise SystemExit(1)
 
@@ -456,23 +480,26 @@ def cmd_status(args) -> None:
     for ref, why in status["reaped"]:  # opening the repo fails the versions whose process died
         print(f"failed {ref}: {why}")
     if status["remote"] is None:
-        print("this repo has no remote: it is the source of truth, and nothing waits")
+        print("no remote: this repo is the source of truth; nothing waits")
         return
     now = time.time()
+    rows = []
     for row in status["entries"]:
         files = row.get("files", [])
-        size = sum(item.get("size", 0) for item in files)
         number = row.get("number")
-        line = (f"{row['sync']}\t{row['name']}\t{f'v{number}' if number else '-'}\t{refs.default_short_id(row['uid'])}\t{row['uid']}\t"
-                f"{row['status']}\t"
-                f"{(row.get('owner') or {}).get('host', '')}\t{_age(now - epoch(row.get('created')))}\t{len(files)} files, {size / 1e6:.1f} MB")
+        note = []
         if row["sync"] == "running" and row.get("heartbeat") is not None:
-            line += f"\theartbeat {_age(now - row['heartbeat'])} ago"
+            note.append(f"heartbeat {_age(now - row['heartbeat'])} ago")
         if row.get("error"):
-            line += f"\t{row['error']}"
+            note.append(str(row["error"]))
+        host = (row.get("owner") or {}).get("host", "")
+        rows.append([row["sync"], row["name"], f"v{number}" if number else "-", refs.default_short_id(row["uid"]), row["status"],
+                     host.split(".")[0], _age(now - epoch(row.get("created"))), term().files(files), "; ".join(note)])
+    for line in term().table(["SYNC", "NAME", "VERSION", "ID", "STATUS", "HOST", "AGE", "FILES", "NOTE"], rows, shrink=(5, 1)) \
+            if rows else []:
         print(line)
     if not status["entries"]:
-        print(f"nothing pending: the remote {status['remote']} has every version of this repo")
+        print(f"nothing pending ({status['remote']} has every version)")
 
 
 def cmd_prune(args) -> None:
@@ -482,7 +509,7 @@ def cmd_prune(args) -> None:
         older = parse_age(args.older_than) if args.older_than else None
         size = parse_size(args.max_size) if args.max_size else None
     except ValueError as error:
-        raise SystemExit(str(error)) from None
+        raise SystemExit(f"cairn: {error}") from None
     if older is None and size is None:
         older = parse_age("30d")
     result = open_objects(args).backend.prune(older, size, dry_run=args.dry_run)
@@ -495,18 +522,18 @@ def cmd_verify(args) -> None:
     from .store import StoreError
 
     if args.ref and args.repo is not None:
-        raise SystemExit("verify takes a REF or --repo FOLDER, not both")
+        raise SystemExit("cairn: verify takes a REF or --repo FOLDER, not both")
     try:
         if args.repo is not None:  # a repo folder on this machine (a server's): no configuration needed
             if not (args.repo / "repo.json").is_file():
-                raise SystemExit(f"{args.repo} is not a repo (no repo.json)")
+                raise SystemExit(f"cairn: {term().short_path(args.repo)} is not a repo (no repo.json)")
             from .client.open import open_folder
 
             report = open_folder(args.repo).verify(None, repair=args.repair)
         else:
             report = open_objects(args).verify(args.ref, repair=args.repair)
     except (StoreError, ValueError) as error:
-        raise SystemExit(f"error: {error}") from None
+        raise SystemExit(f"cairn: {error}") from None
     for line in report.lines():
         print(line)
     print(report.summary(), file=sys.stderr if not report.ok else sys.stdout)
@@ -522,9 +549,9 @@ def cmd_server(args) -> None:
         interval = parse_duration(args.gc_interval) if args.gc_interval else None
         grace = parse_duration(args.grace)
     except ValueError as error:
-        raise SystemExit(str(error)) from None
+        raise SystemExit(f"cairn: {error}") from None
     if interval is not None and interval <= 0:
-        raise SystemExit("--gc-interval must be longer than 0")
+        raise SystemExit("cairn: --gc-interval must be longer than 0")
     from .client.open import own_project, served_root
 
     root, own = args.root, None
@@ -541,7 +568,7 @@ def cmd_ui(args) -> None:
     from .ui import open_backend, serve_ui
 
     if args.remote and args.repo:
-        raise SystemExit("ui takes --remote URL or --repo FOLDER, not both")
+        raise SystemExit("cairn: ui takes --remote URL or --repo FOLDER, not both")
     config = None
     try:
         config = load_config(args.directory)
@@ -566,10 +593,10 @@ def cmd_export_metadata(args) -> None:
 
     root = args.root
     if not (root / "repo.json").is_file():
-        raise SystemExit(f"{root} is not a repo (no repo.json)")
+        raise SystemExit(f"cairn: {term().short_path(root)} is not a repo (no repo.json)")
     counts = LocalRepo(root, allow_network_fs=True).export_metadata(args.folder)  # only reads
-    for file, count in counts.items():
-        print(f"{args.folder / file}  {count} rows")
+    for line in term().block([(term().short_path(args.folder / file), f"{count} rows") for file, count in counts.items()]):
+        print(line)
 
 
 def cmd_finalize_study(args) -> None:
@@ -578,7 +605,7 @@ def cmd_finalize_study(args) -> None:
     study = Path(args.study).resolve()
     completed = finalize_study(study)
     done = "completed and published (a draft)" if not study.exists() else "completed; latest moved"
-    print(f"{args.study}: {done if completed else 'failed (not every trial completed)'}")
+    print(f"{term().short_path(args.study)}: {done if completed else 'failed (not every trial completed)'}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -763,10 +790,14 @@ def main(argv: list[str] | None = None) -> None:
             sync_quietly(args)
         try:
             args.run(args)
+        except SystemExit as exit:  # a message ends the command as `cairn: <message>`
+            if isinstance(exit.code, str):
+                raise SystemExit(term().error_line(exit.code)) from None
+            raise
         except Exception as error:  # an expected failure is one line; CAIRN_DEBUG=1 shows the traceback
             if os.environ.get("CAIRN_DEBUG") or not _expected(error):
                 raise
-            raise SystemExit(f"cairn: {error}") from None
+            raise SystemExit(f"cairn: {_describe(error)}") from None
         finally:
             if syncing:
                 sync_quietly(args)
@@ -784,6 +815,14 @@ READING_COMMANDS = {cmd_artifacts, cmd_versions, cmd_show, cmd_pull, cmd_alias, 
 # found (nothing above the working directory, no $CAIRN_DIR) is refused, never made in a random folder
 REPO_COMMANDS = {cmd_publish, cmd_pull, cmd_artifacts, cmd_versions, cmd_show, cmd_alias, cmd_delete,
                  cmd_retention, cmd_gc, cmd_status, cmd_prune, cmd_verify, cmd_build, cmd_drafts, cmd_finalize_study}
+
+
+def _describe(error: BaseException) -> str:
+    """An expected error in a few words: an OSError as its reason and its path (no errno, no class name)."""
+    if isinstance(error, OSError) and error.strerror:
+        where = f": {term().short_path(error.filename)}" if error.filename else ""
+        return f"{error.strerror}{where}"
+    return term().short_paths(str(error))
 
 
 def _expected(error: BaseException) -> bool:

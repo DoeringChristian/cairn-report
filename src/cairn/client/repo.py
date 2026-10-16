@@ -65,6 +65,7 @@ from ..store.refs import Ref
 from ..store.uids import UID, new_uid
 from ..store.verify import Report, check_blobs, verify_copies, verify_folders, verify_outbox, verify_store, verify_version
 from ..store.local import FileRead, repo_uid
+from ..term import hint, note, reason, short_path
 from .http import budget, entries_for, scan, transferring
 from .remote import Remote
 from .sync import NotRecorded, Sync, Waiting
@@ -317,6 +318,7 @@ class SyncedRepo(ProjectRepo):
         self.heartbeat_timeout = heartbeat_timeout
         self.outbox = Outbox(self.root)
         self.engine = Sync(self.outbox, remote, copies, self.root, heartbeat_timeout)
+        self.announced: set[str] = set()  # uids whose pending state a warning already told (publish prints no second line)
         self._down_until = 0.0  # the remote did not answer: reads and background sends skip it until then
         self._quick: SyncedRepo | None = None  # this repo with short request timeouts (`quick`)
         self._reached = False  # reach() looked at the remote once (and adopted what the repo numbered itself)
@@ -643,8 +645,8 @@ class SyncedRepo(ProjectRepo):
                 name, version = self.ask.resolve(Ref(name, ref.selector))
             except Unreachable:
                 if ref.exact:
-                    raise Unreachable(f"the remote {self.url} does not answer and the repo {self.root} does not have {key}") from None
-                reason = f"the remote {self.url} does not answer"
+                    raise Unreachable(f"{self.url} not reachable, and the repo {short_path(self.root)} does not have {key}") from None
+                reason = f"{self.url} not reachable"
             except NotFound:
                 if pending is None:
                     raise
@@ -660,7 +662,7 @@ class SyncedRepo(ProjectRepo):
                 return name, version
         else:
             if ref.exact:
-                raise NotFound(f"offline: the repo {self.root} does not have {key}")
+                raise NotFound(f"offline: the repo {short_path(self.root)} does not have {key}")
             reason = "offline"
         try:
             found = masked(self.copies.resolve(Ref(name, ref.selector))[1])
@@ -670,7 +672,7 @@ class SyncedRepo(ProjectRepo):
             say(_pending_warning(key, name, pending["uid"]))
             return name, manifest_of(pending)
         if found is None:
-            raise Unreachable(f"{reason}, and the repo {self.root} has no version for {key}")
+            raise Unreachable(f"{reason}, and the repo {short_path(self.root)} has no version for {key}")
         if found.get("pending"):
             say(_pending_warning(key, name, found["uid"]))
             return name, found
@@ -756,8 +758,7 @@ class SyncedRepo(ProjectRepo):
         try:
             return call()
         except Unreachable as error:
-            raise Unreachable(f"{what} needs the remote (it is the source of truth for numbers, aliases, and deletions), and "
-                              f"the remote {self.url} does not answer; try again when it does ({error})") from None
+            raise Unreachable(f"{what} needs the remote (the source of truth): {error}") from None
 
     def set_alias(self, name: str, alias: str, version: int) -> None:
         self._changes(lambda: self.remote.set_alias(name, alias, version), f"setting the alias {alias}")
@@ -869,7 +870,7 @@ class SyncedRepo(ProjectRepo):
         host that hangs makes one short wait, not one long one per request. Raises Unreachable, also while the remote
         is down (`down`)."""
         if self.down():
-            raise Unreachable(f"the remote {self.url} did not answer a moment ago")
+            raise Unreachable(f"{self.url} not reachable (a moment ago)")
         if self._reached:
             return
         began = time.monotonic()
@@ -917,16 +918,18 @@ class SyncedRepo(ProjectRepo):
             self.quick.engine.send(record)
         except Waiting as error:
             if isinstance(error.__cause__, (Unauthorized, Forbidden)):  # the caller should know at once; it stays pending
-                raise type(error.__cause__)(f"{error.__cause__}; {record['name']}@{record['uid']} stays pending in the "
-                                            "outbox (`cairn status`) until a token that may write sends it") from None
-            _warn(f"pending {record['name']}@{record['uid']}: {error}")
+                raise type(error.__cause__)(f"{error.__cause__}; {record['name']} ({refs.default_short_id(record['uid'])}) "
+                                            "stays pending until a token that may write sends it") from None
+            _warn(f"pending {record['name']} ({refs.default_short_id(record['uid'])}): {reason(error)}")
+            self.announced.add(record["uid"])
             start_uploader(self)
         except Unreachable as error:
             if not isinstance(error, NotRecorded):
                 self._failed(began)
             what = "failed" if record["status"] == "failed" else "pending"
-            _warn(f"{what} {record['name']} ({refs.default_short_id(record['uid'])}): the remote does not answer ({error}); it is "
-                  "usable here now and sent when the remote answers (`cairn status` lists it, `cairn sync` sends it)")
+            _warn(f"{what} {record['name']} ({refs.default_short_id(record['uid'])}): {reason(error)}\n"
+                  + hint("run `cairn sync` to send it now", sys.stderr))
+            self.announced.add(record["uid"])
             start_uploader(self)
         return self._settled(record)
 
@@ -1098,7 +1101,7 @@ class _Guarded:
             repo = self._repo
             repo.reach()
             if repo.down():
-                raise Unreachable(f"the remote {repo.url} did not answer a moment ago")
+                raise Unreachable(f"{repo.url} not reachable (a moment ago)")
             began = time.monotonic()
             try:
                 return target(*args, **kwargs)
@@ -1122,8 +1125,7 @@ def _chunks(blob: Path, first: int, last: int):
 
 
 def _pending_warning(key: str, name: str, uid: str) -> str:
-    return (f"warning: {key} is {name}@{uid} ({refs.default_short_id(uid)}), a version of this repo that the remote does not "
-            "have yet (pending: `cairn status` lists it, `cairn sync` sends it)")
+    return f"warning: {key} is {name}@{refs.default_short_id(uid)}, pending here (the remote does not have it yet)"
 
 
 # ---------------------------------------------------------------------- the background uploader
@@ -1152,7 +1154,7 @@ def start_uploader(repo: SyncedRepo, first_delay: float = 1.0, max_delay: float 
             while True:
                 time.sleep(delay)
                 try:
-                    result = repo.sync(report=lambda line: print(f"cairn: {line}", file=sys.stderr, flush=True), refresh=False)
+                    result = repo.sync(report=note, refresh=False)
                     left = [record for record in result["waiting"] if record["sync"] != "running"]  # running: its process sends it
                 except Exception:  # noqa: BLE001 - never let the uploader die noisily; the next sync retries
                     left = [True]

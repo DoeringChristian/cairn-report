@@ -58,7 +58,7 @@ def test_a_sent_version_gets_its_number_in_the_repo_under_the_same_uid(down, env
 
     down.start()
     out, _ = run(capsys, "sync")
-    assert f"uploaded data@v1 ({version.short_id})" in out
+    assert f"sent data@v1 ({version.short_id})" in out
     assert outbox_versions(env) == []
     copy = store.backend.copies.get_version("data", 1)
     assert (copy["uid"], copy["status"], copy["origin"]) == (version.uid, "completed", f"{store.uid}/study")
@@ -84,7 +84,7 @@ def test_pending_version_is_usable_before_upload(down, env, capsys, monkeypatch)
     path = cairn.pull(f"data@{uid}", record=False)  # by uid
     assert path == env / ".cairn" / "versions" / uid / "files" and (path / "n.txt").read_text() == "41"
     assert not os.access(path / "n.txt", os.W_OK) and stat.S_IMODE((path / "n.txt").stat().st_mode) == 0o444
-    assert "the remote does not have yet" in capsys.readouterr().err
+    assert "the remote does not have it yet" in capsys.readouterr().err
     inputs = env / "job" / ".cairn-inputs.jsonl"
     inputs.parent.mkdir()
     monkeypatch.setenv("CAIRN_INPUTS", str(inputs))
@@ -140,17 +140,17 @@ def test_heartbeat_expiry_fails_a_running_version_from_another_host(down, env, c
         monkeypatch.setattr(module, "hostname", lambda: "login-node")
     down.start()
     out, _ = run(capsys, "sync")  # a fresh heartbeat from another host: left alone
-    assert "running versions are sent by the processes that run them" in out
+    assert "running 1 version (their processes send them)" in out
     assert down.versions("sweep") == [] and outbox_versions(env) == [record["uid"]]
     status = run(capsys, "status")[0]
-    assert status.startswith("running\tsweep\t-\t") and re.search(r"\theartbeat \d+s ago", status)
+    assert re.search(r"\nrunning +sweep +- ", status) and re.search(r"  heartbeat \d+s ago", status), status
 
     heartbeat = env / ".cairn" / "outbox" / record["uid"] / "heartbeat"
     beat = json.loads(heartbeat.read_text())
     assert beat["host"] != "login-node" and beat["pid"] == os.getpid()
     heartbeat.write_text(json.dumps({**beat, "time": time.time() - 31}))  # its job went silent
     out, _ = run(capsys, "sync")
-    assert "failing sweep@" in out and "no heartbeat from" in out and "failed sweep@v1" in out
+    assert "failing sweep (" in out and "no heartbeat from" in out and "failed sweep@v1" in out
     assert [(v["status"], v["uid"]) for v in down.versions("sweep")] == [("failed", record["uid"])]
     assert outbox_versions(env) == []
 
@@ -240,7 +240,7 @@ def test_sync_mirrors_the_remotes_aliases_into_the_repo(down, env, capsys, monke
     cairn.pull("data@v2", record=False)  # copied into the repo, but the repo still says best is v1
     out, err = run(capsys, "pull", "data@best", "--offline", "--no-record")
     assert (Path(out.strip()) / "a.txt").read_text() == "one"
-    assert "mirrored the aliases of 1 artifacts" in run(capsys, "sync")[0]
+    assert "mirrored the aliases of 1 artifact" in run(capsys, "sync")[0]
     out, err = run(capsys, "pull", "data@best", "--offline", "--no-record")
     assert (Path(out.strip()) / "a.txt").read_text() == "two" and "data@v2" in err
     assert store.backend.copies.aliases("data") == {"latest": 2, "best": 2}

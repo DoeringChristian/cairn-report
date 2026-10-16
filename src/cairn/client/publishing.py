@@ -33,6 +33,7 @@ from pathlib import Path
 from ..api import public, surface
 from ..config import Config, load_config
 from ..store import INPUTS_ENV, INPUTS_FILE, MissingBlobs, StoreError, read_inputs, refs
+from ..term import files as files_text, hint, note, plural, short_path, warn
 from .http import scan
 from .open import open_repo
 
@@ -205,7 +206,7 @@ def parse_meta(items: list[str]) -> dict:
     for item in items:
         key, separator, value = item.partition("=")
         if not separator or not key:
-            raise SystemExit(f"--meta takes KEY=VALUE, got {item!r}")
+            raise SystemExit(f"cairn: --meta takes KEY=VALUE, got {item!r}")
         try:
             meta[key] = json.loads(value)
         except ValueError:
@@ -214,20 +215,18 @@ def parse_meta(items: list[str]) -> dict:
 
 
 def describe(version: dict) -> str:
-    size = sum(entry.get("size", 0) for entry in version["files"])
-    return f"{len(version['files'])} files, {size / 1e6:.1f} MB"
+    return files_text(version["files"])
 
 
 def published(name: str, version: dict, before: int = 0) -> str:
-    """The line a publish prints: `published descent@v3 (3f9a2c1; 2 files, 0.1 MB)`, `descent@v3 (3f9a2c1) unchanged`,
-    or `pending descent@<uid> (3f9a2c1): ...` while the remote does not answer."""
+    """The line a publish prints: `published descent@v3 (3f9a2c1, 2 files, 12 KB)`, `unchanged descent@v3 (3f9a2c1)`,
+    or `pending descent (3f9a2c1): remote not reachable` while the remote does not answer."""
     short = refs.short_of(version)
     if version.get("version") is None:
-        return (f"pending {name}@{version['uid']} ({short}): the remote does not answer; `cairn status` lists it, `cairn sync` "
-                "sends it")
+        return f"pending {name} ({short}): remote not reachable\n" + hint("run `cairn sync` to send it now")
     if version["version"] <= before:
-        return f"{name}@v{version['version']} ({short}) unchanged"
-    return f"published {name}@v{version['version']} ({short}; {describe(version)})"
+        return f"unchanged {name}@v{version['version']} ({short})"
+    return f"published {name}@v{version['version']} ({short}, {describe(version)})"
 
 
 def publish_folder(config: Config, folder: Path, name: str, label: str | None, aliases: list[str], meta: dict,
@@ -241,6 +240,8 @@ def publish_folder(config: Config, folder: Path, name: str, label: str | None, a
         before = 0
     version = publish_version(store, target, folder, metadata=meta, aliases=aliases, label=label, config=config,
                               allow_incomplete=allow_incomplete)
+    if version.manifest.get("version") is None and version.manifest.get("uid") in getattr(store, "announced", ()):
+        return  # the repo said so already (on stderr), with the reason
     print(published(target, version.manifest, before), flush=True)
 
 
@@ -274,14 +275,13 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
         except (StoreError, OSError) as error:
             if attempt == 4:
                 raise
-            print(f"warning: could not start the version ({error}); retrying", file=sys.stderr, flush=True)
+            warn(f"could not start the version ({error}); retrying", once=False)
             time.sleep(1)
     short = refs.default_short_id(pub.uid)
     if pub.version is None:
-        print(f"publishing {folder} as {pub.name}@{pub.uid} ({short}; running, pending: the remote does not answer yet) every "
-              f"{interval:g} s", flush=True)
+        print(f"following {short_path(folder)} as {pub.name} ({short}, running, pending) every {interval:g} s", flush=True)
     else:
-        print(f"publishing {folder} as {pub.name}@v{pub.version} ({short}; running) every {interval:g} s", flush=True)
+        print(f"following {short_path(folder)} as {pub.name}@v{pub.version} ({short}, running) every {interval:g} s", flush=True)
     # what the command pulls is recorded in the folder it writes, unless the caller chose a file
     env = os.environ | {INPUTS_ENV: os.environ.get(INPUTS_ENV) or str(Path(folder).resolve() / INPUTS_FILE)}
     process = subprocess.Popen(command, env=env) if command else None
@@ -296,12 +296,12 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             added = pub.sync()
             synced, last, failures = current, time.monotonic(), 0
             if added:
-                where = f"{pub.name}@v{pub.version}" if pub.version is not None else f"{pub.name}@{pub.uid} (pending)"
-                print(f"synced {added} files to {where}", flush=True)
+                where = f"{pub.name}@v{pub.version}" if pub.version is not None else f"{pub.name} ({short}, pending)"
+                print(f"synced {plural(added, 'file')} to {where}", flush=True)
             return True
         except (StoreError, OSError) as error:
             failures += 1
-            print(f"warning: sync failed ({error}); retrying", file=sys.stderr, flush=True)
+            warn(f"sync failed ({error}); retrying", once=False)
             last = time.monotonic()
             return False
 
@@ -332,19 +332,19 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             if code:
                 pub.sync()  # keep what the failed run wrote for inspection
                 pub.fail()
-                print(f"{pub.ref} failed (command exited {code}); latest did not move", file=sys.stderr, flush=True)
+                note(f"failed {pub.ref} (command exited {code}); latest did not move")
             else:
                 number = pub.complete()
                 if number is None or pub.queued:
-                    print(f"pending {pub.name}@{pub.uid} ({short}; completed): the remote does not answer; it is sent when it "
-                          "does (`cairn status` lists it, `cairn sync` sends it)", flush=True)
+                    print(f"pending {pub.name} ({short}, completed): remote not reachable\n" + hint("run `cairn sync` to send it now"),
+                          flush=True)
                 else:
                     print(published(pub.name, pub.store.get_version(pub.name, pub.uid)), flush=True)
             return code
         except (StoreError, OSError) as error:
             if "can no longer change" in str(error):
                 return code
-            print(f"warning: final publish failed ({error}); retrying", file=sys.stderr, flush=True)
+            warn(f"final publish failed ({error}); retrying", once=False)
             time.sleep(min(2 ** attempt, 10))
-    print(f"error: {pub.name}@v{pub.version} was left running; publish the folder again", file=sys.stderr)
+    note(f"cairn: {pub.name}@v{pub.version} was left running; publish the folder again")
     return code or 1

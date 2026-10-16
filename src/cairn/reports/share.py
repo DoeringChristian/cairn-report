@@ -10,6 +10,7 @@ it, edit reports/ and share again.
 from __future__ import annotations
 
 import base64
+import sys
 import html
 import json
 import mimetypes
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from . import build as builder
 from ..config import Config
+from ..term import hint, short_path, size as size_text
 
 MAX_BYTES = 16 * 1024 * 1024  # claude.ai artifacts take at most 16 MB per page
 PLOTLY_CDN = "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@{version}/plotly.min.js"
@@ -73,7 +75,7 @@ def page(title: str, notice: str, bundle: dict, start: str) -> str:
     sheets += [sheet.read_text() for sheet in (builder.CONFIG.extra_css if builder.CONFIG else ())]
     script = builder.page_file("report.js").read_text()
     if "</script" in script.lower() or any("</style" in sheet.lower() for sheet in sheets):
-        raise SystemExit("report.js or a stylesheet contains </script or </style; it cannot be inlined")
+        raise SystemExit("cairn: report.js or a stylesheet contains </script or </style; it cannot be inlined")
     plotly = PLOTLY_CDN.format(version=builder.get_plotlyjs_version())
     return (
         f"{notice}\n<meta charset=\"utf-8\">\n<title>{builder.esc(title)}</title>\n"
@@ -92,7 +94,7 @@ def share(config: Config, report: str | None = None, build: bool = True, out: Pa
         builder.configure(config)
     reports = builder.discover_reports()
     if report is not None and report.strip("/") not in reports:
-        raise SystemExit(f"unknown report {report!r}; reports: {', '.join(reports)}")
+        raise SystemExit(f"cairn: unknown report {report!r} (reports: {', '.join(reports)})")
     site = json.loads((builder.OUTPUT_ROOT / "site.json").read_text())
     wanted = [report.strip("/")] if report is not None else [entry["key"] for entry in site["reports"]]
     entries, bundle_reports, sizes = [], {}, {}
@@ -102,7 +104,7 @@ def share(config: Config, report: str | None = None, build: bool = True, out: Pa
             continue
         folder = builder.output_dir(key)
         if not (folder / "narrative.html").is_file():
-            raise SystemExit(f"report {key} is not built; run `cairn build`")
+            raise SystemExit(f"cairn: report {key} is not built\n" + hint("run `cairn build`", sys.stderr))
         narrative, files = inline_assets(key, (folder / "narrative.html").read_text(), sizes)
         data = json.loads((folder / "report-data.json").read_text())
         bundle_reports[key] = {"data": data, "narrative": narrative, "files": files}
@@ -118,14 +120,14 @@ def share(config: Config, report: str | None = None, build: bool = True, out: Pa
         largest = sorted(sizes.items(), key=lambda item: -item[1])[:8]
         shown = "\n  ".join(f"{name} ({count / 1e6:.1f} MB)" for name, count in largest)
         raise SystemExit(
-            f"the shared page would be {size / 1e6:.1f} MB, above the {MAX_BYTES / 1e6:.0f} MB limit of single-file hosts;"
-            f" share one report (--report) or make these figures smaller:\n  {shown}"
+            f"cairn: the shared page would be {size / 1e6:.1f} MB, above the {MAX_BYTES / 1e6:.0f} MB limit of single-file hosts\n"
+            f"  share one report (--report) or make these figures smaller:\n  {shown}"
         )
     target = (out or share_dir(config) / "index.html").resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text)
     names = ", ".join(bundle_reports)
-    print(f"Shared page: {target} ({size / 1e6:.1f} MB; reports: {names})")
-    print("Publish this one file exactly as written (on claude.ai: the Artifact tool with this file_path and no other files);"
-          " do not edit it. To change it, edit the report sources and run `cairn share` again.")
+    print(f"shared {short_path(target)} ({size_text(size)}; reports: {names})")
+    print(hint("publish this one file unchanged (claude.ai: the Artifact tool, this file_path, no other files)"))
+    print(hint("to change it, edit the report sources and run `cairn share` again"))
     return target

@@ -52,6 +52,7 @@ from ..config import Config, load_config, protect
 from ..formats import METRICS, fold_scalars, fold_series, read_jsonl
 from ..store import StoreError, refs
 from ..store.outbox import exact_ref
+from ..term import short_path, warn
 
 PACKAGE_TEMPLATE = Path(__file__).resolve().parent / "template"
 # Set by configure() from the project's Config before any report is built.
@@ -279,8 +280,7 @@ def discover_reports() -> dict[str, Path]:
         if SEGMENT.fullmatch(child.name):
             found[child.name] = child
         else:
-            print(f"warning: {child.relative_to(REPORTS_ROOT.parent)}: skipped; report folder names "
-                  f"are lower-case letters, digits, '-' and '_'", file=sys.stderr)
+            warn(f"skipped {child.relative_to(REPORTS_ROOT.parent)}: a report folder name is lower-case letters, digits, - and _")
     if misplaced:
         shown = ", ".join(file.relative_to(REPORTS_ROOT.parent).as_posix() for file in misplaced)
         raise BuildError(f"{shown}: reports are single pages: move it to {REPORTS_ROOT.name}/<slug>/report.md "
@@ -1342,10 +1342,10 @@ def build_all(config: Config | None = None, report: str | None = None) -> list[B
     configure(config or load_config())
     reports = discover_reports()
     if not reports:
-        raise SystemExit(f"no report found: expected {REPORTS_ROOT / '<slug>' / 'report.md'}")
+        raise SystemExit(f"cairn: no report found (expected {short_path(REPORTS_ROOT / '<slug>' / 'report.md')})")
     key = None if report is None else report.strip("/")
     if key is not None and key not in reports:
-        raise SystemExit(f"unknown report {report!r}; reports: {', '.join(reports)}")
+        raise SystemExit(f"cairn: unknown report {report!r} (reports: {', '.join(reports)})")
     global STATIC_NAMES
     if key is None and OUTPUT_ROOT.exists():  # a full build starts clean, keeping the shared files
         for child in OUTPUT_ROOT.iterdir():
@@ -1359,6 +1359,6 @@ def build_all(config: Config | None = None, report: str | None = None) -> list[B
     write_site(reports, STATIC_NAMES)
     check_links(builds, reports)
     for build in builds:
-        print(f"Built {build.key}: {build.generated.relative_to(PROJECT) if PROJECT in build.generated.parents else build.generated}/index.html "
-              f"({build.figures} figures, {len(build.findings)} findings, {len(build.typed)} typed numbers)")
+        print(f"built {build.key}: {short_path(build.generated / 'index.html')} "
+              f"({build.figures} figures, {len(build.findings)} findings, {len(build.typed)} numbers)")
     return builds

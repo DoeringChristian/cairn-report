@@ -397,13 +397,13 @@ class Sync:
             result["waiting"] = self.pending()
             return result
         if result["adopted"]:
-            say(f"adopted {result['adopted']} versions this repo numbered itself: the remote numbers them as they are sent")
+            say(f"adopted {result['adopted']} versions this repo numbered itself (the remote renumbers them)")
         records = self.ordered(self.pending())
         for index, record in enumerate(records):
             if deadline is not None and time.monotonic() > deadline:
                 left = [record for record in records[index:] if record not in result["waiting"]]
                 result["waiting"].extend(left)
-                say(f"{len(left)} entries left for the next sync (out of time)")
+                say(f"{len(left)} versions left for the next sync (out of time)")
                 break
             if record["sync"] == "running":
                 why = self.outbox.dead(record, self.timeout)
@@ -423,7 +423,7 @@ class Sync:
                 finally:
                     self.outbox.release(claimed)
                 result["failed"].append(record)
-                say(f"failing {record['name']}@{record['uid']}: {why}")
+                say(f"failing {record['name']} ({refs.default_short_id(record['uid'])}): {why}")
             try:
                 sent = self.send(record)
             except (NotRecorded, Waiting) as error:  # this entry waits; the others need not
@@ -435,14 +435,14 @@ class Sync:
                 break
             except StoreError as error:
                 result["rejected"].append(record)
-                say(f"rejected {record['name']}@{record['uid']}: {error}")
+                say(f"rejected {record['name']} ({refs.default_short_id(record['uid'])}): {error}")
                 continue
             if not sent:
                 if self.outbox.load(record["uid"]) is not None:
                     result["waiting"].append(record)  # another sender has it
                 continue
             result["sent"].append(record)
-            what = "failed" if record["status"] == "failed" else "uploaded"
+            what = "sent failed" if record["status"] == "failed" else "sent"
             say(f"{what} {record['name']}@v{record['number']} ({refs.default_short_id(record['uid'])})")
         return result
 

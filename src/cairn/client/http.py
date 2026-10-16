@@ -24,6 +24,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
+from ..term import cause, debug, short_path, warn
+
 TOKEN_ENV = "CAIRN_TOKEN"
 SKIP_NAMES = {"__pycache__", ".DS_Store"}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -160,7 +162,8 @@ class ClientError(Exception):
 
 
 def _no_answer(method: str, path: str, url: str, error: BaseException) -> ClientError:
-    return ClientError(f"{method} {path}: the remote at {url} did not answer ({error.__class__.__name__}: {error})", None)
+    where = f" ({method} {path})" if debug() else ""
+    return ClientError(f"{url} not reachable: {cause(error)}{where}", None)
 
 
 class Limited:
@@ -191,7 +194,7 @@ def split_remote(url: str) -> tuple[str, str | None]:
     is None (a server, not one of its projects)."""
     parsed = urlparse(url.strip())
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:
-        raise SystemExit(f"remote URL {url!r} must look like https://host[:port][/prefix]/<project>")
+        raise SystemExit(f"cairn: bad remote URL {url!r}: use https://host[:port][/prefix]/<project>")
     path = parsed.path.rstrip("/")
     if not path:
         return urlunparse(parsed._replace(path="")).rstrip("/"), None
@@ -206,8 +209,7 @@ def warn_plain_http(host: str) -> None:
     """One line on stderr, once per process, the first time a client talks plain HTTP to a non-local host."""
     if not _warned.is_set():
         _warned.set()
-        print(f"warning: plain HTTP to {host}: the token is sent unencrypted; fine over a VPN (Tailscale) or an SSH tunnel",
-              file=sys.stderr, flush=True)
+        warn(f"plain HTTP to {host}: the token is sent unencrypted (fine over a VPN or an SSH tunnel)")
 
 
 class Client:
@@ -217,7 +219,7 @@ class Client:
                  token_places: str | None = None):
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:
-            raise SystemExit(f"server URL {url!r} must look like https://host[:port][/prefix]")
+            raise SystemExit(f"cairn: bad server URL {url!r}: use https://host[:port][/prefix]")
         if parsed.scheme == "http" and parsed.hostname not in LOCAL_HOSTS:
             warn_plain_http(parsed.hostname)
         self.url, self.parsed, self.token, self.timeout = url.rstrip("/"), parsed, token, timeout
@@ -246,7 +248,7 @@ class Client:
         if left is None:
             return self.timeout
         if left <= 0:
-            raise ClientError(f"{method} {path}: the remote at {self.url} did not answer in time (out of time)", None)
+            raise ClientError(f"{self.url} not reachable: out of time" + (f" ({method} {path})" if debug() else ""), None)
         return min(self.timeout, left)
 
     def _connection(self, limit: float | None = None):
@@ -498,7 +500,8 @@ def upload_missing(client: Client, sources: dict[str, tuple[Path, int]], cache=N
             if errors is not None:
                 errors.append(error)
             if not quiet:
-                print(f"warning: {file} not uploaded ({error}); retrying next time", file=sys.stderr)
+                warn(f"{short_path(file)} not uploaded ({cause(error) if isinstance(error, OSError) else error}); retried next time",
+                     once=False)
             return 0
 
     began = time.monotonic()

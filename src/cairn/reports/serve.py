@@ -104,12 +104,12 @@ def _serve(config: Config, host: str, port: int, strict_port: bool, build: bool)
             break
         except OSError as error:
             if strict_port or error.errno not in (errno.EADDRINUSE, errno.EACCES):
-                raise SystemExit(f"Cannot serve on {host}:{chosen}: {error.strerror}.")
+                raise SystemExit(f"cairn: cannot serve on {host}:{chosen}: {error.strerror}")
     if server is None:
-        raise SystemExit(f"No free port in {port}-{port + 49} on {host}; pass --port.")
+        raise SystemExit(f"cairn: no free port in {port}-{port + 49} on {host}; choose one with --port")
     if chosen != port:
-        print(f"Port {port} is in use; serving on {chosen} instead.", flush=True)
-    print(f"Reports: http://{host}:{chosen}/", flush=True)
+        print(f"port {port} in use; using {chosen}", flush=True)
+    print(f"reports  http://{host}:{chosen}/", flush=True)
     try:
         server.serve_forever()
     finally:

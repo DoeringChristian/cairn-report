@@ -13,6 +13,7 @@ import pytest
 
 import cairn
 from cairn.cli import main
+from cairn.store import refs
 from cairn.store.uids import UID
 
 from test_identity import Server
@@ -62,13 +63,13 @@ def test_publish_while_down_is_queued_and_synced_with_its_uid(down, env, capsys)
 
     (data / "a.txt").write_text("changed after publishing")  # the pending version keeps what was published
     out, _ = run(capsys, "status")
-    assert f"pending\tdata\t-\t{version.short_id}\t{version.uid}\tcompleted\t" in out
+    assert re.search(rf"\npending +data +- +{version.short_id} +completed ", out), out
     assert cairn.publish("data", data) is None  # a second one, pending behind the first
     capsys.readouterr()
 
     down.start()
     out, _ = run(capsys, "sync")
-    assert out.count("uploaded data@v") == 2 and version.short_id in out
+    assert out.count("sent data@v") == 2 and version.short_id in out
     first, second = down.versions()
     assert first["uid"] == version.uid and first["metadata"] == {"n": 1} and first["status"] == "completed"
     assert cairn.LocalRepo(down.root).aliases("study", "data")["paper"] == 1
@@ -102,7 +103,7 @@ def test_any_cli_command_sends_pending_versions_first(down, env, capsys):
     down.start()
     out, err = run(capsys, "versions", "data")
     version = cairn.connect().artifact("data").latest
-    assert "uploaded data@v1" in err and out.startswith(f"v1\t{version.short_id}\tcompleted")
+    assert "sent data@v1" in err and out.splitlines()[1].split()[:3] == ["v1", version.short_id, "completed"]
 
 
 def test_background_uploader_sends_when_the_server_answers(env, tmp_path, monkeypatch, capsys):
@@ -128,9 +129,9 @@ def test_rejected_versions_are_kept_for_status_and_skipped(down, env, capsys):
     capsys.readouterr()
     down.start()
     out, _ = run(capsys, "sync", code=1)
-    assert "rejected data@" in out
+    assert "rejected data (" in out
     out, _ = run(capsys, "status")
-    assert out.startswith("rejected\tdata") and "missing" in out
+    assert out.splitlines()[1].split()[:2] == ["rejected", "data"] and "missing" in out
     store.artifact("data").publish(folder(env, "e", {"a.txt": "2"}))
     assert down.versions()[0]["status"] == "completed"  # a rejected version does not hold up the next
 
@@ -146,7 +147,7 @@ def test_watch_starts_while_down_and_ends_on_the_server_once_it_answers(down, en
     out = env / "out"
     threading.Timer(1.0, down.start).start()  # the server comes up while the job runs
     stdout, _ = run(capsys, "publish", str(out), "sweep", "--interval", "0.3", "--", sys.executable, "-c", SCRIPT, str(out), "2.5", code=0)
-    assert "running, pending" in stdout and re.search(r"published sweep@v1 \([0-9a-f]{7}; 2 files", stdout)
+    assert "running, pending" in stdout and re.search(r"published sweep@v1 \([0-9a-f]{7}, 2 files", stdout)
     [version] = down.versions("sweep")
     assert version["status"] == "completed" and [f["path"] for f in version["files"]] == ["first.txt", "second.txt"]
     assert "nothing pending" in run(capsys, "status")[0]
@@ -155,13 +156,13 @@ def test_watch_starts_while_down_and_ends_on_the_server_once_it_answers(down, en
 def test_watch_while_down_throughout_queues_the_completion(down, env, capsys):
     out = env / "out"
     stdout, _ = run(capsys, "publish", str(out), "sweep", "--interval", "0.3", "--", sys.executable, "-c", SCRIPT, str(out), "0.2", code=0)
-    assert "pending sweep@" in stdout
+    assert "pending sweep (" in stdout
     status = run(capsys, "status")[0]
-    assert status.startswith("pending\tsweep\t-\t") and "\tcompleted\t" in status
+    assert re.search(r"\npending +sweep +- +[0-9a-f]{7} +completed ", status), status
     down.start()
-    assert "uploaded sweep@v1" in run(capsys, "sync")[0]
+    assert "sent sweep@v1" in run(capsys, "sync")[0]
     [version] = down.versions("sweep")
-    assert version["status"] == "completed" and version["uid"] in status and len(version["files"]) == 2
+    assert version["status"] == "completed" and refs.default_short_id(version["uid"]) in status and len(version["files"]) == 2
 
 
 def test_watch_failure_while_down_is_queued_as_failed(down, env, capsys):
@@ -180,7 +181,7 @@ def test_a_dead_watch_job_is_failed_not_left_running(down, env, capsys):
     store.backend.outbox.save(record)
     down.start()
     out = run(capsys, "sync")[0]
-    assert "failing sweep@" in out and "is gone" in out
+    assert "failing sweep (" in out and "is gone" in out
     assert [(v["status"], v["uid"]) for v in down.versions("sweep")] == [("failed", record["uid"])]
 
 
@@ -203,7 +204,7 @@ def test_offline_pulls_of_exact_and_alias_refs(down, env, capsys, monkeypatch):
     assert (cairn.pull(f"data@{v1.uid}//a.txt")).read_text() == "one"
     assert (cairn.pull("data@best") / "a.txt").read_text() == "one"
     err = capsys.readouterr().err
-    assert "does not answer" in err and f"using the repo's data@v1 ({v1.short_id}) for data@best" in err
+    assert "not reachable" in err and f"using the repo's data@v1 ({v1.short_id}) for data@best" in err
     assert [json.loads(line)["ref"] for line in inputs.read_text().splitlines()] == ["data@v1", "data@v1"]
     with pytest.raises(cairn.Unreachable):
         cairn.pull("data@v9")

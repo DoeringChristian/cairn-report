@@ -152,7 +152,7 @@ def test_cairn_remote_shows_sets_and_removes_the_remote(proj, capsys):
     assert capsys.readouterr().out == "no remote\n"
     main(["remote", "set", "http://box:8800/a/"])
     out = capsys.readouterr().out
-    assert out.startswith("remote: http://box:8800/a\n") and "adopted" in out
+    assert out.startswith("remote  http://box:8800/a\n") and "cairn sync" in out
     assert load_config().repo == {"exclude": ["*.pkl"], "remote": "http://box:8800/a"}
     assert file.read_text().startswith("# mine\n[repo]\nexclude = [\"*.pkl\"]  # keep\n")  # the rest as it was
     main(["remote", "set", "https://box/prefix/b"])
@@ -164,7 +164,7 @@ def test_cairn_remote_shows_sets_and_removes_the_remote(proj, capsys):
             main(["remote", "set", bad])
     main(["remote", "remove"])
     out = capsys.readouterr().out
-    assert "keep their numbers" in out and "stay pending" in out
+    assert "removed the remote https://box/prefix/b" in out and "pending versions wait" in out
     assert "remote" not in load_config().repo and file.read_text() == "# mine\n[repo]\nexclude = [\"*.pkl\"]  # keep\n"
     main(["remote", "remove"])
     assert capsys.readouterr().out == "no remote\n"

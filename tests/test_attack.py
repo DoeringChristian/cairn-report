@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 import random
 import signal
@@ -841,7 +842,7 @@ def test_a_remote_added_while_a_version_runs_takes_over_everything_once(tmp_path
     first = cli(project, "sync", env=env)
     print("\nfirst sync:", first.returncode, first.stdout, first.stderr)
     status = cli(project, "status", env=env)
-    assert status.stdout.startswith("running\truns/train\t-\t"), status.stdout  # the run the remote has not yet
+    assert re.search(r"\nrunning +runs/train +- ", status.stdout), status.stdout  # the run the remote has not yet
     (project / "go").write_text("")
     out, err = finish(running, 120)
     assert running.returncode == 0, err

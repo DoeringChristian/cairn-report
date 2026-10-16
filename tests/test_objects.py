@@ -124,17 +124,17 @@ def run(capsys, *argv):
 def test_cli_artifacts_versions_show(configured, env, capsys):
     cairn.publish("datasets/crops", folder(env, "d", {"a.txt": "1", "b.txt": "22"}), metadata={"n": 2}, aliases=["paper"])
     cairn.publish("models/fit", folder(env, "m", {"w.bin": "w"}), inputs=["datasets/crops@v1"])
-    lines = run(capsys, "artifacts").splitlines()
-    assert [line.split("\t")[0] for line in lines] == ["datasets/crops", "models/fit"] and "paper->v1" in lines[0]
-    assert run(capsys, "artifacts", "--prefix", "models/").splitlines()[0].startswith("models/fit\tv1")
+    lines = run(capsys, "artifacts").splitlines()[1:]  # under the header
+    assert [line.split()[0] for line in lines] == ["datasets/crops", "models/fit"] and "paper->v1" in lines[0]
+    assert run(capsys, "artifacts", "--prefix", "models/").splitlines()[1].split()[:2] == ["models/fit", "v1"]
     assert run(capsys, "artifacts", "--prefix", "nothing/").strip() == "no artifacts starting with 'nothing/'"
-    [line] = run(capsys, "versions", "datasets/crops").splitlines()
+    [_, line] = run(capsys, "versions", "datasets/crops").splitlines()
     uid, short = cairn.versions("datasets/crops")[0]["uid"], cairn.versions("datasets/crops")[0]["short_id"]
-    assert line.startswith(f"v1\t{short}\tcompleted\td\t") and uid in line and "2 files" in line
+    assert line.split()[:4] == ["v1", short, "completed", "d"] and uid[:8] in line and "2 files" in line
     out = run(capsys, "show", f"datasets/crops@{uid}")
     assert "ref          datasets/crops@v1" in out and f"uid          {uid}" in out and '"n": 2' in out
     assert f"id           {short}" in out and run(capsys, "show", short[:4]) == out
-    assert "consumers    models/fit@v1" in out and "aliases      latest, paper" in out and "  b.txt\t2" in out
+    assert "consumers    models/fit@v1" in out and "aliases      latest, paper" in out and "\n  b.txt  2 B\n" in out
     assert "inputs       datasets/crops@v1" in run(capsys, "show", "models/fit")
     status = run(capsys, "status")
     assert ("nothing pending" if configured else "has no remote") in status

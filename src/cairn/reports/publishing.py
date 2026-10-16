@@ -14,6 +14,7 @@ from ..store.hashes import HashCache
 from ..client.publishing import publish_version, published
 from ..config import Config
 from ..store import StoreError
+from ..term import plural
 
 
 def is_report_folder(config: Config, folder: Path) -> bool:
@@ -58,9 +59,11 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
             return latest["version"]
         version = publish_version(store, name, stage, metadata=metadata, inputs=inputs, label=time.strftime("%Y-%m-%d_%H-%M-%S"),
                                   config=config)
+    if version.number is None and version.manifest.get("uid") in getattr(store, "announced", ()):
+        return None  # the repo said it is pending (on stderr), with the reason
     line = published(name, version.manifest, before)
-    say(line + (f"; inputs: {', '.join(inputs) or 'none'}" if version.number is not None and version.number > before else ""),
-        flush=True)
+    new = version.number is not None and version.number > before
+    say(line[:-1] + f"; {plural(len(inputs), 'input')})" if new and line.endswith(")") else line, flush=True)
     return version.number
 
 

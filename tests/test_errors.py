@@ -49,7 +49,7 @@ def test_an_unknown_artifact_raises_from_cairn_use(study):
     assert "cairn/client" not in error and "cairn/store" not in error
     assert "During handling" not in error and "direct cause" not in error
     assert f"NotFound: no artifact nope in the repo {study / '.cairn'} (found from the working directory)" in error
-    assert "cairn: the run failed; its folder is kept (cairn drafts lists it)" in error  # the run's end: one line
+    assert "cairn: run failed; folder kept (cairn drafts)" in error  # the run's end: one line
 
 
 def test_a_method_raises_from_itself(study):
