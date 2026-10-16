@@ -16,6 +16,9 @@
   an empty image file is shown as empty instead of as an image that cannot be loaded.
 - **A short id made of decimal digits** (about 4% of them, such as `4381209`) opened in the UI as that version
   number and was not found; a bare number of 4 or more digits is now tried as a short id first.
+- **Report math:** a delimiter command after a size command (`\big\lVert … \big\rVert`, `\Big\langle`, `\bigg\{`)
+  and `\arg` were shown as literal LaTeX (a converter gap); they render now. LaTeX the converter leaves as text
+  is a build error naming the formula, so a report never shows broken notation.
 
 ## 0.14.0: the repo, an optional remote, automatic sync
 
