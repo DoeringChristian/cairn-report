@@ -156,7 +156,7 @@ cairn upgrade /srv/cairn  # a server's repo folder, with all its projects
 Stop the server first, then upgrade the server's repo folder and every project's `.cairn/`, in any order.
 `cairn upgrade [repo]` converts the repo in place, once. It refuses while the repo is in use (a `cairn
 server` holds `server.lock`, a running version has a live heartbeat, a draft is open). It backs the
-database up to `metadata.sqlite3.0.14.bak`, rewrites every table and manifest that named a uid in one
+database up to `metadata.sqlite3.0.14.bak`, rewrites every table and manifest record that named a uid (files inside versions, such as a report's manifest.json, keep theirs: versions never change) in one
 transaction, renames the folders named by uid (`outbox/`, `versions/`, `heartbeats/`, `drafts/`) to the
 ids, sets layout 2 in `repo.json`, runs `cairn verify`, and reports what it converted. Numbers, labels,
 aliases, files, and blobs stay as they were. An interrupted upgrade picks up where it ended when it is run

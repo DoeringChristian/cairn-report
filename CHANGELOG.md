@@ -45,7 +45,7 @@ A version's **id** is now its only identity, as a commit's hash is in git, and e
 - **`cairn upgrade [repo]`** converts a repo made by 0.14 (a project's `.cairn/`, or a server's repo folder with
   many projects) in place, once. It refuses while the repo is in use (a `cairn server` holds `server.lock`, a
   running version has a live heartbeat, a draft is open), backs the database up to `metadata.sqlite3.0.14.bak`
-  (SQLite's backup API), rewrites every table and manifest that named a uid in one transaction, renames
+  (SQLite's backup API), rewrites every table and manifest record that named a uid (files inside versions keep theirs: versions never change) in one transaction, renames
   `outbox/`, `versions/`, `heartbeats/`, and the drafts to the ids, sets layout 2 in `repo.json`, runs `verify`,
   and reports what it converted. A 0.14 version's id is the SHA-256 of its uid, so a server and its clients,
   upgraded one by one, agree on every id, and every short id 0.14 printed still names the same version. Every other
