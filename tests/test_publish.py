@@ -35,7 +35,7 @@ def test_publish_folder_records_label_alias_and_meta(env, capsys):
         "note=hello",
     )
     [version] = store.versions("crops")
-    assert out.startswith(f"published crops@v1 ({version['short_id']}, 2 files, ")
+    assert out.startswith(f"published crops@v1 ({store.connect().version(version['id']).short_id}, 2 files, ")
     assert version["label"] == "first" and version["metadata"] == {"psnr": 31.2, "note": "hello"}
     assert store.pull("crops@paper") == store.pull("crops@keep") == store.pull("crops@first")
 
@@ -43,7 +43,7 @@ def test_publish_folder_records_label_alias_and_meta(env, capsys):
 def test_unchanged_republish_creates_no_version(env, capsys):
     data = folder(env, "data", {"a.txt": "one"})
     run(capsys, "publish", str(data), "crops")
-    short = store.versions("crops")[0]["short_id"]
+    short = store.connect().version("crops@v1").short_id
     assert run(capsys, "publish", str(data), "crops").strip() == f"unchanged crops@v1 ({short})"
     (data / "a.txt").write_text("changed")
     assert run(capsys, "publish", str(data), "crops").startswith("published crops@v2")
@@ -145,7 +145,7 @@ def test_inputs_pulled_by_the_command_are_recorded(env, capsys, monkeypatch):
         main(["publish", str(out), "fit", "--interval", "0.5", "--", sys.executable, "-c", script])
     assert exit.value.code == 0
     [version] = store.versions("fit")
-    assert version["inputs"] == ["datasets/toy@v1"]
+    assert version["inputs"] == [store.versions("datasets/toy")[0]["id"]]
     assert [e["path"] for e in version["files"]] == ["r.txt"]
 
 
@@ -167,12 +167,13 @@ def test_study_folder_merges_every_trial_inputs_record(env, capsys):
     main(["publish", str(folder(env, "d2", {"x": "2"})), "data"])
     capsys.readouterr()
     study = folder(env, "runs/study", {"0/metrics.csv": "a", "1/metrics.csv": "b", "summary.txt": "s"})
-    row = lambda ref: json.dumps({"ref": ref, "time": "t"}) + "\n"
-    (study / "0" / ".cairn-inputs.jsonl").write_text(row("data@v1"))
-    (study / "1" / ".cairn-inputs.jsonl").write_text(row("data@v2") + row("data@v1"))
+    one, two = (v["id"] for v in store.versions("data"))
+    row = lambda id, ref: json.dumps({"id": id, "ref": ref, "time": "t"}) + "\n"
+    (study / "0" / ".cairn-inputs.jsonl").write_text(row(one, "data@v1"))
+    (study / "1" / ".cairn-inputs.jsonl").write_text(row(two, "data@v2") + row(one, "data@v1"))
     main(["publish", str(study), "sweep"])
     [version] = store.versions("sweep")
-    assert version["inputs"] == ["data@v1", "data@v2"]
+    assert version["inputs"] == [one, two]
     assert sorted(e["path"] for e in version["files"]) == ["0/metrics.csv", "1/metrics.csv", "summary.txt"]
 
 

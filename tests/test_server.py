@@ -79,11 +79,11 @@ def blob_gets(server):
 
 
 def test_auth_required(server):
-    assert call(server, "GET", "/api/v2/projects", token=None)[0] == 401
-    assert call(server, "GET", "/api/v2/projects", token="x" * 40)[0] == 401
-    assert call(server, "GET", "/api/v2/projects")[0] == 200
-    assert call(server, "PUT", "/api/v2/blobs/" + "0" * 64, body=b"x", token=None)[0] == 401
-    assert call(server, "POST", "/api/v2/blobs/missing", {"sha256": []}, token=None)[0] == 401
+    assert call(server, "GET", "/api/v3/projects", token=None)[0] == 401
+    assert call(server, "GET", "/api/v3/projects", token="x" * 40)[0] == 401
+    assert call(server, "GET", "/api/v3/projects")[0] == 200
+    assert call(server, "PUT", "/api/v3/blobs/" + "0" * 64, body=b"x", token=None)[0] == 401
+    assert call(server, "POST", "/api/v3/blobs/missing", {"sha256": []}, token=None)[0] == 401
     assert call(server, "GET", "/api/v1/projects")[0] == 404  # the old hub API is gone
     assert call(server, "GET", "/files/study/data@v1//x.txt", token=None)[0] == 401
 
@@ -108,10 +108,10 @@ def test_the_server_has_no_pages_and_no_cookies(server, project):
     status, headers, _ = call(server, "POST", "/login", body=f"token={server.token}&next=/", token=None, headers=form)
     assert status in (401, 404) and "Set-Cookie" not in headers
     cookie = {"Cookie": "cairn_store=owner.abc"}
-    assert call(server, "GET", "/api/v2/projects", token=None, headers=cookie)[0] == 401  # the API is bearer-only
-    for path in ("/api/v2/projects", "/api/v2/projects/study", "/files/study/data@v1//a.txt"):
+    assert call(server, "GET", "/api/v3/projects", token=None, headers=cookie)[0] == 401  # the API is bearer-only
+    for path in ("/api/v3/projects", "/api/v3/projects/study", "/files/study/data@v1//a.txt"):
         assert "Set-Cookie" not in call(server, "GET", path)[1]
-    assert call(server, "GET", "/api/v2/nope")[2].startswith(b"{")  # errors are JSON everywhere
+    assert call(server, "GET", "/api/v3/nope")[2].startswith(b"{")  # errors are JSON everywhere
 
 
 def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
@@ -150,25 +150,25 @@ def seed(server):
 
 def test_one_token_reaches_every_project_and_nothing_else_does(server, env):
     seed(server)
-    assert [p["name"] for p in api(server, "GET", "/api/v2/projects")] == ["alpha", "beta"]
+    assert [p["name"] for p in api(server, "GET", "/api/v3/projects")] == ["alpha", "beta"]
     assert not (server.root / "tokens.jsonl").exists()
     wrong = "x" * 43
     for method, path, body in (
-        ("POST", "/api/v2/projects/alpha/artifacts/data/publish", {"entries": []}),
-        ("POST", "/api/v2/blobs/missing", {"sha256": []}),
-        ("PATCH", "/api/v2/projects/alpha", {"title": "t"}),
-        ("POST", "/api/v2/projects", {"name": "new"}),
-        ("GET", "/api/v2/projects", None),
-        ("GET", "/api/v2/projects/beta/artifacts", None),
+        ("POST", "/api/v3/projects/alpha/artifacts/data/publish", {"entries": []}),
+        ("POST", "/api/v3/blobs/missing", {"sha256": []}),
+        ("PATCH", "/api/v3/projects/alpha", {"title": "t"}),
+        ("POST", "/api/v3/projects", {"name": "new"}),
+        ("GET", "/api/v3/projects", None),
+        ("GET", "/api/v3/projects/beta/artifacts", None),
         ("GET", "/files/beta/data@v1//x.txt", None),
     ):
         for token in (wrong, None):
             assert call(server, method, path, body, token=token)[0] == 401, (method, path, token)
-    assert call(server, "PUT", "/api/v2/blobs/" + "a" * 64, body=b"x", token=wrong)[0] == 401
+    assert call(server, "PUT", "/api/v3/blobs/" + "a" * 64, body=b"x", token=wrong)[0] == 401
     assert call(server, "GET", "/files/alpha/data@v1//x.txt")[0] == 200
     # an input names a version of the same project: a reference with a project is refused
     status, _, data = call(
-        server, "POST", "/api/v2/projects/alpha/artifacts/data/publish", {"entries": [], "inputs": ["beta:data@v1"]}
+        server, "POST", "/api/v3/projects/alpha/artifacts/data/publish", {"entries": [], "inputs": ["beta:data@v1"]}
     )
     assert status == 400 and b"without a project" in data, data
 
@@ -177,14 +177,14 @@ def test_one_token_reaches_every_project_and_nothing_else_does(server, env):
 
 
 def test_bad_uploads_and_entries(server):
-    api(server, "POST", "/api/v2/projects", {"name": "p"}, expect=201)
-    api(server, "POST", "/api/v2/projects", {"name": "p"}, expect=200)  # idempotent
+    api(server, "POST", "/api/v3/projects", {"name": "p"}, expect=201)
+    api(server, "POST", "/api/v3/projects", {"name": "p"}, expect=200)  # idempotent
     assert (
-        call(server, "PUT", "/api/v2/blobs/" + "a" * 64, body=b"not matching", headers={"Content-Length": "12"})[0]
+        call(server, "PUT", "/api/v3/blobs/" + "a" * 64, body=b"not matching", headers={"Content-Length": "12"})[0]
         == 400
     )
     assert not [f for f in (server.root / "blobs").rglob("*") if f.is_file()]  # nothing was stored
-    publish = "/api/v2/projects/p/artifacts/a/publish"
+    publish = "/api/v3/projects/p/artifacts/a/publish"
     for entry in (
         {"path": "a/../../etc/passwd", "sha256": "a" * 64, "size": 1},
         {"path": "/abs", "sha256": "a" * 64, "size": 1},
@@ -194,20 +194,20 @@ def test_bad_uploads_and_entries(server):
         assert call(server, "POST", publish, {"entries": [entry]})[0] == 400, entry
     status, _, data = call(server, "POST", publish, {"entries": [{"path": "x", "sha256": "b" * 64, "size": 1}]})
     assert status == 409 and json.loads(data)["missing"] == ["b" * 64]
-    assert call(server, "POST", "/api/v2/projects/p/artifacts/Bad%2Fname/versions", {})[0] == 400
-    assert call(server, "GET", "/api/v2/projects/nope")[0] == 404
-    assert call(server, "GET", "/api/v2/resolve?ref=a")[0] == 404  # resolving is per project
-    assert call(server, "GET", "/api/v2/projects/p/resolve?ref=other:a")[0] == 400  # a reference names no project
-    assert call(server, "GET", "/api/v2/projects/p/ids?id=xyz")[0] == 400
+    assert call(server, "POST", "/api/v3/projects/p/artifacts/Bad%2Fname/versions", {})[0] == 400
+    assert call(server, "GET", "/api/v3/projects/nope")[0] == 404
+    assert call(server, "GET", "/api/v3/resolve?ref=a")[0] == 404  # resolving is per project
+    assert call(server, "GET", "/api/v3/projects/p/resolve?ref=other:a")[0] == 400  # a reference names no project
+    assert call(server, "GET", "/api/v3/projects/p/ids?id=xyz")[0] == 400
 
 
 def test_artifact_names_with_slashes_are_percent_encoded(server, env):
     r = use_remote(env, server)
     store.publish("datasets/crops", folder(env, "d", {"a.txt": "1"}))
     store.publish("versions", folder(env, "e", {"a.txt": "1"}))  # a name that is also a route word
-    assert [s["name"] for s in api(server, "GET", "/api/v2/projects/study/artifacts")] == ["datasets/crops", "versions"]
-    assert api(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops/versions/1")["status"] == "completed"
-    assert len(api(server, "GET", "/api/v2/projects/study/artifacts/versions/versions")) == 1
+    assert [s["name"] for s in api(server, "GET", "/api/v3/projects/study/artifacts")] == ["datasets/crops", "versions"]
+    assert api(server, "GET", "/api/v3/projects/study/artifacts/datasets%2Fcrops/versions/v1")["status"] == "completed"
+    assert len(api(server, "GET", "/api/v3/projects/study/artifacts/versions/versions")) == 1
     assert call(server, "GET", "/files/study/datasets/crops@v1//a.txt")[2] == b"1"
 
 
@@ -246,11 +246,12 @@ def test_remote_store_round_trip(server, env):
         "n": 2
     }
     second = r.resolve("datasets/crops")[1]
-    assert (
-        r.resolve(second["short_id"])[0] == "datasets/crops"
-        and r.resolve(f"datasets/crops@{second['short_id'][:5]}")[1] == second
-    )
-    assert [item["uid"] for item in r.ids(second["short_id"])] == [second["uid"]]
+    short = r.short_ids([second["id"]])[second["id"]]
+    assert len(short) >= 7 and second["id"].startswith(short)
+    assert r.resolve(short)[0] == "datasets/crops" and r.resolve(second["id"])[1] == second
+    with pytest.raises(StoreError, match="names a version alone"):  # an id never follows `name@`: the server refuses it
+        r.resolve(f"datasets/crops@{short}")
+    assert [(item["id"], item["short_id"]) for item in r.ids(short)] == [(second["id"], short)]
     store.alias("datasets/crops@v2", "best")
     assert r.aliases("datasets/crops") == {"latest": 2, "paper": 1, "best": 2}
     assert r.artifacts() == ["datasets/crops"] and r.record()["name"] == "study"
@@ -298,7 +299,7 @@ def test_pull_records_inputs_like_the_local_store(server, env):
     published = store.publish(
         "fit", folder(env, "out", {"r.txt": "r", ".cairn-inputs.jsonl": (env / ".cairn-inputs.jsonl").read_text()})
     )
-    assert store.versions("fit")[published - 1]["inputs"] == ["data@v1"]
+    assert store.versions("fit")[published - 1]["inputs"] == [store.versions("data")[0]["id"]]  # stored by id
     assert store.lineage("data@v1") == {"inputs": [], "consumers": ["fit@v1"], "runs": []}
     assert store.lineage("fit@v1", through_runs=False) == {"inputs": ["data@v1"], "consumers": []}
 
@@ -339,7 +340,7 @@ def test_publish_watch_syncs_a_running_version_to_the_server(server, env, capsys
 
         for _ in range(60):
             try:
-                versions = api(server, "GET", "/api/v2/projects/study/artifacts/sweep/versions")
+                versions = api(server, "GET", "/api/v3/projects/study/artifacts/sweep/versions")
             except AssertionError:
                 versions = []
             if versions and versions[0]["files"]:
@@ -395,20 +396,20 @@ def test_overview_summary_and_file_list_routes(server, env):
         aliases=["paper"],
     )
     store.publish("other", folder(env, "o", {"x.txt": "x"}))
-    [project] = api(server, "GET", "/api/v2/projects")
+    [project] = api(server, "GET", "/api/v3/projects")
     assert project["name"] == "study" and project["artifacts"] == 2 and project["updated"] and "reports" not in project
-    summaries = {item["name"]: item for item in api(server, "GET", "/api/v2/projects/study/artifacts")}
+    summaries = {item["name"]: item for item in api(server, "GET", "/api/v3/projects/study/artifacts")}
     assert summaries["datasets/crops"]["latest"] == 1 and summaries["datasets/crops"]["metadata"] == {"title": "Crops"}
-    one = api(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops")
+    one = api(server, "GET", "/api/v3/projects/study/artifacts/datasets%2Fcrops")
     assert one["aliases"] == {"latest": 1, "paper": 1} and one["versions"] == 1
     assert one["latest_version"]["version"] == 1 and [f["path"] for f in one["latest_version"]["files"]] == [
         "a.txt",
         "sub/b.txt",
     ]
-    assert call(server, "GET", "/api/v2/projects/study/artifacts/nope")[0] == 404
-    files = api(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops/versions/1/files")["files"]
+    assert call(server, "GET", "/api/v3/projects/study/artifacts/nope")[0] == 404
+    files = api(server, "GET", "/api/v3/projects/study/artifacts/datasets%2Fcrops/versions/v1/files")["files"]
     assert [f["path"] for f in files] == ["a.txt", "sub/b.txt"] and files[1]["size"] == 2
-    assert call(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops/versions/9/files")[0] == 404
+    assert call(server, "GET", "/api/v3/projects/study/artifacts/datasets%2Fcrops/versions/v9/files")[0] == 404
 
 
 def test_remote_store_read_file_streams_ranges(server, env):
@@ -416,17 +417,19 @@ def test_remote_store_read_file_streams_ranges(server, env):
     store.publish("data", folder(env, "d", {"big.txt": "0123456789" * 10}))
     local = LocalProject(LocalRepo(server.root), "study")
     for reader in (r, local):  # the same answers from both store kinds
-        whole = reader.read_file("data", "v1", "big.txt")
+        whole = reader.read_file("data@v1//big.txt")
         assert (whole.total, whole.size, whole.partial, whole.immutable) == (100, 100, False, True)
         assert b"".join(whole.chunks) == b"0123456789" * 10
-        part = reader.read_file("data", "latest", "big.txt", "bytes=5-14")
+        part = reader.read_file("data@latest//big.txt", "bytes=5-14")
         assert (part.first, part.last, part.total, part.partial, part.immutable) == (5, 14, 100, True, False)
         assert b"".join(part.chunks) == b"5678901234" and part.sha256 == whole.sha256
+        by_id = reader.read_file(f"{store.versions('data')[0]['id']}//big.txt")  # an id is exact: immutable
+        assert by_id.immutable and b"".join(by_id.chunks) == b"0123456789" * 10
         with pytest.raises(BadRange) as raised:
-            reader.read_file("data", "v1", "big.txt", "bytes=100-")
+            reader.read_file("data@v1//big.txt", "bytes=100-")
         assert raised.value.total == 100
         with pytest.raises(store.NotFound):
-            reader.read_file("data", "v1", "nope.txt")
+            reader.read_file("data@v1//nope.txt")
 
 
 # ------------------------------------------------- the UI beside the store server
@@ -563,7 +566,7 @@ def test_the_server_keeps_running_when_its_ui_dies(tmp_path):
         os.kill(child, 9)
         time.sleep(1.0)
         server = SimpleNamespace(port=port, token=(root / "token").read_text().strip())
-        assert call(server, "GET", "/api/v2/projects")[0] == 200 and process.poll() is None
+        assert call(server, "GET", "/api/v3/projects")[0] == 200 and process.poll() is None
     finally:
         stop_process(process)
     assert not alive(child)

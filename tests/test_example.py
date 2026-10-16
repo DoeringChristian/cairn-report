@@ -73,6 +73,6 @@ def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
     assert shown.startswith("descent@best -> v1 (") and shown.endswith(")")
     short = shown.split("(")[1].rstrip(")")
     cairn("show", short[:5])
-    assert capsys.readouterr().out.startswith("ref          descent@v1\nid           " + short)
+    assert capsys.readouterr().out.startswith(f"ref          descent@v1\nshort id     {short}\nid           {short}")
     with pytest.raises(SystemExit, match="moves automatically"):
         cairn("alias", "descent@v1", "latest")

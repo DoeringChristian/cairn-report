@@ -17,7 +17,7 @@ class FakeClient:
 @pytest.mark.parametrize("status", [500, 507, 503])
 def test_a_5xx_blob_upload_is_unreachable_not_a_refusal(monkeypatch, tmp_path, status):
     def failing(client, sources, cache, errors=None, quiet=False):
-        errors.append(ClientError(f"PUT /api/v2/blobs/x: HTTP {status}", status))
+        errors.append(ClientError(f"PUT /api/v3/blobs/x: HTTP {status}", status))
         return set(sources), 0
 
     monkeypatch.setattr(remote_module, "upload_missing", failing)
@@ -28,7 +28,7 @@ def test_a_5xx_blob_upload_is_unreachable_not_a_refusal(monkeypatch, tmp_path, s
 
 def test_a_4xx_blob_upload_stays_a_refusal(monkeypatch, tmp_path):
     def failing(client, sources, cache, errors=None, quiet=False):
-        errors.append(ClientError("PUT /api/v2/blobs/x: HTTP 413", 413))
+        errors.append(ClientError("PUT /api/v3/blobs/x: HTTP 413", 413))
         return set(sources), 0
 
     monkeypatch.setattr(remote_module, "upload_missing", failing)

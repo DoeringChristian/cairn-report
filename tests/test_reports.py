@@ -274,8 +274,17 @@ def manifest_of(project, key="alpha"):
 
 def test_inputs_are_pinned_and_recorded(project):
     build_all(load_config(project))
-    uid = store.connect().artifact("descent").version(1).uid
-    expected = {"descent": {"requested": "descent@latest", "resolved": "descent@v1", "uid": uid, "files": 4}}
+    version_id = store.connect().artifact("descent").version(1).id
+    expected = {
+        "descent": {
+            "requested": "descent@latest",
+            "resolved": "descent@v1",
+            "id": version_id,
+            "name": "descent",
+            "version": 1,
+            "files": 4,
+        }
+    }
     manifest = manifest_of(project)
     assert manifest["inputs"] == expected and "source_runs" not in manifest and "selection" not in manifest
     assert json.loads((built(project) / "alpha" / "report-data.json").read_text())["inputs"] == expected
@@ -289,10 +298,11 @@ def test_inputs_are_pinned_and_recorded(project):
     store.publish("descent", data)
     assert store.versions("descent")[-1]["version"] == 2
     build_all(load_config(project))
-    assert manifest_of(project)["inputs"]["descent"] | {"files": 0, "uid": None} == expected["descent"] | {
+    assert manifest_of(project)["inputs"]["descent"] | {"files": 0, "id": None} == expected["descent"] | {
         "resolved": "descent@v2",
+        "version": 2,
         "files": 0,
-        "uid": None,
+        "id": None,
     }
 
 
@@ -308,8 +318,8 @@ def test_inputs_exposes_paths_by_attribute_and_item(project):
     )
     build_all(load_config(project))
     narrative = (built(project) / "alpha" / "narrative.html").read_text()
-    uid = store.versions("descent")[0]["uid"]  # the cache keys a version's folder by its uid (files are in files/)
-    assert "<strong>3</strong>" in narrative and f"<strong>{uid}</strong>" in narrative
+    version_id = store.versions("descent")[0]["id"]  # the cache keys a version's folder by its id (files in files/)
+    assert "<strong>3</strong>" in narrative and f"<strong>{version_id}</strong>" in narrative
 
 
 def test_input_images_are_copied_with_their_trace(project):
@@ -487,7 +497,7 @@ def test_publish_report_makes_a_self_contained_version(project, capsys):
     assert any(re.fullmatch(r"site/_static/report\.[0-9a-f]+\.js(\.gz)?", path) for path in static)
     assert any("plotly" in path for path in static) and not any(path.startswith("site/beta") for path in paths)
     assert version["metadata"] == {"title": "Alpha", "status": "active", "summary": "The first report, error 0.5."}
-    assert version["inputs"] == ["descent@v1"]
+    assert version["inputs"] == [store.versions("descent")[0]["id"]]
     page = store.pull("reports/alpha@v1") / "site" / "alpha" / "index.html"
     assert (page.parent.parent / "_static").is_dir() and page.is_file()
 
@@ -507,7 +517,7 @@ def test_republishing_an_unchanged_report_creates_no_version(project, capsys):
     (data / "data" / "summary.json").write_text('{"steps": 4}')
     store.publish("descent", data)
     main(["publish", "reports/alpha"])
-    assert store.versions("reports/alpha")[-1]["inputs"] == ["descent@v2"]
+    assert store.versions("reports/alpha")[-1]["inputs"] == [store.versions("descent")[1]["id"]]
 
 
 def test_lineage_connects_the_report_and_its_input(project):

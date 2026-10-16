@@ -116,20 +116,20 @@ def test_server_rejects_a_wrong_client_digest(server, env):
     r.put_blob(sha("hi"), io.BytesIO(b"hi"), 2)
     good = manifest_digest(entries)
     wrong = "sha256:" + "0" * 64
-    route = "/api/v2/projects/study/artifacts/data"
+    route = "/api/v3/projects/study/artifacts/data"
     body = {"entries": entries, "digest": wrong}
     api(server, "POST", f"{route}/publish", body, expect=409)
     assert local.artifacts("study") == []
     api(server, "POST", f"{route}/publish", {"entries": entries, "digest": "nonsense"}, expect=400)
     published = api(server, "POST", f"{route}/publish", {"entries": entries, "digest": good}, expect=201)
-    assert api(server, "GET", f"{route}/versions/{published['version']}")["digest"] == good
+    assert api(server, "GET", f"{route}/versions/v{published['version']}")["digest"] == good
     # the step-wise path checks it on complete
     number = api(server, "POST", f"{route}/versions", {"label": "x"}, expect=201)["version"]
-    api(server, "POST", f"{route}/versions/{number}/files", {"entries": entries})
-    api(server, "POST", f"{route}/versions/{number}/complete", {"digest": wrong}, expect=409)
-    assert api(server, "GET", f"{route}/versions/{number}")["status"] == "running"
-    api(server, "POST", f"{route}/versions/{number}/complete", {"digest": good})
-    assert api(server, "GET", f"{route}/versions/{number}")["digest"] == good
+    api(server, "POST", f"{route}/versions/v{number}/files", {"entries": entries})
+    api(server, "POST", f"{route}/versions/v{number}/complete", {"digest": wrong}, expect=409)
+    assert api(server, "GET", f"{route}/versions/v{number}")["status"] == "running"
+    api(server, "POST", f"{route}/versions/v{number}/complete", {"digest": good})
+    assert api(server, "GET", f"{route}/versions/v{number}")["digest"] == good
     with pytest.raises(Conflict):
         local.publish("study", "data", entries, digest=wrong, metadata={"other": 1})
 
@@ -138,7 +138,7 @@ def test_clients_send_the_digest_and_the_pending_version_knows_it(server, env):
     r = use_remote(env, server)
     version = store.connect().artifact("data").publish(folder(env, "d", {"a.txt": "hi"}))
     assert version.digest == manifest_digest(entries_of({"a.txt": "hi"}))
-    sent = api(server, "GET", "/api/v2/projects/study/artifacts/data/versions/1")
+    sent = api(server, "GET", "/api/v3/projects/study/artifacts/data/versions/v1")
     assert sent["digest"] == version.digest
     with store.connect().artifact("run").publishing(folder(env, "r", {"x.txt": "1"})) as pub:
         pub.sync()
@@ -266,7 +266,7 @@ def test_a_wrong_manifest_digest_fails_the_pull(env):
 
     with pytest.raises(StoreError, match="manifest digest"):
         materialize_version(
-            backend, "data", {**state, "digest": "sha256:" + "1" * 64, "uid": "0190" + state["uid"][4:]}, backend.root
+            backend, "data", {**state, "digest": "sha256:" + "1" * 64, "id": "0190" + state["id"][4:]}, backend.root
         )
     assert not [p for p in (backend.root / "versions").iterdir()]
 
@@ -279,7 +279,7 @@ def test_tampered_cache_blob_fails_the_pull_and_verify_repairs_it(server, env, c
     store.publish("data", folder(env, "d", {"a.txt": "shared", "b.txt": "other"}))
     path = store.pull("data@v1")
     run(capsys, "verify")  # clean (exit 0)
-    uid = r.get_version("data", 1)["uid"]
+    version_id = r.get_version("data", 1)["id"]
     blob = blob_path(env / ".cairn", sha("shared"))
     assert blob.is_file()
     os.chmod(blob, 0o644)
@@ -287,10 +287,10 @@ def test_tampered_cache_blob_fails_the_pull_and_verify_repairs_it(server, env, c
     out, err = run(capsys, "verify", code=1)
     assert str(blob) in out and "problems" in err
     # the pull of an unmaterialized version names the file
-    cache_module.remove(cache_module.version_folder(env / ".cairn", uid))
+    cache_module.remove(cache_module.version_folder(env / ".cairn", version_id))
     with pytest.raises(StoreError, match=r"a\.txt does not match its manifest"):
         store.pull("data@v1")
-    assert not cache_module.version_folder(env / ".cairn", uid).exists()
+    assert not cache_module.version_folder(env / ".cairn", version_id).exists()
     out, err = run(capsys, "verify", "--repair")  # repaired problems exit 0
     assert str(blob) in out and "(removed)" in out and not blob.exists()
     assert (store.pull("data@v1") / "a.txt").read_text() == "shared"  # downloaded again
@@ -326,7 +326,7 @@ def test_verify_a_version_by_reference(server, env, capsys):
 
 def test_verify_pending_versions(down, env, capsys):
     version = store.connect().artifact("data").publish(folder(env, "d", {"a.txt": "one"}))
-    path = store.pull(f"data@{version.uid}")
+    path = store.pull(f"{version.id}")
     assert (path / "a.txt").read_text() == "one"
     out, _ = run(capsys, "verify")
     assert "no problems" in out
@@ -334,7 +334,7 @@ def test_verify_pending_versions(down, env, capsys):
     (path / "a.txt").write_text("edited")
     out, _ = run(capsys, "verify", "--repair")  # its read-only folder is made again from the blobs
     assert "a.txt" in out and not path.exists()
-    assert (store.pull(f"data@{version.uid}") / "a.txt").read_text() == "one"
+    assert (store.pull(f"{version.id}") / "a.txt").read_text() == "one"
     blob = blob_path(env / ".cairn", sha("one"))
     os.chmod(blob, 0o644)
     blob.write_text("ONE")

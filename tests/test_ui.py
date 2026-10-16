@@ -7,12 +7,14 @@ import threading
 from importlib import resources
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 
 import cairn as store
 from cairn.cli import main
 from cairn import LocalRepo, Remote
+from cairn.store.ids import is_id
 from cairn.ui import server as ui_server
 from cairn.ui.server import LocalBackend, RemoteBackend, make_ui_server
 
@@ -74,8 +76,22 @@ def data(ui, path, cookie, expect=200):
 
 
 def plain(nodes: dict) -> dict:
-    """Lineage nodes without their short ids (every node the UI looked up has one)."""
-    return {ref: {key: value for key, value in node.items() if key != "short_id"} for ref, node in nodes.items()}
+    """Lineage nodes (keyed by id, edges by id) shown as `name@v<n>`, without their short ids and names (every node the
+    UI looked up has them), so the expected graphs read plainly; every key and edge must be a whole id."""
+    assert all(is_id(id) for id in nodes), list(nodes)
+    shown = {id: f"{node['name']}@v{node['version']}" for id, node in nodes.items()}
+
+    def edges(value):
+        return None if value is None else [shown[id] for id in value]
+
+    return {
+        shown[id]: {
+            key: edges(value) if key in ("inputs", "consumers") else value
+            for key, value in node.items()
+            if key not in ("short_id", "name", "version")
+        }
+        for id, node in nodes.items()
+    }
 
 
 def publish_reports(project, server):
@@ -159,7 +175,7 @@ def test_login_is_required_and_the_token_stays_server_side(ui):
 
 def test_the_api_needs_the_x_cairn_header(ui):
     cookie = login(ui)
-    for path in ("me", "projects", "projects/study", "lineage?ref=study:x@v1"):
+    for path in ("me", "projects", "projects/study", "projects/study/lineage?ref=x@v1"):
         assert get(ui, "/ui-api/" + path, cookie)[0] == 403, path  # the session alone is not enough
         assert get(ui, "/ui-api/" + path, cookie, **{"X-Cairn": "0"})[0] == 403
     assert get(ui, "/ui-api/me", {}, **X)[0] == 401  # and the header alone is not a login
@@ -345,34 +361,58 @@ def test_api_returns_what_the_pages_need(ui, project, capsys):
         and "files" not in row
         and "created" in row
     )
-    # a version: the manifest with files, metadata, inputs and consumers; by number, v<n>, alias
-    for selector in ("1", "v1", "best", "latest"):
-        v = data(ui, f"projects/study/artifacts/datasets%2Fother/versions/{selector}", cookie)
+    # a version: the manifest with files, metadata, inputs and consumers; by v<n>, alias, latest, id, short id
+    other_id = row["id"]
+    for ref in (
+        "datasets/other@v1",
+        "datasets/other@best",
+        "datasets/other@latest",
+        "datasets/other",
+        other_id,
+        row["short_id"],
+    ):
+        v = data(ui, f"projects/study/version?ref={quote(ref)}", cookie)
         assert (
             v["version"]["version"] == 1
+            and v["version"]["id"] == other_id
+            and v["ref"] == "datasets/other@v1"
             and [f["path"] for f in v["version"]["files"]] == ["a.txt"]
             and v["consumers"] == []
-        )
-    descent = data(ui, "projects/study/artifacts/descent/versions/1", cookie)
-    paths = {f["path"] for f in descent["version"]["files"]}
-    assert "metrics.jsonl" in paths and descent["consumers"] == ["study:reports/alpha@v1"]
-    report = data(ui, "projects/study/artifacts/reports%2Falpha/versions/1", cookie)
-    assert report["version"]["inputs"] == ["study:descent@v1"] and report["version"]["metadata"]["title"] == "Alpha"
-    descent_v1 = descent["version"]
+        ), ref
+    descent = data(ui, "projects/study/version?ref=descent@v1", cookie)
+    report = data(ui, "projects/study/version?ref=reports/alpha@v1", cookie)
+    descent_v1, report_v1 = descent["version"], report["version"]
+    paths = {f["path"] for f in descent_v1["files"]}
+    assert "metrics.jsonl" in paths and descent["consumers"] == [report_v1["id"]]  # ids
+    assert descent["nodes"][report_v1["id"]]["name"] == "reports/alpha"  # named for the app, no parsing
+    assert report_v1["inputs"] == [descent_v1["id"]] and report_v1["metadata"]["title"] == "Alpha"
+    assert report["nodes"][descent_v1["id"]] | {"short_id": None} == {
+        "name": "descent",
+        "version": 1,
+        "status": "completed",
+        "short_id": None,
+    }
     assert len(descent_v1["short_id"]) == 7 and row["short_id"]  # every version shows its short id
-    by_id = data(ui, f"projects/study/artifacts/descent/versions/{descent_v1['short_id']}", cookie)
-    assert by_id["version"]["uid"] == descent_v1["uid"]
-    assert any(f["path"].startswith("site/") for f in report["version"]["files"])
+    by_id = data(ui, f"projects/study/version?ref={descent_v1['short_id']}", cookie)
+    assert by_id["version"]["id"] == descent_v1["id"]
+    assert any(f["path"].startswith("site/") for f in report_v1["files"])
     # errors are JSON
     for path in (
-        "projects/study/artifacts/descent/versions/9",
+        "projects/study/version?ref=descent@v9",
+        "projects/study/version?ref=descent@zzz",
+        "projects/study/version?ref=0000000",
         "projects/study/artifacts/nope",
         "projects/nope",
-        "projects/study/artifacts/descent/versions/zzz",
+        "projects/study/artifacts/descent/versions/1",  # the 0.14 route is gone
+        "lineage?ref=study:descent@v1",
     ):
         assert "error" in data(ui, path, cookie, expect=404), path
-    assert data(ui, "lineage?ref=nope", cookie, expect=400)["error"]
-    assert data(ui, "lineage?ref=study:descent@v1&depth=9", cookie, expect=400)["error"]
+    for path in (
+        f"projects/study/version?ref=descent@{descent_v1['short_id']}",  # name@<short id> is refused
+        "projects/study/lineage?ref=study:descent@v1",  # a reference names no project
+        "projects/study/lineage?ref=descent@v1&depth=9",
+    ):
+        assert data(ui, path, cookie, expect=400)["error"], path
 
 
 def test_lineage_levels(ui, tmp_path, env):
@@ -382,25 +422,25 @@ def test_lineage_levels(ui, tmp_path, env):
     store.publish("c", folder(env, "c", {"f": "3"}), inputs=["b@v1"])
     store.publish("d", folder(env, "d", {"f": "4"}), inputs=["c@v1"])
     cookie = login(ui)
-    one = data(ui, "lineage?ref=study:b@latest", cookie)  # depth 1, an alias resolves to the exact version
-    assert one["ref"] == "study:b@v1" and one["depth"] == 1 and not one["truncated"]
+    one = data(ui, "projects/study/lineage?ref=b@latest", cookie)  # depth 1, an alias resolves to the exact version
+    b1 = data(ui, "projects/study/version?ref=b@v1", cookie)["version"]["id"]
+    assert one["ref"] == b1 and one["depth"] == 1 and not one["truncated"]
     assert all(node["short_id"] for node in one["nodes"].values())
     assert plain(one["nodes"]) == {
-        "study:b@v1": {"inputs": ["study:a@v1"], "consumers": ["study:c@v1"]},
-        "study:a@v1": {"inputs": None, "consumers": None},
-        "study:c@v1": {"inputs": None, "consumers": None},
+        "b@v1": {"inputs": ["a@v1"], "consumers": ["c@v1"]},
+        "a@v1": {"inputs": None, "consumers": None},
+        "c@v1": {"inputs": None, "consumers": None},
     }
-    two = plain(data(ui, "lineage?ref=study:b@v1&depth=2", cookie)["nodes"])
-    assert two["study:a@v1"] == {
+    two = plain(data(ui, "projects/study/lineage?ref=b@v1&depth=2", cookie)["nodes"])
+    assert two["a@v1"] == {
         "inputs": [],
         "consumers": None,
     }  # ancestors expand through inputs, descendants through consumers
-    assert two["study:c@v1"] == {"inputs": None, "consumers": ["study:d@v1"]}
-    assert two["study:d@v1"] == {"inputs": None, "consumers": None}
-    deep = data(ui, "lineage?ref=study:d@v1&depth=3", cookie)["nodes"]
-    assert deep["study:a@v1"]["inputs"] is None and deep["study:b@v1"]["inputs"] == [
-        "study:a@v1"
-    ]  # three levels reach a, not beyond
+    assert two["c@v1"] == {"inputs": None, "consumers": ["d@v1"]}
+    assert two["d@v1"] == {"inputs": None, "consumers": None}
+    deep = plain(data(ui, "projects/study/lineage?ref=d@v1&depth=3", cookie)["nodes"])
+    assert deep["a@v1"]["inputs"] is None and deep["b@v1"]["inputs"] == ["a@v1"]  # three levels reach a, not beyond
+    assert data(ui, f"projects/study/lineage?ref={b1}", cookie)["nodes"] == one["nodes"]  # by id the same graph
 
 
 def test_lineage_is_capped(ui, env, monkeypatch):
@@ -409,7 +449,7 @@ def test_lineage_is_capped(ui, env, monkeypatch):
     store.publish("root", folder(env, "root", {"f": "0"}))
     for number in range(6):
         store.publish(f"leaf{number}", folder(env, f"leaf{number}", {"f": str(number)}), inputs=["root@v1"])
-    lineage = data(ui, "lineage?ref=study:root@v1", login(ui))
+    lineage = data(ui, "projects/study/lineage?ref=root@v1", login(ui))
     assert lineage["truncated"] and len(lineage["nodes"]) == 4
 
 
@@ -480,20 +520,24 @@ def test_data_panel_links_point_at_the_artifact_pages(ui, project, capsys):
     cookie = login(ui)
     script = resources.files("cairn").joinpath("reports", "template", "report.js").read_text()
     assert "STORE_SERVED = !BUNDLE && /^\\/p\\/[^/]+\\/r\\//.test(location.pathname)" in script
-    assert "STORE_SERVED && here && match ?" in script and "version.dataset.artifact = input.resolved" in script
-    assert "/p/${here[1]}/a/" in script  # /p/<project>/r/... -> /p/<project>/a/<name>@vN, the report's own project
+    assert "version.dataset.artifact = input.resolved" in script
+    assert "/p/${here[1]}/a/" in script and "@v${input.version}" in script  # /p/<project>/a/<name>@v<n>
+    assert "/p/${here[1]}/v/${input.id}" in script  # an input without a number: its id page
     report_data = json.loads(get(ui, "/p/study/r/alpha/report-data.json", cookie)[2])
-    exact = report_data["inputs"]["descent"]["resolved"]
+    descent = report_data["inputs"]["descent"]
+    assert (descent["name"], descent["version"], descent["resolved"]) == ("descent", 1, "descent@v1")
+    assert is_id(descent["id"])
     project_name = "study"  # from the page's own address
-    name, version = exact.split("@")
-    target = f"/p/{project_name}/a/{name}@{version}"  # what the script builds from the exact reference
+    app = (Path(ui_server.__file__).parent / "static" / "index.html").read_bytes()
+    for target in (  # what the script builds from the recorded name and number, or the id
+        f"/p/{project_name}/a/{descent['name']}@v{descent['version']}",
+        f"/p/{project_name}/v/{descent['id']}",
+    ):
+        assert get(ui, target, cookie)[2] == app, target  # an app route
+    detail = data(ui, f"projects/{project_name}/version?ref={descent['resolved']}", cookie)  # and the app's data for it
     assert (
-        get(ui, target, cookie)[2] == (Path(ui_server.__file__).parent / "static" / "index.html").read_bytes()
-    )  # an app route
-    detail = data(
-        ui, f"projects/{project_name}/artifacts/{name}/versions/{version[1:]}", cookie
-    )  # and the app's data for it
-    assert "metrics.jsonl" in {f["path"] for f in detail["version"]["files"]}
+        "metrics.jsonl" in {f["path"] for f in detail["version"]["files"]} and detail["version"]["id"] == descent["id"]
+    )
 
 
 # --------------------------------------------------------------------- files
@@ -647,43 +691,40 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
     )
     main(["publish", "reports/summary"])
 
-    inside = "datasets/toy@v1", "toy-fit@v1", "reports/summary@v1"  # the server's refs: inside the project
-    lineage = api(server, "GET", "/api/v2/projects/study/lineage?ref=reports%2Fsummary@latest")
+    def id_of(ref):
+        return api(server, "GET", f"/api/v3/projects/study/resolve?ref={quote(ref)}")["version"]["id"]
+
+    inside = "datasets/toy@v1", "toy-fit@v1", "reports/summary@v1"  # inside the project
+    toy, fit, summary = (id_of(ref) for ref in inside)  # the server names each by its id
+    lineage = api(server, "GET", "/api/v3/projects/study/lineage?ref=reports%2Fsummary@latest")
     assert plain(lineage["nodes"]) == {inside[2]: {"status": "completed"}, inside[1]: {"status": "completed"}}
     assert {key: value for key, value in lineage.items() if key != "nodes"} == {
-        "ref": inside[2],
-        "inputs": [inside[1]],
+        "id": summary,
+        "inputs": [fit],
         "consumers": [],
         "deleted": [],
     }
-    middle = api(server, "GET", "/api/v2/projects/study/lineage?ref=toy-fit@v1")
-    assert middle["inputs"] == [inside[0]] and middle["consumers"] == [
-        inside[2]
-    ]  # the script's parent heard of its pull
-    script_run = "runs/interactive@v1"  # the script was a run too (python -c: "interactive"), completed at exit
-    assert api(server, "GET", "/api/v2/projects/study/lineage?ref=datasets%2Ftoy@v1")["consumers"] == [
-        script_run,
-        inside[1],
-    ]
-    node = api(server, "GET", f"/api/v2/projects/study/lineage?ref={script_run}")["nodes"][script_run]
-    assert plain({script_run: node})[script_run] == {"status": "completed", "kind": "run"}
-    chain = tuple(f"study:{ref}" for ref in inside)  # the UI's: project:name@sel, as the app reads them
-    # the same chain in the UI's data, both ways
+    middle = api(server, "GET", "/api/v3/projects/study/lineage?ref=toy-fit@v1")
+    assert middle["inputs"] == [toy] and middle["consumers"] == [summary]  # the script's parent heard of its pull
+    script_run = id_of("runs/interactive@v1")  # the script was a run too (python -c: "interactive"), completed at exit
+    assert api(server, "GET", "/api/v3/projects/study/lineage?ref=datasets%2Ftoy@v1")["consumers"] == [script_run, fit]
+    node = api(server, "GET", f"/api/v3/projects/study/lineage?ref={script_run}")["nodes"][script_run]
+    assert plain({script_run: node}) == {"runs/interactive@v1": {"status": "completed", "kind": "run"}}
+    # the same chain in the UI's data, both ways, by id
     cookie = login(ui)
 
-    def version(name):
-        return data(ui, f"projects/study/artifacts/{name.replace('/', '%2F')}/versions/1", cookie)
+    def version(ref):
+        return data(ui, f"projects/study/version?ref={quote(ref)}", cookie)
 
-    assert version("datasets/toy")["consumers"] == ["study:runs/interactive@v1", chain[1]]
-    assert version("toy-fit")["version"]["inputs"] == [chain[0]] and version("toy-fit")["consumers"] == [chain[2]]
-    assert version("reports/summary")["version"]["inputs"] == [chain[1]]
-    graph = data(ui, "lineage?ref=study:reports%2Fsummary@v1&depth=2", cookie)["nodes"]
-    assert set(graph) == set(chain) and graph[chain[1]]["inputs"] == [chain[0]]
+    assert version("datasets/toy@v1")["consumers"] == [script_run, fit]
+    assert version("toy-fit@v1")["version"]["inputs"] == [toy] and version("toy-fit@v1")["consumers"] == [summary]
+    assert version("reports/summary@v1")["version"]["inputs"] == [fit]
+    graph = data(ui, "projects/study/lineage?ref=reports/summary@v1&depth=2", cookie)["nodes"]
+    assert set(graph) == {toy, fit, summary} and graph[fit]["inputs"] == [toy]
     assert b"fit of 1,2,3" in get(ui, "/p/study/r/summary/narrative.html", cookie)[2]
     # the report data records its exact input for the Data panel
-    assert (
-        json.loads(get(ui, "/p/study/r/summary/report-data.json", cookie)[2])["inputs"]["fit"]["resolved"] == inside[1]
-    )
+    recorded = json.loads(get(ui, "/p/study/r/summary/report-data.json", cookie)[2])["inputs"]["fit"]
+    assert (recorded["resolved"], recorded["id"]) == (inside[1], fit)
     assert b"1,2,3" in get(ui, "/files/study/datasets/toy@v1//x.csv", cookie)[2]
 
 
@@ -722,7 +763,7 @@ def test_the_run_panel_data_of_a_running_and_a_completed_run(ui, env):
         model.add_text("weights", "w")
     run.sync()
     cookie = login(ui)
-    panel = data(ui, "projects/study/artifacts/runs%2Ftrain/versions/1/run", cookie)
+    panel = data(ui, "projects/study/run?ref=runs/train@v1", cookie)
     assert panel["status"] == "running" and panel["config"] == {"lr": 0.1, "model": {"depth": 2}}
     assert [(row["step"], row["loss"]) for row in panel["metrics"]["rows"]] == [(0, 1.0), (1, 0.5)]
     assert panel["metrics"]["rows"][1]["acc"] == 0.9 and "note" not in panel["metrics"]["rows"][1]
@@ -734,19 +775,23 @@ def test_the_run_panel_data_of_a_running_and_a_completed_run(ui, env):
     )
     assert panel["stderr"] == {"text": "a warning\n", "truncated": False, "size": 10} and panel["error"] is None
     assert panel["info"]["host"] and panel["info"]["run"] == run.ref
-    running = data(ui, "projects/study/artifacts/runs%2Ftrain/versions/1", cookie)
-    assert running["consumers"] == ["study:models/toy@v1"]  # a running run has its outputs already
-    graph = data(ui, "lineage?ref=study:models/toy@v1", cookie)["nodes"]
-    assert graph["study:runs/train@v1"]["kind"] == "run" and graph["study:runs/train@v1"]["status"] == "running"
+    running = data(ui, "projects/study/version?ref=runs/train@v1", cookie)
+    train, toy = (
+        running["version"]["id"],
+        data(ui, "projects/study/version?ref=datasets/toy@v1", cookie)["version"]["id"],
+    )
+    model_id = data(ui, "projects/study/version?ref=models/toy@v1", cookie)["version"]["id"]
+    assert running["consumers"] == [model_id]  # a running run has its outputs already
+    graph = data(ui, "projects/study/lineage?ref=models/toy@v1", cookie)["nodes"]
+    assert (
+        graph[train]["kind"] == "run" and graph[train]["status"] == "running" and graph[train]["name"] == "runs/train"
+    )
     run.finish()
     store.connect().sync()
-    graph = data(ui, "lineage?ref=study:models/toy@v1", cookie)["nodes"]  # depth 1, but a run counts no level
-    assert (
-        graph["study:runs/train@v1"]["inputs"] == ["study:datasets/toy@v1"]
-        and "status" not in graph["study:runs/train@v1"]
-    )
-    assert data(ui, "projects/study/artifacts/runs%2Ftrain/versions/1/run", cookie)["status"] == "completed"
-    assert data(ui, "projects/study/artifacts/datasets%2Ftoy/versions/1/run", cookie)["metrics"] == {
+    graph = data(ui, "projects/study/lineage?ref=models/toy@v1", cookie)["nodes"]  # depth 1, but a run counts no level
+    assert graph[train]["inputs"] == [toy] and "status" not in graph[train]
+    assert data(ui, "projects/study/run?ref=runs/train@v1", cookie)["status"] == "completed"
+    assert data(ui, "projects/study/run?ref=datasets/toy@v1", cookie)["metrics"] == {
         "rows": [],
         "total": 0,
         "truncated": False,

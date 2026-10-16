@@ -52,12 +52,12 @@ def config_file(folder: Path) -> Path:
 def write_config(folder: Path, text: str = "") -> Path:
     """Make `folder` a project (its repo `.cairn/`, as `cairn init` makes it) with `text` as its config.toml."""
     from cairn.config import protect
-    from cairn.store.local import repo_uid
+    from cairn.store.local import repo_id
 
     repo = Path(folder) / ".cairn"
     protect(repo)
     repo.mkdir(parents=True, exist_ok=True)
-    repo_uid(repo)
+    repo_id(repo)
     file = config_file(folder)
     file.write_text(text)
     return file
