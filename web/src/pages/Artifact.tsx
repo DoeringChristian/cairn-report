@@ -6,7 +6,7 @@ import {
   KeyValueTable, LinkButton, Loading, MetricCard, MetricGrid, Note, Panel, RefRow, RefRows, RowActions, SearchInput, Section, Select,
   StatusPill, TextBlock, Thumbnail, ThumbnailSpacer, Toolbar, useLightbox, type GalleryItem,
 } from "../components";
-import { artifactHref, bytes, exact, fileHref, isReport, parseRef, previewKind, reportHref, selOf, shortOf, when, zipHref } from "../util";
+import { artifactHref, bytes, exact, fileHref, userRef, isReport, parseRef, previewKind, reportHref, selOf, shortOf, when, zipHref } from "../util";
 import { Graph } from "./Graph";
 import { RunPanel } from "./Run";
 
@@ -85,7 +85,7 @@ function Files({ project, name, version, files }: { project: string; name: strin
   const images = useMemo(() => files.filter(isImage), [files]);  // eslint-disable-line react-hooks/exhaustive-deps
   const gallery = useMemo<GalleryItem[]>(() => images.map(f => ({
     src: href(f.path), title: f.path, caption: bytes(f.size ?? 0), download: href(f.path, true),
-    copy: { text: `${exact(project, name, version)}//${f.path}`, label: "Copy file reference", done: "Reference copied" },
+    copy: { text: `${userRef(name, version)}//${f.path}`, label: "Copy file reference", done: "Reference copied" },
   })), [images, project, name, version]);  // eslint-disable-line react-hooks/exhaustive-deps
   const position = useMemo(() => new Map(images.map((f, i) => [f.path, i])), [images]);
   const { open: show, lightbox } = useLightbox(gallery);
@@ -118,7 +118,7 @@ function Files({ project, name, version, files }: { project: string; name: strin
               <td><RowActions>
                 {f.sha256 && kind && <Button small aria-expanded={isOpen} onClick={() => toggle(f.path)}>{isOpen ? "Hide" : "Preview"}</Button>}
                 {f.sha256 && <LinkButton small href={href(f.path, true)}>Download</LinkButton>}
-                {f.sha256 && <CopyButton text={`${exact(project, name, version)}//${f.path}`} label="Copy file reference" done="Reference copied" />}
+                {f.sha256 && <CopyButton text={`${userRef(name, version)}//${f.path}`} label="Copy file reference" done="Reference copied" />}
               </RowActions></td>
             </tr>
           );
@@ -143,7 +143,7 @@ function RefList({ title, refs, project, empty, deleted = [] }: { title: string;
               <RefRow key={ref} name={p?.name ?? ref}
                 value={p ? <Link className="data-version" to={artifactHref(p.project, p.name, p.sel)}>{p.sel}</Link> : ref}
                 extra={<>{p && p.project !== project ? p.project : ""}{deleted.includes(ref) && <> <StatusPill status="deleted" /></>}</>}
-                copy={{ text: ref, label: "Copy exact version", done: "Version copied" }} />
+                copy={{ text: p ? userRef(p.name, p.sel) : ref, label: "Copy exact version", done: "Version copied" }} />
             );
           })}
         </RefRows>
@@ -204,8 +204,9 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
 
           <Panel title="Reference">
             <RefRows>
-              <RefRow name="Version" value={exact(project, name, number)} copy={{ text: exact(project, name, number), label: "Copy exact version", done: "Version copied" }} />
-              {!gone && <RefRow name="Pull" value={`cairn pull ${exact(project, name, number)}`} copy={{ text: `cairn pull ${exact(project, name, number)}`, label: "Copy pull command", done: "Command copied" }} />}
+              <RefRow name="Version" value={userRef(name, number)} copy={{ text: userRef(name, number), label: "Copy exact version", done: "Version copied" }} />
+              {manifest.short_id && <RefRow name="Id" value={manifest.short_id} mono copy={{ text: manifest.short_id, label: "Copy short id", done: "Id copied" }} />}
+              {!gone && <RefRow name="Pull" value={`cairn pull ${userRef(name, number)}`} copy={{ text: `cairn pull ${userRef(name, number)}`, label: "Copy pull command", done: "Command copied" }} />}
               {!gone && manifest.files.length > 0 && (
                 <RefRow name="Files" value={<LinkButton small href={zipHref(project, name, number)} download>Download zip</LinkButton>}
                   extra={manifest.status === "running" ? "what is synced so far; the run is still running" : size} />
@@ -226,10 +227,11 @@ export function ArtifactPage({ project, name, selector }: { project: string; nam
             <Select label="Version" value={number} onChange={v => location.assign(artifactHref(project, name, v))}
               choices={[...art.data.versions].reverse().map(v => ({ value: selOf(v), label: `${shortOf(v)}${v.label ? ` (${v.label})` : ""}`, note: v.status !== "completed" ? v.status : undefined }))} />
           }>
-            <DataTable head={["Version", "Label", "Status", "Created", "Aliases", "Source host"]}>
+            <DataTable head={["Version", "Id", "Label", "Status", "Created", "Aliases", "Source host"]}>
               {[...art.data.versions].reverse().map(v => (
                 <tr key={v.uid} className={[selOf(v) === number ? "selected" : "", v.status === "deleted" ? "tombstone" : "", v.pending ? "pending" : ""].join(" ").trim() || undefined}>
                   <td className="nowrap"><Link to={artifactHref(project, name, selOf(v))} title={v.pending ? v.uid : undefined}><strong>{shortOf(v)}</strong></Link>{report && v.status === "completed" && v.version != null && <> &middot; <a href={reportHref(project, name, v.version)}>open</a></>}</td>
+                  <td><code className="muted">{v.short_id}</code></td>
                   <td>{v.label}</td>
                   <td><StatusPill status={v.status} />{v.status === "deleted" && <span className="muted tombstone-reason" title={`deleted ${v.deleted_at ?? ""}${v.deleted_by ? " by " + v.deleted_by : ""}`}> {v.reason || when(v.deleted_at ?? "")}</span>}</td>
                   <td className="muted nowrap">{when(v.created)}</td>

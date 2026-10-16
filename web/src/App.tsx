@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { api, paths, useApi, type Me, type Project, type Summary } from "./api";
-import { Field, Hero } from "./components";
+import { Field, Hero, Loading } from "./components";
 import { ArtifactPage } from "./pages/Artifact";
 import { PalettePage } from "./pages/Palette";
 import { ProjectPage } from "./pages/Project";
@@ -48,7 +48,7 @@ function Rail() {
     <aside className={open ? "rail open" : "rail"}>
       <Link className="brand" to="/"><span>C</span> <span className="site-title">Cairn</span></Link>
       <button type="button" className="rail-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>Browse</button>
-      <RailSection label="Projects" items={projectItems} />
+      {me.data?.mode !== "local" && <RailSection label="Projects" items={projectItems} />}
       {project && <RailSection label="Reports" items={reports.map(a => ({ key: a.name, title: title(a), to: reportHref(project, a.name), current: false }))} />}
       {project && <RailSection label="Artifacts" items={others.map(a => ({ key: a.name, title: a.name, to: artifactHref(project, a.name), plain: true, current: a.name === here }))} />}
       {project && <RailSection label="Runs" items={runs.map(a => ({ key: a.name, title: a.name.slice("runs/".length), to: artifactHref(project, a.name), plain: true, current: a.name === here }))} />}
@@ -96,6 +96,14 @@ function ArtifactRoute() {
   return <ArtifactPage project={params.project!} name={name} selector={sel} />;
 }
 
+/** `/`: a local UI (one project, `cairn ui` on a project's repo) opens that project; a server lists its projects. */
+function Home() {
+  const me = useApi<Me>("me");
+  if (me.loading && !me.data) return <main><Loading /></main>;
+  if (me.data?.mode === "local" && me.data.home) return <Navigate replace to={`/p/${encodeURIComponent(me.data.home)}/`} />;
+  return <ProjectsPage />;
+}
+
 function NotFound() {
   return <main><Hero eyebrow="404" title="No such page" subtitle={<Link to="/">Back to the projects</Link>} /></main>;
 }
@@ -107,7 +115,7 @@ export function App() {
     <>
       <Rail />
       <Routes>
-        <Route path="/" element={<ProjectsPage />} />
+        <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
         <Route path="/palette" element={<PalettePage />} />
         <Route path="/p/:project" element={<ProjectPage />} />

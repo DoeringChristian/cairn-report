@@ -11,13 +11,13 @@ export class ApiError extends Error {
 export interface Project { name: string; title: string; description: string; created: string; artifacts?: number; updated?: string }
 export interface Summary { name: string; latest: number | null; versions: number; aliases: Record<string, number>; updated: string; metadata: Record<string, any>; pending?: number }
 export interface VersionRow {
-  version: number | null; uid: string; pending?: boolean; sync?: string; error?: string | null; status: string; label: string | null; created: string; completed?: string;
+  version: number | null; uid: string; short_id?: string; pending?: boolean; sync?: string; error?: string | null; status: string; label: string | null; created: string; completed?: string;
   source?: { host?: string } | null; metadata: Record<string, any>; input_count: number; file_count: number; size: number;
   deleted_at?: string; deleted_by?: string | null; reason?: string | null;  // a tombstone (status "deleted")
 }
 export interface Entry { path: string; sha256?: string; size?: number; link?: string }
 export interface Manifest extends Omit<VersionRow, "input_count" | "file_count" | "size"> { inputs: string[]; files: Entry[]; digest?: string }
-export interface Me { scope: "owner" | "project" | "remote"; project: string | null; auth: boolean }
+export interface Me { scope: "owner" | "project" | "remote"; project: string | null; auth: boolean; mode?: "local" | "server"; home?: string | null }
 export interface LineageNode { inputs: string[] | null; consumers: string[] | null; deleted?: boolean; kind?: string; status?: string }
 export interface Lineage { ref: string; depth: number; nodes: Record<string, LineageNode>; truncated: boolean }
 export type Row = Record<string, number | string>;

@@ -24,7 +24,7 @@ const IMAGES: GalleryItem[] = [
   { title: "figures/accuracy-by-depth.png", src: figure("Accuracy by depth", 1800, 700, [52, 61, 70, 76, 79, 81, 82, 82], "#486f91") },
   { title: "figures/residuals.svg", src: figure("Residuals", 900, 1200, [2, 5, 9, 5, 2], "#b56231") },
   { title: "samples/denoised-0042.webp", src: figure("Sample 42", 1200, 1200, [4, 8, 6, 9, 3, 7], "#9a5b1e") },
-].map(item => ({ ...item, download: item.src, caption: "sample image", copy: { text: `study:datasets/toy@v2//${item.title}`, label: "Copy file reference", done: "Reference copied" } }));
+].map(item => ({ ...item, download: item.src, caption: "sample image", copy: { text: `datasets/toy@v2//${item.title}`, label: "Copy file reference", done: "Reference copied" } }));
 
 const VERSIONS = [
   { version: "v3", label: "tuned", status: "running", created: "2026-10-16 09:12 UTC", aliases: [], host: "kuma-g042" },
@@ -70,10 +70,10 @@ export function PalettePage() {
           <ToggleGroup label="Runs in the graph" value={toggle} onChange={setToggle} options={[{ value: "runs", label: "Show runs" }, { value: "data", label: "Data only" }]} />
         </Specimen>
         <Specimen name="CopyButton" note="copies a reference; a tooltip confirms">
-          <span className="palette-row"><CopyButton text="study:datasets/toy@v2" label="Copy exact version" done="Version copied" /> <code>study:datasets/toy@v2</code></span>
+          <span className="palette-row"><CopyButton text="datasets/toy@v2" label="Copy exact version" done="Version copied" /> <code>datasets/toy@v2</code></span>
         </Specimen>
         <Specimen name="RowActions" note="the buttons at the end of a table row">
-          <RowActions><Button small>Preview</Button><LinkButton small href="#download">Download</LinkButton><CopyButton text="study:toy-fit@v1//result.json" label="Copy file reference" done="Reference copied" /></RowActions>
+          <RowActions><Button small>Preview</Button><LinkButton small href="#download">Download</LinkButton><CopyButton text="toy-fit@v1//result.json" label="Copy file reference" done="Reference copied" /></RowActions>
         </Specimen>
         <Specimen name="IconButton" note="the lightbox's round icon buttons (on its dark backdrop)">
           <div className="palette-dark"><IconButton label="Previous image">←</IconButton><IconButton label="Next image">→</IconButton><IconButton label="Close">×</IconButton></div>
@@ -100,11 +100,11 @@ export function PalettePage() {
         <Specimen name="Panel · RefRows · RefRow" note="copyable references">
           <Panel title="Reference">
             <RefRows>
-              <RefRow name="Version" value="study:datasets/toy@v2" copy={{ text: "study:datasets/toy@v2", label: "Copy exact version", done: "Version copied" }} />
-              <RefRow name="Pull" value="cairn pull study:datasets/toy@v2" copy={{ text: "cairn pull study:datasets/toy@v2", label: "Copy pull command", done: "Command copied" }} />
+              <RefRow name="Version" value="datasets/toy@v2" copy={{ text: "datasets/toy@v2", label: "Copy exact version", done: "Version copied" }} />
+              <RefRow name="Pull" value="cairn pull datasets/toy@v2" copy={{ text: "cairn pull datasets/toy@v2", label: "Copy pull command", done: "Command copied" }} />
               <RefRow name="Files" value={<LinkButton small href="#zip">Download zip</LinkButton>} extra="9.3 KB" />
               <RefRow name="Digest" mono value="sha256:503f9d2f1796db5915385401a858d393ac5ad63e416ef394b7ee0e521c4e0c16" copy={{ text: "sha256:503f…", label: "Copy digest", done: "Digest copied" }} />
-              <RefRow name="datasets/toy" value="v1" extra={<StatusPill status="deleted" />} copy={{ text: "study:datasets/toy@v1", label: "Copy exact version" }} />
+              <RefRow name="datasets/toy" value="v1" extra={<StatusPill status="deleted" />} copy={{ text: "datasets/toy@v1", label: "Copy exact version" }} />
             </RefRows>
           </Panel>
           <Panel title="Consumers"><Hint>No consumers yet.</Hint></Panel>
@@ -202,7 +202,7 @@ export function PalettePage() {
       <Section title="Code">
         <Specimen name="JsonBlock · CodeBlock" note="metadata, any value as JSON">
           <JsonBlock value={{ kind: "run", config: { lr: 0.1, model: { depth: 4 } }, overrides: ["model.depth=4"] }} />
-          <CodeBlock>cairn pull study:datasets/toy@v2</CodeBlock>
+          <CodeBlock>cairn pull datasets/toy@v2</CodeBlock>
         </Specimen>
         <Specimen name="TextBlock" note="raw text that scrolls in its box (a log tail; dark inside a table)">
           <TextBlock>{"epoch 1  loss 0.912  acc 0.41\nepoch 2  loss 0.507  acc 0.68\nepoch 3  loss 0.233  acc 0.88\ntraining done"}</TextBlock>

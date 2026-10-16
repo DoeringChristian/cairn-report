@@ -14,7 +14,9 @@ export const enc = (path: string) => path.split("/").map(encodeURIComponent).joi
 /** How a version is named: `v<n>`, or its uid while it is pending (the source of truth has not numbered it yet). */
 export const selOf = (v: { version: number | null; uid: string }) => (v.version != null ? `v${v.version}` : v.uid);
 /** The short name shown in tables: `v<n>`, or the start of a pending version's uid. */
-export const shortOf = (v: { version: number | null; uid: string }) => (v.version != null ? `v${v.version}` : `${v.uid.slice(0, 13)}…`);
+export const shortOf = (v: { version: number | null; uid: string; short_id?: string }) => (v.version != null ? `v${v.version}` : v.short_id ?? `${v.uid.slice(0, 13)}…`);
+/** A reference as the user types it (the CLI and Python API name artifacts without a project). */
+export const userRef = (name: string, sel: string) => `${name}@${sel}`;
 export const exact = (project: string, name: string, sel: string) => `${project}:${name}@${sel}`;
 export const artifactHref = (project: string, name: string, sel?: string | number | null) =>
   `/p/${encodeURIComponent(project)}/a/${enc(name)}${sel == null ? "" : typeof sel === "number" ? `@v${sel}` : `@${sel}`}`;
