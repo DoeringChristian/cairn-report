@@ -5,7 +5,7 @@ Only a JSON API and file downloads, no pages (`cairn ui` explores a repo in a br
 
 Processes on the server's machine keep opening the repo directly, whether the server runs or not; the server is one
 more such process. A new repo gets a fresh owner token on first launch; every launch prints `Repo: <url>` and
-`Token: <owner token>` to the terminal (never into a URL). Scoped tokens (one project, read or
+`Token: <owner token>` and the token file's path to the terminal (never into a URL). Scoped tokens (one project, read or
 write) are made with `cairn token create` (see tokens.py). Bind localhost, and put an
 HTTPS reverse proxy in front of anything else: the server speaks plain HTTP.
 
@@ -768,6 +768,7 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         print("Authentication is off (--no-auth): every request acts as the owner; for local testing only", flush=True)
     else:
         print(f"Token: {server.owner_token}", flush=True)
+        print(f"  stored in {(root / 'token').resolve()} (owner-only)", flush=True)
         print("  clients read it from CAIRN_TOKEN or [repo] token_file, and `cairn ui` logs in with it;"
               " `cairn token create` makes project-scoped tokens", flush=True)
     reap_schedule(server.app)

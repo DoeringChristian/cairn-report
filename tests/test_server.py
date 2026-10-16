@@ -114,7 +114,8 @@ def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
         assert oct((root / "token").stat().st_mode & 0o777) == "0o600"
         serve_store(root, port=0)  # a second launch reuses it and prints the same token
         out = capsys.readouterr().out
-        assert f"Token: {token}" in out and "Created store" not in out
+        assert f"Token: {token}" in out and "Created the repo" not in out
+        assert f"stored in {(root / 'token').resolve()} (owner-only)" in out  # the path at every launch
         serve_store(root, host="0.0.0.0", port=0)
         assert "plain HTTP" in capsys.readouterr().out
     finally:
