@@ -53,7 +53,6 @@ function Rail() {
       {project && <RailSection label="Artifacts" items={others.map(a => ({ key: a.name, title: a.name, to: artifactHref(project, a.name), plain: true, current: a.name === here }))} />}
       {project && <RailSection label="Runs" items={runs.map(a => ({ key: a.name, title: a.name.slice("runs/".length), to: artifactHref(project, a.name), plain: true, current: a.name === here }))} />}
       <div className="rail-note">
-        {me.data?.scope === "project" && <>Token for project <b>{me.data.project}</b><br /></>}
         <span className="rail-links"><Link to="/palette">Components</Link>{me.data?.auth && <a href="/logout">Log out</a>}</span>
       </div>
     </aside>
@@ -77,7 +76,7 @@ function Login() {
   };
   return (
     <main>
-      <Hero eyebrow="Cairn" title="Log in" subtitle="Enter a token: the repo's owner token or one scoped to a project (or open the one-time link cairn ui printed)." />
+      <Hero eyebrow="Cairn" title="Log in" subtitle="Enter the token (the file token in the server's repo), or open the one-time link cairn ui printed." />
       <form className="login-form" onSubmit={submit}>
         <Field label="Token" type="password" autoComplete="current-password" autoFocus required value={token} onChange={e => setToken(e.target.value)} />
         {error && <p className="login-error" role="alert">{error}</p>}

@@ -108,12 +108,12 @@ class Sync:
         uid = self.remote.uid
         if uid == repo_uid(self.root):
             raise StoreError(f"the remote {self.remote.url} is the server of this very repo ({self.root}); processes on its "
-                             "machine open the repo directly: remove [repo] remote")
+                             "machine open the repo directly: `cairn remote remove`")
         bound = self.copies.meta("remote")
         if bound and bound != self._bound(uid):
             raise StoreError(f"the repo {self.root} holds the versions of another remote ({bound}: a server's uid and its "
                              f"project); the remote {self.remote.url} is a different one ({self._bound(uid)}). A repo has one "
-                             "remote: set [repo] remote back, or start a new repo (move the folder away once `cairn status` "
+                             "remote: set it back with `cairn remote set`, or start a new repo (move the folder away once `cairn status` "
                              "shows nothing pending)")
         update_repo_file(self.root, remote={"url": self.remote.url, "uid": uid})
         return uid

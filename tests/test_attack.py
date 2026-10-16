@@ -30,6 +30,7 @@ import cairn
 from cairn.store import OWN, LocalRepo
 
 from test_identity import Server, free_port
+from conftest import write_config, config_file
 
 pytest.importorskip("uvicorn")
 
@@ -52,10 +53,9 @@ def base_env(**extra) -> dict:
 def project_at(base: Path, name: str, remote: str | None = None, extra: str = "") -> Path:
     root = base / name
     root.mkdir(parents=True)
-    lines = ["[repo]", "interval = 0.5"]
-    if remote:  # a server URL: the project on it is `study`
-        lines.append(f'remote = "{remote}/study"')
-    (root / "cairn.toml").write_text("\n".join(lines) + "\n" + extra)
+    lines = [f'[remote]\nurl = "{remote}/study"'] if remote else []  # a server URL: the project on it is `study`
+    lines += ["[repo]", "interval = 0.5"]
+    write_config(root, "\n".join(lines) + "\n" + extra)
     return root
 
 
@@ -836,8 +836,8 @@ def test_a_remote_added_while_a_version_runs_takes_over_everything_once(tmp_path
     while not (project / "started").exists():
         assert time.time() < deadline and running.poll() is None, finish(running)
         time.sleep(0.05)
-    with open(project / "cairn.toml", "a") as handle:  # now the project gets a remote, while the run runs
-        handle.write(f'remote = "{server.url}/study"\n')
+    with open(config_file(project), "a") as handle:  # now the project gets a remote, while the run runs
+        handle.write(f'[remote]\nurl = "{server.url}/study"\n')
     first = cli(project, "sync", env=env)
     print("\nfirst sync:", first.returncode, first.stdout, first.stderr)
     status = cli(project, "status", env=env)
@@ -1158,11 +1158,11 @@ def test_a_server_stopped_and_killed_mid_run_changes_nothing_for_runs(tmp_path):
     server = RealServer(tmp_path / "remote").start()
     env = base_env(CAIRN_TOKEN=server.token)
     client = project_at(tmp_path, "client", server.url, extra="heartbeat_timeout = 600\n")
-    beside = project_at(tmp_path, "beside", extra=f'[cairn]\ndir = "{server.root}"\n'.replace("[cairn]", "\n[cairn]"))
+    beside = project_at(tmp_path, "beside")  # its repo is the server's ($CAIRN_DIR)
     for project in (client, beside):
         script(project, "live.py", LIVE_UNTIL)
     remote_run = spawn(client, "live.py", "remote-run", env=env)
-    local_run = spawn(beside, "live.py", "local-run", env=env)
+    local_run = spawn(beside, "live.py", "local-run", env={**env, "CAIRN_DIR": str(server.root)})
     for project, name, process in ((client, "remote-run", remote_run), (beside, "local-run", local_run)):
         deadline = time.time() + 60
         while not (project / f"{name}.started").exists():
@@ -1438,7 +1438,7 @@ def test_finding_the_repo_from_anywhere(tmp_path):
     outer = project_at(tmp_path, "outer")
     inner = outer / "sub" / "inner"
     inner.mkdir(parents=True)
-    (inner / "cairn.toml").write_text("")
+    write_config(inner, "")
     deep = inner / "a" / "b"
     deep.mkdir(parents=True)
     assert publish_here(deep, "x", "inner").returncode == 0  # nested: the nearest project wins

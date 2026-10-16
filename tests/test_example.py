@@ -32,6 +32,7 @@ def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
         assert result.returncode == 0, result.stderr
         return result.stdout
 
+    assert "created the repo" in step("-m", "cairn", "init")
     out = step("-m", "cairn", "publish", "data/quadratic", "datasets/quadratic")
     assert "published datasets/quadratic@v1" in out
     assert "published descent@v1" in step("descent.py")

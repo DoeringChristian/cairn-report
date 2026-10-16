@@ -9,6 +9,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from conftest import write_config
 
 
 def run_script(folder: Path, code: str, **env) -> subprocess.CompletedProcess:
@@ -23,7 +24,7 @@ def run_script(folder: Path, code: str, **env) -> subprocess.CompletedProcess:
 def study(tmp_path, monkeypatch):
     folder = tmp_path / "study"
     folder.mkdir()
-    (folder / "cairn.toml").write_text("")
+    write_config(folder, "")
     (folder / "data").mkdir()
     (folder / "data" / "a.txt").write_text("a")
     monkeypatch.chdir(folder)

@@ -24,7 +24,7 @@ def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool
     """
     where = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
     url = f"http://[{where}]:{port}" if ":" in where else f"http://{where}:{port}"
-    command = [sys.executable, "-m", "cairn", "ui", "--remote", url, "--host", host, "--port", str(ui_port), "--allow-http", "--no-browser"]
+    command = [sys.executable, "-m", "cairn", "ui", "--remote", url, "--host", host, "--port", str(ui_port), "--no-browser"]
     if no_auth:
         command.append("--no-auth")
     env = dict(os.environ)

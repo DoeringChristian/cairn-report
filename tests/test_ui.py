@@ -13,11 +13,10 @@ import pytest
 import cairn as store
 from cairn.cli import main
 from cairn import LocalRepo, Remote
-from cairn.store.tokens import create_token, revoke_token
 from cairn.ui import server as ui_server
 from cairn.ui.server import LocalBackend, RemoteBackend, make_ui_server
 
-from conftest import make_data, write
+from conftest import make_data, write, write_config
 from test_server import api, call, remote, seed, server, use_remote  # noqa: F401  (the store server in a thread, helpers)
 from test_store import env, folder  # noqa: F401
 
@@ -39,7 +38,7 @@ def start(backend, **options):
 @pytest.fixture(params=["folder", "server"])
 def ui(request, server):
     """A UI (login required) over the store folder itself, and over the store server in its thread."""
-    backend = LocalBackend(server.root, no_auth=False) if request.param == "folder" else RemoteBackend(server.url, allow_http=False)
+    backend = LocalBackend(server.root, no_auth=False) if request.param == "folder" else RemoteBackend(server.url)
     httpd, stack = start(backend)
     stack.kind, stack.server = request.param, server
     yield stack
@@ -118,8 +117,7 @@ def test_login_is_required_and_the_token_stays_server_side(ui):
     forged = {"Cookie": "cairn_ui=" + "a" * 43}
     assert get(ui, "/", forged)[0] == 303 and get(ui, "/ui-api/me", forged, **X)[0] == 401
     status, headers, _ = get(ui, "/logout", session)
-    assert status == 303 and headers["Location"] == "/login" and "Max-Age=0" in headers["Set-Cookie"]
-    assert get(ui, "/", session)[0] == 303  # the session is gone
+    assert status == 303 and headers["Location"] == "/login" and "Max-Age=0" in headers["Set-Cookie"]  # the cookie is cleared
 
 
 def test_the_api_needs_the_x_cairn_header(ui):
@@ -129,12 +127,11 @@ def test_the_api_needs_the_x_cairn_header(ui):
         assert get(ui, "/ui-api/" + path, cookie, **{"X-Cairn": "0"})[0] == 403
     assert get(ui, "/ui-api/me", {}, **X)[0] == 401  # and the header alone is not a login
     assert get(ui, "/ui-api/nope", cookie, **X)[0] == 404
-    assert data(ui, "me", cookie) == {"scope": "owner" if ui.kind == "folder" else "remote", "project": None, "auth": True,
-                                      "mode": "server", "home": None}  # a server's repo, or a server: many projects
+    assert data(ui, "me", cookie) == {"auth": True, "mode": "server", "home": None}  # a server's repo, or a server: many projects
 
 
 def test_the_cookie_is_secure_behind_https_and_plain_on_this_machine(server):
-    httpd, ui = start(RemoteBackend(server.url, allow_http=False))
+    httpd, ui = start(RemoteBackend(server.url))
     try:
         body = json.dumps({"token": server.token})
         status, headers, _ = call(ui, "POST", "/ui-api/login", body=body, token=None, headers={**JSON, "X-Forwarded-Proto": "https"})
@@ -146,36 +143,48 @@ def test_the_cookie_is_secure_behind_https_and_plain_on_this_machine(server):
         httpd.server_close()
 
 
-def test_scoped_token_sees_only_its_project_and_revocation_ends_the_session(ui, env):
-    seed(ui.server)
-    token = create_token(ui.server.root, "alpha", name="viewer")
-    cookie = login(ui, token)
-    me = data(ui, "me", cookie)
-    assert me["scope"] == ("project" if ui.kind == "folder" else "remote") and (me["project"] == "alpha" or ui.kind == "server")
-    assert [p["name"] for p in data(ui, "projects", cookie)] == ["alpha"]
-    assert data(ui, "projects/alpha", cookie)["project"]["name"] == "alpha"
-    assert data(ui, "projects/alpha/artifacts/data", cookie)["name"] == "data"
-    assert data(ui, "projects/alpha/artifacts/data/versions/1", cookie)["version"]["version"] == 1
-    assert data(ui, "lineage?ref=alpha:data@v1", cookie)["ref"] == "alpha:data@v1"
-    for path in ("projects/beta", "projects/beta/artifacts/data", "projects/beta/artifacts/data/versions/1", "lineage?ref=beta:data@v1"):
-        data(ui, path, cookie, expect=403)
-    assert get(ui, "/p/beta/r/site.json", cookie)[0] == 403
-    assert get(ui, "/files/beta/data@v1//x.txt", cookie)[0] == 403
-    assert get(ui, "/files/alpha/data@v1//x.txt", cookie)[2] == b"alpha"
-    assert get(ui, "/p/beta/", cookie)[0] == 200  # the app route itself; its data calls are refused above
-    revoke_token(ui.server.root, "viewer")
-    status, headers, _ = get(ui, "/p/alpha/", cookie)
-    if ui.kind == "folder":  # a folder's tokens are checked at once; a store server answers 401 on the next call
-        assert status == 303 and headers["Location"].startswith("/login")
-    else:
-        assert get(ui, "/ui-api/projects", cookie, **X)[0] == 401
-    assert call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=JSON)[0] == 401  # and cannot log in again
+def test_a_session_has_no_expiry_survives_a_restart_and_ends_with_the_token(server, env):
+    """The cookie is an HMAC of the token (no secret in it), with a Max-Age of about ten years; the login link works
+    once and has no expiry; a new UI process accepts the cookie of the old one; another token makes it worthless."""
+    from cairn.ui.sessions import session_id
+
+    seed(server)
+    httpd, ui = start(RemoteBackend(server.url), login_token=server.token)
+    try:
+        link = ui_server.login_link(httpd, "/")
+        assert link.startswith("/login?code=") and server.token not in link
+        status, headers, _ = call(ui, "GET", link, token=None)
+        assert status == 303 and headers["Location"] == "/"
+        cookie = headers["Set-Cookie"]
+        assert f"cairn_ui={session_id(server.token)};" in cookie and server.token not in cookie
+        assert int(re.search(r"Max-Age=(\d+)", cookie).group(1)) >= 9 * 365 * 86400
+        assert call(ui, "GET", link, token=None)[1]["Location"] == "/login"  # used once
+        session = {"Cookie": cookie.split(";")[0]}
+        assert data(ui, "projects", session)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    httpd, ui = start(RemoteBackend(server.url), login_token=server.token)  # a restart: same token, same session
+    try:
+        assert sorted(p["name"] for p in data(ui, "projects", session)) == ["alpha", "beta"]
+        assert get(ui, "/", {"Cookie": f"cairn_ui={session_id('another token' * 3)}"})[0] == 303
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    httpd, ui = start(RemoteBackend(server.url))  # no token known yet: a login with the form, and the same id
+    try:
+        assert get(ui, "/", session)[0] == 303
+        status, headers, _ = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": server.token}), token=None, headers=JSON)
+        assert status == 200 and headers["Set-Cookie"].split(";")[0] == session["Cookie"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_no_auth_ui_is_loopback_only_and_needs_no_login(server):
     with pytest.raises(SystemExit, match="loopback"):
-        make_ui_server(RemoteBackend(server.url, allow_http=True), host="0.0.0.0", port=0, no_auth=True)
-    for backend in (LocalBackend(server.root, no_auth=True), RemoteBackend(server.url, False, token=server.token)):
+        make_ui_server(RemoteBackend(server.url), host="0.0.0.0", port=0, no_auth=True)
+    for backend in (LocalBackend(server.root, no_auth=True), RemoteBackend(server.url, token=server.token)):
         httpd, ui = start(backend, no_auth=True)
         try:
             status, _, body = call(ui, "GET", "/", token=None)
@@ -199,9 +208,9 @@ def test_no_auth_ui_over_a_no_auth_store_uses_no_token(tmp_path, env, monkeypatc
     threading.Thread(target=store_httpd.serve_forever, daemon=True).start()
     monkeypatch.delenv("CAIRN_TOKEN", raising=False)
     url = f"http://127.0.0.1:{store_httpd.server_address[1]}"
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{url}/study"\n')
+    write_config(env, f'[remote]\nurl = "{url}/study"\n[repo]\n')
     store.publish("open", folder(env, "o", {"a.txt": "x"}))
-    httpd, ui = start(RemoteBackend(url, False), no_auth=True)
+    httpd, ui = start(RemoteBackend(url), no_auth=True)
     try:
         status, _, body = call(ui, "GET", "/ui-api/projects/study/artifacts/open", token=None, headers=X)
         assert status == 200 and json.loads(body)["name"] == "open"
@@ -212,10 +221,15 @@ def test_no_auth_ui_over_a_no_auth_store_uses_no_token(tmp_path, env, monkeypatc
         store_httpd.server_close()
 
 
-def test_a_remote_ui_refuses_plain_http_to_a_non_local_store():
-    with pytest.raises(SystemExit, match="plain HTTP"):
-        RemoteBackend("http://store.example.org:8800", allow_http=False)
-    RemoteBackend("http://store.example.org:8800", allow_http=True)
+def test_plain_http_to_a_non_local_store_works_with_one_warning(capsys, monkeypatch):
+    from cairn.client import http
+
+    monkeypatch.setattr(http, "_warned", threading.Event())
+    RemoteBackend("http://store.example.org:8800")
+    RemoteBackend("http://store.example.org:8800")
+    err = capsys.readouterr().err
+    assert err.count("warning: plain HTTP to store.example.org: the token is sent unencrypted; fine over a VPN (Tailscale) "
+                     "or an SSH tunnel") == 1
 
 
 # --------------------------------------------------------------------- pages
@@ -345,12 +359,11 @@ def test_report_is_served_with_its_static_files(ui, project, capsys):
     assert get(ui, "/p/study/r/nope/", cookie)[0] == 404
 
 
-def test_static_files_need_the_session_token(ui, project, capsys):
+def test_static_files_need_the_session(ui, project, capsys):
     publish_reports(project, ui.server)
     script = re.search(r'src="\.\./(_static/report\.[0-9a-f]+\.js)"', get(ui, "/p/study/r/alpha/", login(ui))[2].decode()).group(1)
-    other = create_token(ui.server.root, "unrelated", name="o")
-    # the UI remembers where a shared file lives, not its bytes: another session still goes through the store's access check
-    assert get(ui, f"/p/study/r/{script}", login(ui, other))[0] == 403
+    assert get(ui, f"/p/study/r/{script}", login(ui))[0] == 200
+    assert get(ui, f"/p/study/r/{script}", {})[0] == 303
 
 
 def test_report_versions_stay_viewable(ui, project, capsys):
@@ -442,7 +455,7 @@ def test_the_ui_uses_only_the_store_interface_and_the_server_has_no_ui_code():
 
 
 def test_ui_command_wires_the_project_repo(env, server, monkeypatch, capsys):
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/study"\n')
+    write_config(env, f'[remote]\nurl = "{server.url}/study"\n[repo]\n')
     seen = {}
     monkeypatch.setattr("cairn.ui.serve_ui", lambda backend, **options: seen.update(backend=backend, **options))
     main(["ui"])  # the project's repo directly, reading through its remote
@@ -454,7 +467,7 @@ def test_ui_command_wires_the_project_repo(env, server, monkeypatch, capsys):
     assert isinstance(seen["backend"], RemoteBackend) and seen["backend"].url == server.url
     main(["ui", "--repo", str(server.root), "--port", "9999"])
     assert isinstance(seen["backend"], LocalBackend) and seen["port"] == 9999
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     main(["ui", "--no-auth"])
     assert seen["backend"].root == (env / ".cairn").resolve() and seen["no_auth"] is True and seen["backend"].store.repo.url is None
     assert seen["backend"].store.name == "study"  # without a remote: named after the project folder
@@ -464,7 +477,7 @@ def test_ui_command_wires_the_project_repo(env, server, monkeypatch, capsys):
 
 def test_serve_ui_prints_where_it_runs(server, capsys, monkeypatch):
     monkeypatch.setattr(ui_server.ThreadingHTTPServer, "serve_forever", lambda self: self.server_close())
-    ui_server.serve_ui(RemoteBackend(server.url, False), port=0)
+    ui_server.serve_ui(RemoteBackend(server.url), port=0)
     out = capsys.readouterr().out
     assert re.fullmatch(rf"UI: http://127\.0\.0\.1:\d+/ \(repo: {re.escape(server.url)}\)\n", out) and server.token not in out
 
@@ -478,8 +491,8 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
     def machine(name):
         root = tmp_path / name
         root.mkdir()
-        (root / "cairn.toml").write_text("")
-        (root / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/study"\ninterval = 1\n')
+        write_config(root, "")
+        write_config(root, f'[remote]\nurl = "{server.url}/study"\n[repo]\ninterval = 1\n')
         monkeypatch.chdir(root)
         monkeypatch.delenv("CAIRN_INPUTS", raising=False)
         return root
@@ -611,8 +624,7 @@ def test_a_version_downloads_as_a_zip(ui, env):
     assert archive.getinfo("datasets-zip-me-v1/a.txt").compress_type == zipfile.ZIP_DEFLATED
     assert get(ui, "/files/study/datasets/zip-me@latest.zip", cookie)[0] == 200
     assert get(ui, "/files/study/nothing@v1.zip", cookie)[0] == 404
-    viewer = login(ui, create_token(ui.server.root, "other", name="other-viewer"))
-    assert get(ui, "/files/study/datasets/zip-me@v1.zip", viewer)[0] == 403  # a scoped session: its project only
+    assert get(ui, "/files/study/datasets/zip-me@v1.zip", {})[0] == 401  # no session
 
 
 def test_a_zip_streams_without_holding_the_files(ui, env, monkeypatch):

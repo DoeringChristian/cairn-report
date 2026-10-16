@@ -19,6 +19,7 @@ from cairn.cli import main
 from test_identity import Server
 from test_offline import down, run  # noqa: F401
 from test_store import env, folder  # noqa: F401
+from conftest import write_config, config_file
 
 
 def outbox_versions(env):
@@ -132,7 +133,7 @@ def test_heartbeat_expiry_fails_a_running_version_from_another_host(down, env, c
     import cairn.store.folders as folders_module
     import cairn.store.outbox as outbox_module
 
-    (env / "cairn.toml").write_text((env / "cairn.toml").read_text() + "heartbeat_timeout = 30\n")
+    write_config(env, config_file(env).read_text() + "heartbeat_timeout = 30\n")
     store = cairn.connect()
     record = store.backend._new_entry("running", "sweep", label="job")
     for module in (outbox_module, folders_module, sync_module):  # from now on, this process is a login node elsewhere
@@ -155,7 +156,7 @@ def test_heartbeat_expiry_fails_a_running_version_from_another_host(down, env, c
 
 
 def test_a_publication_beats_and_its_owner_learns_it_was_failed(down, env, monkeypatch):
-    (env / "cairn.toml").write_text((env / "cairn.toml").read_text() + "heartbeat_timeout = 0.5\n")
+    write_config(env, config_file(env).read_text() + "heartbeat_timeout = 0.5\n")
     live = env / "live"
     live.mkdir()
     pub = cairn.Publication("sweep", live)

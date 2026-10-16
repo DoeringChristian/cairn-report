@@ -12,6 +12,57 @@ from cairn.client.logger import Writer
 RUN = "demo/2026-01-01_00-00-00"
 
 
+def read_until(process, done, timeout: float = 30.0) -> list[str]:
+    """A process's stdout lines up to the first for which `done(line)` is true, its end, or `timeout` seconds:
+    never a hang."""
+    import queue
+    import threading
+    import time
+
+    lines: "queue.Queue[str | None]" = queue.Queue()
+
+    def pump():
+        try:
+            for line in process.stdout:
+                lines.put(line.rstrip())
+        except (ValueError, OSError):  # the test closed the pipe
+            pass
+        lines.put(None)
+
+    threading.Thread(target=pump, daemon=True).start()
+    found, deadline = [], time.monotonic() + timeout
+    while (left := deadline - time.monotonic()) > 0:
+        try:
+            line = lines.get(timeout=left)
+        except queue.Empty:
+            break
+        if line is None:
+            break
+        found.append(line)
+        if done(line):
+            break
+    return found
+
+
+def config_file(folder: Path) -> Path:
+    """A project's config file: `<folder>/.cairn/config.toml`."""
+    return Path(folder) / ".cairn" / "config.toml"
+
+
+def write_config(folder: Path, text: str = "") -> Path:
+    """Make `folder` a project (its repo `.cairn/`, as `cairn init` makes it) with `text` as its config.toml."""
+    from cairn.config import protect
+    from cairn.store.local import repo_uid
+
+    repo = Path(folder) / ".cairn"
+    protect(repo)
+    repo.mkdir(parents=True, exist_ok=True)
+    repo_uid(repo)
+    file = config_file(folder)
+    file.write_text(text)
+    return file
+
+
 def histogram(values):
     figure, axis = plt.subplots(figsize=(4, 2))
     axis.hist(values)
@@ -100,7 +151,7 @@ def project(tmp_path, monkeypatch):
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
     folder = tmp_path / "study"
     folder.mkdir()
-    (folder / "cairn.toml").write_text("")  # what makes the folder a project
+    write_config(folder)  # what makes the folder a project
     (folder / "pyproject.toml").write_text("")  # a project file the report tests read
     monkeypatch.chdir(folder)
     make_tree(folder)

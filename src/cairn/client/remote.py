@@ -201,8 +201,7 @@ class Remote:
         return self._call("GET", self._base)
 
     def create(self, title: str | None = None, description: str = "") -> dict:
-        """Make the project on the server if it is new (the owner token may; a project-scoped token only reaches its
-        existing project)."""
+        """Make the project on the server if it is new."""
         return self._call("POST", "/api/v2/projects", {"name": self.project, "title": title, "description": description},
                           expect=(200, 201))
 

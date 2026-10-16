@@ -13,7 +13,7 @@ from cairn.reports.build import BuildError, build_all, image_size
 from cairn.cli import main
 from cairn.config import load_config
 
-from conftest import make_data, write
+from conftest import make_data, write, write_config
 
 
 def built(project):
@@ -126,7 +126,7 @@ def test_custom_css_and_template_override(project):
     (project / "style.css").write_text(":root { --accent: #224488; }\n")
     (project / "template").mkdir()
     (project / "template" / "report-extra.css").write_text("/* replaced */\n")
-    (project / "cairn.toml").write_text('[style]\ncss = ["style.css"]\ntemplate_dir = "template"\n')
+    write_config(project, '[style]\ncss = ["style.css"]\ntemplate_dir = "template"\n')
     build_all(load_config(project))
     out = built(project)
     page = (out / "alpha" / "index.html").read_text()
@@ -138,8 +138,8 @@ def test_custom_css_and_template_override(project):
 
 
 def test_config_rejects_unknown_keys(tmp_path):
-    (tmp_path / "cairn.toml").write_text('reprots_dir = "x"\n')
-    with pytest.raises(ValueError, match="unknown keys"):
+    write_config(tmp_path, '[reports]\nreprots_dir = "x"\n')
+    with pytest.raises(ValueError, match="unknown \\[reports\\] keys"):
         load_config(tmp_path)
 
 

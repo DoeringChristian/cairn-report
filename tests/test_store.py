@@ -10,6 +10,7 @@ import cairn as store
 from cairn import LocalRepo, NotFound, StoreError
 from cairn.store import OWN, LocalProject, refs
 from cairn.store.folders import materialize
+from conftest import write_config
 
 
 @pytest.fixture
@@ -18,7 +19,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
     project = tmp_path / "study"
     project.mkdir()
-    (project / "cairn.toml").write_text("")
+    write_config(project, "")
     monkeypatch.chdir(project)
     return project
 
@@ -270,7 +271,7 @@ def test_pull_records_inputs_in_cwd_and_env(env, tmp_path, monkeypatch):
 
 
 def test_configured_store_pull_publish_lineage(env, tmp_path):
-    (env / "cairn.toml").write_text('[repo]\nexclude = ["*.pkl"]\n')
+    write_config(env, '[repo]\nexclude = ["*.pkl"]\n')
     data = folder(tmp_path, "crops", {"a.txt": "1", "skip.pkl": "x"})
     assert store.publish("datasets/crops", data, aliases=["paper"]) == 1
     assert (env / ".cairn" / "metadata.sqlite3").is_file() and not (env / ".cairn" / "store").exists()
@@ -305,30 +306,30 @@ def test_publish_follows_symlinked_folder_and_labels_by_target(env, tmp_path):
 
 def test_remote_store_without_a_token_and_plain_http(env, monkeypatch):
     monkeypatch.delenv("CAIRN_TOKEN", raising=False)
-    (env / "cairn.toml").write_text('[repo]\nremote = "https://store.example.org/study"\n')
+    write_config(env, '[remote]\nurl = "https://store.example.org/study"\n[repo]\n')
     assert store.open_repo().remote.client.token == ""  # only a --no-auth server answers; others say a token is needed
     monkeypatch.setenv("CAIRN_TOKEN", "t" * 40)
-    (env / "cairn.toml").write_text('[repo]\nremote = "http://store.example.org/study"\n')
-    with pytest.raises(SystemExit, match="plain HTTP"):
+    write_config(env, '[remote]\nurl = "http://store.example.org/study"\n[repo]\n')
+    assert store.open_repo().url == "http://store.example.org/study"  # plain HTTP works (with one warning)
+    write_config(env, '[remote]\nurl = "http://store.example.org/study"\n[repo]\nallow_http = true\n')
+    with pytest.raises(ValueError, match="allow_http"):
         store.open_repo()
-    (env / "cairn.toml").write_text('[repo]\nremote = "http://store.example.org/study"\nallow_http = true\n')
-    assert store.open_repo().url == "http://store.example.org/study"
 
 
 def test_a_hub_table_is_an_unknown_key(env):
-    (env / "cairn.toml").write_text('[hub]\nremote = "https://hub.example.org"\n')
-    with pytest.raises(ValueError, match=r"unknown keys \['hub'\]"):
+    write_config(env, '[hub]\nremote = "https://hub.example.org"\n')
+    with pytest.raises(ValueError, match=r"unknown key 'hub'"):
         store.open_repo()
 
 
 def test_store_config_validation(env):
     from cairn.config import load_config
 
-    (env / "cairn.toml").write_text('[repo]\nremote = "https://x.example.org/p"\ninterval = 5\n')
+    write_config(env, '[remote]\nurl = "https://x.example.org/p"\n[repo]\ninterval = 5\n')
     assert load_config().repo == {"remote": "https://x.example.org/p", "interval": 5}
     for bad in ('token = "x"', 'oops = 1', 'exclude = "a"', 'path = "s"', 'publish = []', 'interval = 0', 'url = "https://x"',
-                'project = "p"'):
-        (env / "cairn.toml").write_text(f"[repo]\n{bad}\n")
+                'project = "p"', 'remote = "https://x/p"', 'token_file = "t"'):
+        write_config(env, f"[repo]\n{bad}\n")
         with pytest.raises(ValueError):
             load_config()
 
@@ -344,11 +345,11 @@ def test_import_cairn_stays_light():
     assert subprocess.run([sys.executable, "-c", "import cairn; import cairn.client.publishing; assert callable(cairn.publish) and callable(cairn.pull) and cairn.Publication and cairn.__version__"]).returncode == 0
 
 
-def test_config_file_is_cairn_toml(tmp_path):
+def test_config_file_is_the_repos_config_toml(tmp_path):
     from cairn import config
     from cairn.config import load_config
 
-    (tmp_path / "cairn.toml").write_text('[repo]\ninterval = 7\n')
+    write_config(tmp_path, '[repo]\ninterval = 7\n')
     assert load_config(tmp_path).repo["interval"] == 7
     nested = tmp_path / "a" / "b"
     nested.mkdir(parents=True)

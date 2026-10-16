@@ -1,6 +1,6 @@
 """The repo's client side and the object API: `Client` (http.py) talks to a server, `Remote` (remote.py) is a project on
 it (`<server>/<project>`); `SyncedRepo` (repo.py) is a repo with a remote, its outbox (store/outbox.py) and sending
-it (sync.py); `open_repo` (open.py) opens the project's repo (a StandaloneRepo, or a SyncedRepo when `[repo] remote`
+it (sync.py); `open_repo` (open.py) opens the project's repo (a StandaloneRepo, or a SyncedRepo when `[remote] url`
 is set); the object API (objects.py: `connect`, `Repo`, `Artifact`, `Version`), publishing and `Publication`
 (publishing.py). drafts.py: folders managed by Cairn that become a version when they close (`cairn.draft`), runs.py:
 the process's run (`cairn.init`), system.py and code.py: what a run records about the machine and the source,

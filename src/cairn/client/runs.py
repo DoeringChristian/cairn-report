@@ -197,7 +197,7 @@ class Run(Draft):
         code = self.folder / "code"
         if root is None:
             code.mkdir(parents=True, exist_ok=True)
-            (code / "manifest.json").write_text(json.dumps({"skipped": "no project root (.cairn/repo.json or cairn.toml)"},
+            (code / "manifest.json").write_text(json.dumps({"skipped": "no project root (.cairn/repo.json)"},
                                                            indent=2) + "\n")
             return
         try:

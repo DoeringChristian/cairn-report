@@ -9,6 +9,7 @@ from cairn.server import make_server
 from cairn.store import LocalRepo, StoreError
 from cairn.store.fs import is_network_type, network_filesystem, type_from_mounts
 from cairn.store.tokens import init_root
+from conftest import write_config
 
 MOUNTS = r"""sysfs /sys sysfs rw,nosuid 0 0
 /dev/nvme0n1p2 / ext4 rw,relatime 0 0
@@ -94,7 +95,7 @@ def test_the_cli_passes_allow_network_fs(tmp_path, monkeypatch):
 
 
 def test_a_repo_database_is_never_made_on_a_network_filesystem(tmp_path, on_nfs):
-    with pytest.raises(StoreError, match=r"network filesystem \(nfs4\).*\[repo\] remote.*allow_network_fs"):
+    with pytest.raises(StoreError, match=r"network filesystem \(nfs4\).*cairn remote set.*allow_network_fs"):
         LocalRepo(tmp_path / "shared")
     assert not (tmp_path / "shared" / "metadata.sqlite3").exists()
     LocalRepo(tmp_path / "allowed", allow_network_fs=True).create_project("p")  # one writer, by the owner's word
@@ -104,9 +105,9 @@ def test_without_a_remote_a_repo_on_a_network_filesystem_explains_the_cluster_se
     from cairn.client.open import open_repo
     from cairn.config import load_config
 
-    (tmp_path / "cairn.toml").write_text("")
+    write_config(tmp_path, "")
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(StoreError, match=r"cairn server.*\[repo\] remote.*cairn sync.*allow_network_fs"):
+    with pytest.raises(StoreError, match=r"cairn server.*cairn remote set.*cairn sync.*allow_network_fs"):
         open_repo(load_config(tmp_path))
     with pytest.raises(SystemExit, match="network filesystem"):
         main(["versions", "x"])
@@ -117,8 +118,8 @@ def test_allow_network_fs_comes_from_cairn_toml(tmp_path, on_nfs, monkeypatch):
     from cairn.client.open import open_repo
     from cairn.config import load_config
 
-    (tmp_path / "cairn.toml").write_text('[repo]\nallow_network_fs = true\n')
+    write_config(tmp_path, '[repo]\nallow_network_fs = true\n')
     assert open_repo(load_config(tmp_path)).summaries() == []
-    (tmp_path / "cairn.toml").write_text('[repo]\nallow_network_fs = "yes"\n')
+    write_config(tmp_path, '[repo]\nallow_network_fs = "yes"\n')
     with pytest.raises(ValueError, match="allow_network_fs must be true or false"):
         load_config(tmp_path)

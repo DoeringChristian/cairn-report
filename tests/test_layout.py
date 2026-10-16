@@ -10,6 +10,7 @@ from cairn.client.open import open_repo, repo_root
 from cairn.config import cairn_base, load_config
 from cairn.runs.snapshot import _denied
 from cairn.store import StoreError
+from conftest import write_config
 
 
 @pytest.fixture
@@ -17,7 +18,7 @@ def proj(tmp_path, monkeypatch):
     monkeypatch.delenv("CAIRN_DIR", raising=False)
     folder = tmp_path / "proj"
     folder.mkdir()
-    (folder / "cairn.toml").write_text("")
+    write_config(folder, "")
     monkeypatch.chdir(folder)
     return folder.resolve()
 
@@ -51,18 +52,23 @@ def test_the_repo_layout(proj, tmp_path):
 
 
 def test_base_resolution_order(proj, tmp_path, monkeypatch):
-    (proj / "cairn.toml").write_text('[cairn]\ndir = "work/cairn"\n')
-    assert cairn_base() == proj / "work" / "cairn"
-    assert load_config().cairn_dir == proj / "work" / "cairn"
-    monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "elsewhere"))  # the environment beats cairn.toml
+    write_config(proj, '[reports]\noutput_dir = "site"\n')
+    assert load_config().output_dir == proj / "site"  # relative to the project root, the folder holding .cairn/
+    monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "elsewhere"))  # the environment beats .cairn, and its config is the config
     assert cairn_base() == tmp_path / "elsewhere"
     assert load_config().output_dir == tmp_path / "elsewhere" / "build"
-    (proj / "cairn.toml").write_text('output_dir = "site"\n')
-    assert load_config().output_dir == proj / "site"
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "config.toml").write_text('[repo]\ninterval = 3\n')
+    assert load_config().repo == {"interval": 3} and load_config().project == proj
+
+
+def test_the_cairn_dir_key_is_gone(proj):
+    write_config(proj, '[cairn]\ndir = "work/cairn"\n')
+    with pytest.raises(ValueError, match="unknown key 'cairn'"):
+        load_config()
 
 
 def test_cairn_dir_wins_over_everything(proj, tmp_path, monkeypatch):
-    (proj / "cairn.toml").write_text('[cairn]\ndir = "elsewhere"\n')
     (proj / "sub" / ".cairn").mkdir(parents=True)
     (proj / "sub" / ".cairn" / "repo.json").write_text("{}")
     monkeypatch.chdir(proj / "sub")
@@ -132,22 +138,49 @@ def test_cairn_init_is_idempotent_and_writes_only_the_repo(tmp_path, capsys):
     main(["init", str(tmp_path)])
     assert "exists already" in capsys.readouterr().out
     assert json.loads((repo / "repo.json").read_text())["uid"] == uid
-    assert (tmp_path / ".gitignore").read_text() == "mine\n" and not (tmp_path / "cairn.toml").exists()
+    assert (tmp_path / ".gitignore").read_text() == "mine\n" and set(path.name for path in tmp_path.iterdir()) == {".gitignore", ".cairn"}
+    template = (repo / "config.toml").read_text()
+    assert load_config(tmp_path).repo == {} and "# [remote]" in template and "# exclude" in template  # commented out
+
+
+def test_cairn_remote_shows_sets_and_removes_the_remote(proj, capsys):
+    from cairn.cli import main
+
+    file = proj / ".cairn" / "config.toml"
+    file.write_text("# mine\n[repo]\nexclude = [\"*.pkl\"]  # keep\n")
+    main(["remote"])
+    assert capsys.readouterr().out == "no remote\n"
+    main(["remote", "set", "http://box:8800/a/"])
+    out = capsys.readouterr().out
+    assert out.startswith("remote: http://box:8800/a\n") and "adopted" in out
+    assert load_config().repo == {"exclude": ["*.pkl"], "remote": "http://box:8800/a"}
+    assert file.read_text().startswith("# mine\n[repo]\nexclude = [\"*.pkl\"]  # keep\n")  # the rest as it was
+    main(["remote", "set", "https://box/prefix/b"])
+    assert load_config().repo["remote"] == "https://box/prefix/b" and file.read_text().count("[remote]") == 1
+    main(["remote"])
+    assert capsys.readouterr().out.endswith("https://box/prefix/b\n")
+    for bad in ("ftp://box/a", "http://box:8800", "http://box/My Study", "box/a", "http://box/a?x=1"):
+        with pytest.raises(SystemExit):
+            main(["remote", "set", bad])
+    main(["remote", "remove"])
+    out = capsys.readouterr().out
+    assert "keep their numbers" in out and "stay pending" in out
+    assert "remote" not in load_config().repo and file.read_text() == "# mine\n[repo]\nexclude = [\"*.pkl\"]  # keep\n"
+    main(["remote", "remove"])
+    assert capsys.readouterr().out == "no remote\n"
 
 
 def test_store_config_is_an_unknown_key(proj):
-    (proj / "cairn.toml").write_text('[store]\nurl = "https://x.example.org"\n')
-    with pytest.raises(ValueError, match=r"unknown keys \['store'\]"):
+    write_config(proj, '[store]\nurl = "https://x.example.org"\n')
+    with pytest.raises(ValueError, match=r"unknown key 'store'"):
         load_config()
 
 
 def test_old_config_keys_are_errors(proj):
-    (proj / "cairn.toml").write_text('outputs_dir = "runs"\n')
-    with pytest.raises(ValueError, match="unknown keys.*outputs_dir"):
-        load_config()
-    (proj / "cairn.toml").write_text('[hub]\nremote = "x"\n')
-    with pytest.raises(ValueError, match="unknown keys.*hub"):
-        load_config()
+    for old in ('outputs_dir = "runs"', 'reports_dir = "reports"', '[hub]\nremote = "x"'):
+        write_config(proj, old + "\n")
+        with pytest.raises(ValueError, match="unknown key"):
+            load_config()
 
 
 # ------------------------------------------------------------------ .gitignore
@@ -200,7 +233,7 @@ def test_a_git_snapshot_of_a_project_in_a_subfolder_of_its_checkout(tmp_path):
 
     project = tmp_path / "examples" / "demo"
     project.mkdir(parents=True)
-    (project / "cairn.toml").write_text("")
+    write_config(project, "")
     (project / "train.py").write_text("print('hi')\n")
     git("init", "-q")
     git("-c", "user.name=t", "-c", "user.email=t@t", "add", ".")

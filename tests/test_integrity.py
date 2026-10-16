@@ -25,11 +25,12 @@ from cairn.client.http import Client
 from test_offline import down, run  # noqa: F401
 from test_server import api, server  # noqa: F401
 from test_store import env, folder  # noqa: F401
+from conftest import write_config
 
 
 def use_remote(env, server, project="study") -> Remote:
     """The project's remote: the project `project` on the server."""
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/{project}"\ninterval = 1\n')
+    write_config(env, f'[remote]\nurl = "{server.url}/{project}"\n[repo]\ninterval = 1\n')
     return Remote(Client(server.url, server.token), project)
 
 

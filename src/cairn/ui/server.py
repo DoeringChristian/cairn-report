@@ -1,6 +1,6 @@
 """The UI: a browser view of a repo, as a process of its own.
 
-    cairn ui [--remote URL | --repo FOLDER] [--host 127.0.0.1] [--port 8801] [--no-auth] [--allow-http]
+    cairn ui [--remote URL | --repo FOLDER] [--host 127.0.0.1] [--port 8801] [--no-auth]
 
 It reaches the data only through the repo interface (the project's repo, which reads through its remote when it
 has one and shows the versions still waiting for it as pending; a repo folder; or a remote), so it runs next to the
@@ -21,19 +21,21 @@ app (web/, built into static/) and a small JSON API for it:
 A selector is `v<n>`, a uid (a pending version has no number yet), an alias, or a label. Reports are a UI concept:
 an artifact `reports/<slug>` whose files have `site/` and `source/`.
 
-Login: `cairn ui` prints a one-time link (a random code, valid once for 10 minutes); or the user enters a token on
-/login (the app posts it to /ui-api/login). The UI checks it (a remote: an authenticated API call; a repo on this
-machine: its owner token file and tokens.jsonl), keeps it server-side in an in-memory session table, and gives the
-browser only a random session id (HttpOnly, SameSite=Strict cookie, Secure when a reverse proxy says X-Forwarded-Proto: https). Every
-request of a session uses its token, so a scoped token sees only its project. Every /ui-api/ call also needs the
-header `X-Cairn: 1`, which a cross-site form or image cannot send (on top of SameSite=Strict). `--no-auth`
-(loopback only) skips the login and uses `CAIRN_TOKEN` / `[repo] token_file` for a remote, or the owner's full
-access to a repo on this machine.
+Login: `cairn ui` prints a one-time link (a random code that works once and does not expire; every launch prints a
+new one); or the user enters the token on /login (the app posts it to /ui-api/login). The UI checks it (a remote: an
+authenticated API call; a repo on this machine: its token file), keeps it in the process, and gives the browser only
+the session id, an HMAC of the token with a fixed label (sessions.py): an HttpOnly, SameSite=Strict cookie with a
+Max-Age of ten years, Secure when a reverse proxy says X-Forwarded-Proto: https. So a session survives restarts of the
+UI and ends exactly when the token changes; /logout clears the cookie. Every /ui-api/ call also needs the header
+`X-Cairn: 1`, which a cross-site form or image cannot send (on top of SameSite=Strict). `--no-auth` (loopback only)
+skips the login and uses the client's token (`CAIRN_TOKEN`, `<repo>/token`, `~/.config/cairn/token`) for a remote,
+or direct access to a repo on this machine.
 """
 
 from __future__ import annotations
 
 import errno
+import hmac
 import html
 import io
 import json
@@ -55,10 +57,9 @@ from .._version import __version__
 from ..store import BadRange, Deleted, FileRead, Forbidden, NotFound, Ref, StoreError, Unauthorized, refs
 from ..store.blobs import resolve_entry, valid_path
 from ..store.outbox import exact_ref
-from ..store.tokens import Principal
 from ..store.uids import UID
 from .backends import LocalBackend, RemoteBackend
-from .sessions import COOKIE, LOGIN_DELAY, MAX_SESSIONS, SESSION_SECONDS, Session
+from .sessions import COOKIE, COOKIE_SECONDS, LOGIN_DELAY, Session, session_id
 
 STATIC = Path(__file__).parent / "static"  # the built app (web/ -> npm run build)
 MAX_LINEAGE_DEPTH = 3
@@ -69,6 +70,10 @@ RUN_ROWS_BYTES = 8 * 1024 * 1024  # the most of a metrics file the run panel rea
 RUN_POINTS = 2000  # rows per chart, at most (evenly thinned)
 STORED = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".mp4", ".webm", ".mov", ".m4v", ".mkv", ".zip", ".gz", ".tgz",
           ".bz2", ".xz", ".zst", ".7z", ".npz", ".pt", ".pth", ".safetensors", ".h5", ".parquet", ".jxl", ".heic", ".mp3", ".ogg"}
+
+
+class NoSession(Unauthorized):
+    """A request without a valid session (as opposed to a token the remote refused)."""
 
 
 class HttpError(Exception):
@@ -87,11 +92,6 @@ def entry_type(path: str) -> str:
 
 def is_report(name: str) -> bool:
     return name.startswith("reports/") and name.count("/") == 1
-
-
-def can(principal: Principal | None, project: str | None) -> bool:
-    """Whether the viewer may see a project; no principal means the store itself decides (a remote store, or --no-auth)."""
-    return principal is None or principal.can(project)
 
 
 def message_page(title: str, text: str) -> bytes:
@@ -154,7 +154,8 @@ def summarize_version(version: dict) -> dict:
 
 class UIHandler(BaseHTTPRequestHandler):
     backend: LocalBackend | RemoteBackend
-    sessions: dict
+    state: dict  # "token": the token the UI acts with ("" before the first login), "session": its Session
+    login_codes: set
     lock: threading.Lock
     no_auth: bool = False
     static_cache: dict
@@ -181,18 +182,21 @@ class UIHandler(BaseHTTPRequestHandler):
             return self.fixed
         value = self._cookie_value()
         with self.lock:
-            session = self.sessions.get(value) if value else None
-            if session and session.expires < time.time():
-                self.sessions.pop(value, None)
-                session = None
-        if session and not self.backend.valid(session):
-            self._drop()
+            token, session = self.state.get("token"), self.state.get("session")
+        if not value or not token or not hmac.compare_digest(value.encode(), session_id(token).encode()):
             return None
+        if session is None:  # the first request after a restart: the token is known, its store is opened now
+            session = self.backend.login(token)
+            if session is None:
+                return None
+            with self.lock:
+                self.state["session"] = session
         return session
 
-    def _drop(self) -> None:
+    def _forget(self) -> None:
+        """The remote refused the token: no session works until the next login."""
         with self.lock:
-            self.sessions.pop(self._cookie_value(), None)
+            self.state.update(token="", session=None)
 
     # --------------------------------------------------------------- dispatch
 
@@ -209,10 +213,11 @@ class UIHandler(BaseHTTPRequestHandler):
             self._error(404, str(error))
         except Forbidden as error:
             self._error(403, str(error))
-        except Unauthorized:
+        except Unauthorized as error:
             if self.no_auth:
-                return self._error(401, "the remote rejected the token from CAIRN_TOKEN or [repo] token_file")
-            self._drop()
+                return self._error(401, "the remote rejected the token from CAIRN_TOKEN, <repo>/token, or ~/.config/cairn/token")
+            if not isinstance(error, NoSession):  # the remote refused the token itself
+                self._forget()
             if self._is_api() or urlparse(self.path).path.startswith("/files/"):
                 return self._send(401, json.dumps({"error": "log in first"}).encode(), "application/json",
                                   {"Set-Cookie": self._cookie_header("", 0), "Cache-Control": "no-store"})
@@ -251,16 +256,18 @@ class UIHandler(BaseHTTPRequestHandler):
                 raise HttpError(404, "no such page")
             if "code" in query:  # the one-time link `cairn ui` prints and opens: a login without typing the token
                 with self.lock:
-                    entry = self.login_codes.pop(query["code"][0], None)
-                session = self.backend.login(entry[1]) if entry and entry[0] > time.time() else None
+                    known = query["code"][0] in self.login_codes
+                    self.login_codes.discard(query["code"][0])
+                token = self.state.get("login", "") if known else ""
+                session = self.backend.login(token) if token else None
                 if session is not None:
-                    return self._send(303, b"", headers={"Location": "/", "Set-Cookie": self._start(session), "Cache-Control": "no-store"})
-                return self._send(303, b"", headers={"Location": "/login"})  # used or expired: the token form
+                    return self._send(303, b"", headers={"Location": "/", "Set-Cookie": self._start(token, session),
+                                                         "Cache-Control": "no-store"})
+                return self._send(303, b"", headers={"Location": "/login"})  # used already: the token form
             if self._session() is not None:
                 return self._send(303, b"", headers={"Location": safe_target(query.get("next", ["/"])[0])})
             return self._app()
         if path == "/logout":
-            self._drop()
             return self._send(303, b"", headers={"Location": "/" if self.no_auth else "/login", "Set-Cookie": self._cookie_header("", 0)})
         if self._is_api():
             return self._api(url, query)
@@ -276,15 +283,9 @@ class UIHandler(BaseHTTPRequestHandler):
         if segments[1] == "files":
             return self._files(session, path, query)
         if segments[1] == "p" and len(segments) >= 5 and segments[3] == "r":
-            self._allow(session, segments[2])
             refs.valid_project(segments[2])
             return self._report(session, session.store.get(segments[2]), segments[2], segments[4:], url)
         raise HttpError(404, "no such page")
-
-    @staticmethod
-    def _allow(session: Session, project: str) -> None:
-        if not can(session.principal, project):
-            raise Forbidden(f"this token cannot read project {project!r}")
 
     # ------------------------------------------------------------------ the app
 
@@ -309,22 +310,18 @@ class UIHandler(BaseHTTPRequestHandler):
             raise HttpError(403, "missing X-Cairn header")
         session = self._session()
         if session is None:
-            raise Unauthorized()
-        store, principal = session.store, session.principal
+            raise NoSession()
+        store = session.store
         match [unquote(part) for part in url.path.split("/")[2:]]:
             case ["me"]:
-                scope = "project" if principal and principal.project else "owner" if principal else "remote"
-                return self._json(200, {"scope": scope, "project": principal.project if principal else None, "auth": not self.no_auth,
-                                        "mode": store.mode, "home": getattr(store, "name", None)})
+                return self._json(200, {"auth": not self.no_auth, "mode": store.mode, "home": getattr(store, "name", None)})
             case ["projects"]:
-                found = [item for item in store.overviews() if can(principal, item["name"])]
+                found = list(store.overviews())
                 return self._json(200, sorted(found, key=lambda item: item["updated"], reverse=True))
             case ["projects", project]:
-                self._allow(session, project)
                 repo = store.get(project)
                 return self._json(200, {"project": store.record(project), "artifacts": repo.summaries()})
             case ["projects", project, "artifacts", *rest] if rest:
-                self._allow(session, project)
                 repo = store.get(project)
                 if len(rest) >= 4 and rest[-3] == "versions" and rest[-1] == "run":
                     return self._json(200, self._run_api(repo, project, "/".join(rest[:-3]), rest[-2]))
@@ -333,7 +330,6 @@ class UIHandler(BaseHTTPRequestHandler):
                 return self._json(200, self._artifact_api(repo, project, "/".join(rest)))
             case ["lineage"]:
                 project, ref = split_ref(query.get("ref", [""])[0])
-                self._allow(session, project)
                 depth = int(query.get("depth", ["1"])[0])
                 if not 1 <= depth <= MAX_LINEAGE_DEPTH:
                     raise ValueError(f"depth must be between 1 and {MAX_LINEAGE_DEPTH}")
@@ -510,7 +506,6 @@ class UIHandler(BaseHTTPRequestHandler):
         if not separator:
             raise HttpError(404, "file URLs look like /files/<project>/<name>@v<n>//<path>")
         ref = refs.parse(f"{head}//{inner}")
-        self._allow(session, project)
         read = session.store.get(project).read_file(ref.name, ref.selector, ref.path, self.headers.get("Range"))
         # a pushed HTML file must not act as the UI's origin (its session)
         extra = {"Content-Security-Policy": "sandbox"}
@@ -525,7 +520,6 @@ class UIHandler(BaseHTTPRequestHandler):
         ref = refs.parse(head)
         if ref.path or not ref.selector:
             raise HttpError(404, "zip URLs look like /files/<project>/<name>@v<n>.zip")
-        self._allow(session, project)
         store = session.store.get(project)
         version = self._version(store, ref.name, ref.selector)
         if version["status"] == "deleted":
@@ -690,7 +684,7 @@ class UIHandler(BaseHTTPRequestHandler):
                 artifacts.append({"title": name, "href": f"{base}a/{quote(name)}", "plain": True})
         reports.sort(key=lambda item: (item["title"].lower(), item["key"]))
         projects = [{"title": item["title"] or item["name"], "href": f"/p/{quote(item['name'])}/", "plain": True, "current": item["name"] == project}
-                    for item in sorted(projects_.overviews(), key=lambda item: item["updated"], reverse=True) if can(session.principal, item["name"])]
+                    for item in sorted(projects_.overviews(), key=lambda item: item["updated"], reverse=True)]
         groups = [{"label": "Projects", "items": projects},
                   {"label": "Reports", "items": [{"key": r["key"], "title": r["title"], "href": f"{base}r/{quote(r['key'])}/"} for r in reports]},
                   {"label": "Artifacts", "items": artifacts}, {"label": "Runs", "items": runs}]
@@ -712,20 +706,13 @@ class UIHandler(BaseHTTPRequestHandler):
         if session is None:
             time.sleep(LOGIN_DELAY)
             return self._json(401, {"error": "That token is not valid."})
-        self._send(200, b'{"ok":true}', "application/json", {"Set-Cookie": self._start(session), "Cache-Control": "no-store"})
+        self._send(200, b'{"ok":true}', "application/json", {"Set-Cookie": self._start(given, session), "Cache-Control": "no-store"})
 
-    def _start(self, session) -> str:
-        """Keep a new session; returns the Set-Cookie header that hands its random id to the browser."""
-        session.expires = time.time() + SESSION_SECONDS
-        identifier = secrets.token_urlsafe(32)
+    def _start(self, token: str, session: Session) -> str:
+        """Act with `token` from now on; returns the Set-Cookie header that hands its session id to the browser."""
         with self.lock:
-            now = time.time()
-            for key in [key for key, other in self.sessions.items() if other.expires < now]:
-                del self.sessions[key]
-            if len(self.sessions) >= MAX_SESSIONS:
-                del self.sessions[min(self.sessions, key=lambda key: self.sessions[key].expires)]
-            self.sessions[identifier] = session
-        return self._cookie_header(identifier, SESSION_SECONDS)
+            self.state.update(token=token, session=session)
+        return self._cookie_header(session_id(token), COOKIE_SECONDS)
 
     # ------------------------------------------------------------------- I/O
 
@@ -809,13 +796,15 @@ class _ChunkedSink(io.RawIOBase):
 
 
 def make_ui_server(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", port: int = 8801,
-                   no_auth: bool = False) -> ThreadingHTTPServer:
-    """A bound UI server (not yet serving). With no_auth there is no login and every request uses the
+                   no_auth: bool = False, login_token: str = "") -> ThreadingHTTPServer:
+    """A bound UI server (not yet serving). `login_token`: the token the login link logs in with, and whose session id
+    a browser's cookie from an earlier launch carries. With no_auth there is no login and every request uses the
     backend's own access, so it is refused on any address but this machine's loopback."""
     if no_auth and host not in LOCAL_HOSTS:
         raise SystemExit("--no-auth shows the repo to anyone who can connect: only with a loopback --host")
     handler = type("Handler", (UIHandler,), {
-        "backend": backend, "sessions": {}, "login_codes": {}, "lock": threading.Lock(), "no_auth": no_auth,
+        "backend": backend, "state": {"token": login_token, "login": login_token, "session": None}, "login_codes": set(),
+        "lock": threading.Lock(), "no_auth": no_auth,
         "static_cache": {}, "fixed": backend.anonymous() if no_auth else None,
     })
     server = ThreadingHTTPServer((host, port), handler)
@@ -838,15 +827,12 @@ def follow_parent() -> None:
     threading.Thread(target=watch, daemon=True).start()
 
 
-LOGIN_LINK_SECONDS = 600
-
-
-def login_link(server: ThreadingHTTPServer, base: str, token: str) -> str:
-    """A one-time login link: a random code (never the token) that logs in once, within LOGIN_LINK_SECONDS."""
+def login_link(server: ThreadingHTTPServer, base: str) -> str:
+    """A one-time login link: a random code (never the token) that logs in once with the server's login token."""
     code = secrets.token_urlsafe(24)
     handler = server.RequestHandlerClass
     with handler.lock:
-        handler.login_codes[code] = (time.time() + LOGIN_LINK_SECONDS, token)
+        handler.login_codes.add(code)
     return f"{base}login?code={code}"
 
 
@@ -857,12 +843,12 @@ def serve_ui(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", por
              login_token: str = "", open_browser: bool = False) -> None:
     """Serve the UI. With `login_token`, print a one-time login link for it (and open it with `open_browser`)."""
     try:
-        server = make_ui_server(backend, host, port, no_auth=no_auth)
+        server = make_ui_server(backend, host, port, no_auth=no_auth, login_token=login_token)
     except OSError as error:
         if not port or error.errno != errno.EADDRINUSE:
             raise
         print(f"port {port} is in use; taking a free one", flush=True)
-        server = make_ui_server(backend, host, 0, no_auth=no_auth)
+        server = make_ui_server(backend, host, 0, no_auth=no_auth, login_token=login_token)
     base = f"http://{url_host(host)}:{server.server_address[1]}/"  # this machine's name for 0.0.0.0
     print(f"UI: {base} (repo: {backend.describe})", flush=True)
     if host not in LOCAL_HOSTS and not os.environ.get("CAIRN_UI_PARENT"):  # beside `cairn server`, it warns for both
@@ -871,8 +857,8 @@ def serve_ui(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", por
         print("Authentication is off (--no-auth): everyone who can connect sees the repo; for local use only", flush=True)
     opening = base
     if login_token and not no_auth:
-        opening = login_link(server, base, login_token)
-        print(f"Log in: {opening}  (one-time link, valid {LOGIN_LINK_SECONDS // 60} minutes)", flush=True)
+        opening = login_link(server, base)
+        print(f"Log in: {opening}  (works once)", flush=True)
     if open_browser:
         import webbrowser
 

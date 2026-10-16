@@ -2,7 +2,7 @@
 
     import cairn
 
-    repo = cairn.connect()                        # the project's repo (with its remote, if [repo] remote names one)
+    repo = cairn.connect()                        # the project's repo (with its remote, if [remote] url names one)
     crops = repo.artifact("datasets/crops")       # repo.artifacts(prefix="datasets/")
     v3 = crops.version(3)                         # also "v3", an alias, a label, a uid, or a short id; crops.latest
     v3.files, v3.metadata, v3.inputs, v3.consumers, v3.short_id
@@ -502,7 +502,7 @@ class _Chunks(io.RawIOBase):
 
 @public("cairn.connect")
 def connect(path_or_url: str | Path | None = None, *, token: str | None = None) -> Repo:
-    """The project's repo (with its remote, if `[repo] remote` names one); for an admin or a test, a repo folder on this
+    """The project's repo (with its remote, if `[remote] url` names one); for an admin or a test, a repo folder on this
     machine or a remote project `<server>/<project>` (with the working directory's repo for its outbox and files).
     Another project's repo never feeds this project's runs: its pulls record no inputs. Connecting to a repo whose
     outbox holds pending versions starts the background uploader."""

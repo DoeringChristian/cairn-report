@@ -16,6 +16,7 @@ import cairn
 from cairn.client.http import split_remote
 from cairn.client.open import remote_parts
 from cairn.store import LocalRepo, new_uid, refs
+from conftest import write_config
 
 
 def folder_with(base: Path, name: str, files: dict) -> Path:
@@ -30,7 +31,7 @@ def folder_with(base: Path, name: str, files: dict) -> Path:
 def study(tmp_path, monkeypatch):
     folder = tmp_path / "study"
     folder.mkdir()
-    (folder / "cairn.toml").write_text("")
+    write_config(folder, "")
     monkeypatch.chdir(folder)
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
     return folder
@@ -96,13 +97,13 @@ def test_remote_urls_name_their_project_in_the_last_segment():
 
 
 def test_a_remote_without_a_project_is_a_config_error(study):
-    (study / "cairn.toml").write_text('[repo]\nremote = "http://127.0.0.1:9"\n')
+    write_config(study, '[remote]\nurl = "http://127.0.0.1:9"\n[repo]\n')
     with pytest.raises(SystemExit, match="names no project"):
         cairn.connect()
 
 
 def test_the_project_key_is_gone_from_the_config(study):
-    (study / "cairn.toml").write_text('[repo]\nproject = "x"\n')
+    write_config(study, '[repo]\nproject = "x"\n')
     with pytest.raises(ValueError, match="unknown \\[repo\\] keys"):
         cairn.connect()
 
@@ -220,7 +221,7 @@ def server(tmp_path, monkeypatch):
 def project_with_remote(base: Path, name: str, remote: str) -> Path:
     folder = base / name
     folder.mkdir()
-    (folder / "cairn.toml").write_text(f'[repo]\nremote = "{remote}"\n')
+    write_config(folder, f'[remote]\nurl = "{remote}"\n[repo]\n')
     return folder
 
 
@@ -245,21 +246,12 @@ def test_projects_on_a_server_share_its_blobs_and_stay_apart(server, tmp_path, m
     assert cairn.connect().version(f"datasets/crops@{beta['short_id']}").short_id == beta["short_id"]  # the same id there
 
 
-def test_the_owner_token_creates_a_project_a_scoped_token_cannot(server, tmp_path, monkeypatch):
-    from cairn.store.tokens import create_token
-
-    scoped = create_token(server.root, "existing", write=True)
+def test_the_token_creates_a_project_on_its_first_sync(server, tmp_path, monkeypatch):
     folder = project_with_remote(tmp_path, "study", f"{server.url}/fresh")
     monkeypatch.chdir(folder)
-    monkeypatch.setenv("CAIRN_TOKEN", scoped)
-    with pytest.raises(cairn.Forbidden, match="cannot"):
-        cairn.connect().artifact("data").publish(folder_with(folder, "data", {"x": "1"}))
-    assert "fresh" not in {item["name"] for item in LocalRepo(server.root).projects()}
-    (folder / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/existing"\n')
-    assert cairn.connect().artifact("data").publish(folder / "data").number == 1  # its own project: fine
     monkeypatch.setenv("CAIRN_TOKEN", server.token)
-    (folder / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/fresh"\n')
-    cairn.connect().sync()
+    assert "fresh" not in {item["name"] for item in LocalRepo(server.root).projects()}
+    assert cairn.connect().artifact("data").publish(folder_with(folder, "data", {"x": "1"})).number == 1
     assert "fresh" in {item["name"] for item in LocalRepo(server.root).projects()}
 
 
@@ -270,7 +262,7 @@ def test_a_server_serving_a_projects_own_repo_names_its_project_after_the_folder
 
     study = tmp_path / "my-study"
     study.mkdir()
-    (study / "cairn.toml").write_text("")
+    write_config(study, "")
     monkeypatch.chdir(study)
     cairn.connect().artifact("data").publish(folder_with(study, "data", {"x": "1"}))
     token = init_root(study / ".cairn").read_text().strip()
@@ -356,9 +348,9 @@ def test_a_ui_on_a_server_lists_its_projects(server, tmp_path, monkeypatch):
         httpd.server_close()
 
 
-def test_serving_or_scoping_the_projects_own_repo_names_it_after_the_folder(study, tmp_path):
+def test_serving_the_projects_own_repo_names_it_after_the_folder(study, tmp_path):
     from cairn.client.open import own_project
 
     cairn.connect()
-    assert own_project(None, study / ".cairn") == "study"  # `cairn server .cairn`, `cairn token create .cairn` alike
+    assert own_project(None, study / ".cairn") == "study"  # `cairn server .cairn`
     assert own_project(None, tmp_path / "srv") is None  # a server's repo folder has no own project

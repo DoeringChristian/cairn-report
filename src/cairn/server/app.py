@@ -1,4 +1,4 @@
-"""`cairn server`: a repo (a LocalRepo folder) shared over HTTP, behind tokens: the remote of other machines' repos.
+"""`cairn server`: a repo (a LocalRepo folder) shared over HTTP, behind one token: the remote of other machines' repos.
 Only a JSON API and file downloads, no pages (`cairn ui` explores a repo in a browser, locally or against this server).
 
 A server hosts many projects in its one repo folder: each is served at `<server>/<project>` as if it were its own
@@ -11,17 +11,15 @@ project is served under the project folder's name (`own`).
 
 Processes on the server's machine keep opening the repo directly, whether the server runs or not; the server is one
 more such process. A new repo gets a fresh owner token on first launch; every launch prints `Repo: <url>` and
-`Token: <owner token>` and the token file's path to the terminal (never into a URL). Scoped tokens (one project, read or
-write) are made with `cairn token create <repo> --project <name>` (see tokens.py). Bind localhost, and put an
-HTTPS reverse proxy in front of anything else: the server speaks plain HTTP.
+`Token: <owner token>` and the token file's path to the terminal (never into a URL). That one token is the only
+credential: it reaches every project and creates one on its first sync. The server speaks plain HTTP: bind localhost,
+or use it over a VPN (Tailscale) or an SSH tunnel, or put an HTTPS reverse proxy in front.
 
 Artifact names are slash paths (`datasets/crops`), so every route says where the name ends:
 
     API (JSON, `Authorization: Bearer <token>`; a name is ONE percent-encoded path segment, `datasets%2Fcrops`)
       GET  /api/v2/repo                                          {uid, version}: the repo's uid and the server's version
       GET  /api/v2/projects                                      [{..., artifacts, updated}]   POST {name, title?, description?}
-                                                                 (creating needs the owner token; a project-scoped token
-                                                                 only reaches its existing project)
       GET  /api/v2/projects/<p>                                  PATCH {title?, description?}
       GET  /api/v2/projects/<p>/artifacts                        [{name, latest, versions, aliases, updated, metadata}]
       GET  /api/v2/projects/<p>/artifacts/<name>                 that summary plus `latest_version` (its manifest, or null)
@@ -39,7 +37,7 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
       GET  /api/v2/projects/<p>/ids?id=<hex>[&name=<name>]       {versions: [{name, version, uid, short_id, status}]}
       GET  /api/v2/projects/<p>/lineage?ref=<ref>                {ref, inputs, consumers, deleted, nodes: {ref: {status, kind, short_id}}}
       POST /api/v2/blobs/missing {sha256: [...]}                 PUT /api/v2/blobs/<sha256> (streamed, hash-verified)
-    Deleting (a write token of the project; `force=1` and gc need the owner token; 409 + `protected` when refused)
+    Deleting (`force=1` deletes protected versions too; 409 + `protected` when refused)
       DELETE /api/v2/projects/<p>/artifacts/<name>/versions/<n>  [?force=1&reason=...] -> {deleted: [refs], skipped: []}
       DELETE /api/v2/projects/<p>/artifacts/<name>               every version of it, under the same rules
       DELETE /api/v2/projects/<p>                                only when no version is left (or force)
@@ -90,9 +88,9 @@ from ..store.gc import GRACE, describe_bytes, parse_duration
 from ..store.blobs import SHA256, clean_entries
 from ..store.db import ServerLock
 from ..store.digest import PREFIX as DIGEST_PREFIX
-from ..store.tokens import OWNER, Principal, Tokens, init_root, read_token
+from ..store.tokens import init_root, read_token
 from ..store.uids import UID, valid_uid
-from .auth import Auth, HttpError, allow
+from .auth import Auth, HttpError
 from .files import serve_file
 from ..hosts import LOCAL_HOSTS, url_host
 from .spawn import forward, start_ui, stop
@@ -219,21 +217,20 @@ class StoreApp:
         method = request.method
         try:
             if method == "GET" and raw.startswith("/files/"):
-                principal = self.auth.require(request.headers.get("authorization"))
+                self.auth.require(request.headers.get("authorization"))
                 query = parse_qs(request.scope.get("query_string", b"").decode("latin-1"))
-                return await serve_file(self, request, principal, raw, query)
+                return await serve_file(self, request, raw, query)
             if method == "PUT" and raw.startswith("/api/v2/blobs/"):
                 return self._response(await self._put(request, raw))
             if method not in METHODS:
                 return self._response(_error(501, f"unsupported method {method}"))
-            body, principal = b"", None
+            body = b""
             if method != "GET":
-                principal = self.auth.require(request.headers.get("authorization"))
+                self.auth.require(request.headers.get("authorization"))
                 body = await self._body(request, MAX_JSON)
             loop = asyncio.get_running_loop()
             answer = await loop.run_in_executor(self.executor, self._api, method, raw, request.scope.get("query_string", b""),
-                                                request.headers.get("authorization"), request.headers.get("if-none-match"), body,
-                                                principal)
+                                                request.headers.get("authorization"), request.headers.get("if-none-match"), body)
         except ClientDisconnect:
             return self._response(_error(400, "the client went away"))
         except Exception as error:  # noqa: BLE001 - mapped to a status, or raised again
@@ -258,8 +255,7 @@ class StoreApp:
 
     # ------------------------------------------------------------------ API (worker threads)
 
-    def _api(self, method: str, raw: str, query_string: bytes, authorization, if_none_match, body: bytes,
-             principal: Principal | None) -> Answer:
+    def _api(self, method: str, raw: str, query_string: bytes, authorization, if_none_match, body: bytes) -> Answer:
         try:
             if method == "GET":
                 answer = self._get(raw, parse_qs(query_string.decode("latin-1")), authorization)
@@ -273,12 +269,12 @@ class StoreApp:
             if not isinstance(payload, dict):
                 raise ValueError("payload must be a JSON object")
             if method == "POST":
-                return self._post(principal, segments[3:], payload)
+                return self._post(segments[3:], payload)
             if method == "DELETE":
-                return self._delete(principal, segments[3:], parse_qs(query_string.decode("latin-1")), payload)
+                return self._delete(segments[3:], parse_qs(query_string.decode("latin-1")), payload)
             if method == "PUT":
-                return self._put_json(principal, segments[3:], payload)
-            return self._patch(principal, segments, payload)
+                return self._put_json(segments[3:], payload)
+            return self._patch(segments, payload)
         except Exception as error:  # noqa: BLE001
             return _translate(error)
 
@@ -330,7 +326,7 @@ class StoreApp:
         segments = _segments(raw)
         if segments[1:2] != ["api"]:
             raise HttpError(404, "this server has no pages: its API lives under /api/v2/ and its files under /files/")
-        principal = self.auth.require(authorization)
+        self.auth.require(authorization)
         if segments[1:3] != ["api", "v2"]:
             raise HttpError(404, "the API lives under /api/v2/")
         store = self.store
@@ -339,11 +335,10 @@ class StoreApp:
                 return _json(200, {"uid": store.uid, "version": __version__})
             case ["projects"]:
                 listed = [self._public(item) for item in store.overviews()]
-                return _json(200, [item for item in listed if item is not None and principal.can(item["name"])])
+                return _json(200, [item for item in listed if item is not None])
         if segments[3:4] != ["projects"] or len(segments) < 5:
             raise HttpError(404, "no such API route")
         project = segments[4]
-        allow(principal, project)
         view = self.view(project)
         match segments[5:]:
             case []:
@@ -381,33 +376,27 @@ class StoreApp:
                 return _json(200, {"ref": exact, **view.lineage(exact, marks=True)})
         raise HttpError(404, "no such API route")
 
-    def _post(self, principal: Principal, route: list[str], payload: dict) -> Answer:
+    def _post(self, route: list[str], payload: dict) -> Answer:
         store = self.store
         match route:
             case ["blobs", "missing"]:
-                if not principal.write:
-                    raise HttpError(403, "this token cannot write")
                 hashes = payload.get("sha256", [])
                 if not isinstance(hashes, list) or len(hashes) > 200_000 or not all(isinstance(h, str) and SHA256.fullmatch(h) for h in hashes):
                     raise ValueError("sha256 must be a list of hex digests")
                 absent = set(store.missing_hashes(hashes))
                 return _json(200, {"missing": [h for h in hashes if h in absent]})
             case ["gc"]:
-                if principal != OWNER:
-                    raise HttpError(403, "only the owner token may collect garbage")
                 dry_run = payload.get("dry_run", True)
                 if not isinstance(dry_run, bool):
                     raise ValueError("dry_run must be true or false")
                 grace = parse_duration(payload["grace"]) if payload.get("grace") is not None else GRACE
-                return _json(200, self.gc(dry_run, grace, by=principal.name))
+                return _json(200, self.gc(dry_run, grace, by="owner"))
             case ["projects"]:
                 name = payload.get("name")
                 if not isinstance(name, str):
                     raise ValueError("a project is {name, title?, description?}")
                 key = self.key(name)
                 exists = any(item["name"] == key for item in store.projects())
-                if principal.project is not None and not (exists and principal.project == name):
-                    raise HttpError(403, f"this token cannot create projects (only the owner token makes {name!r})")
                 record = store.create_project(key, payload.get("title"), payload.get("description") or "")
                 return _json(200 if exists else 201, self._public(record))
         if route[:1] != ["projects"] or len(route) < 2:
@@ -415,7 +404,6 @@ class StoreApp:
         view = self.view(route[1])
         match route:
             case ["projects", project, "artifacts", name, "versions"]:
-                allow(principal, project, write=True)
                 source = payload.get("source")
                 if source is not None and not isinstance(source, dict):
                     raise ValueError("source must be an object")
@@ -427,7 +415,6 @@ class StoreApp:
                 store.beat(uid, owner=False)  # a client's running version: alive while it syncs (see reap_schedule)
                 return _json(201, {"version": number, "uid": uid})
             case ["projects", project, "artifacts", name, "versions", number, action] if number.isdigit():
-                allow(principal, project, write=True)
                 number = int(number)
                 if action == "files":
                     entries = clean_entries(payload.get("entries"))
@@ -448,7 +435,6 @@ class StoreApp:
                     view.fail_version(name, number)
                     return _json(200, {"version": number})
             case ["projects", project, "artifacts", name, "publish"]:
-                allow(principal, project, write=True)
                 entries = clean_entries(payload.get("entries"))
                 missing = store.missing(entries)
                 if missing:
@@ -466,7 +452,6 @@ class StoreApp:
                 return _json(201 if created else 200, {"version": number, "uid": view.get_version(name, number)["uid"],
                                                        "created": created})
             case ["projects", project, "artifacts", name, "aliases"]:
-                allow(principal, project, write=True)
                 alias, number = payload.get("alias"), payload.get("version")
                 if not isinstance(alias, str) or isinstance(number, bool) or not isinstance(number, int):
                     raise ValueError("an alias is {alias: text, version: number}")
@@ -474,17 +459,16 @@ class StoreApp:
                 return _json(200, {"alias": alias, "version": number})
         raise HttpError(404, "no such API route")
 
-    def _patch(self, principal: Principal, segments: list[str], payload: dict) -> Answer:
+    def _patch(self, segments: list[str], payload: dict) -> Answer:
         if segments[1:4] == ["api", "v2", "projects"] and len(segments) == 5:
             project = segments[4]
-            allow(principal, project, write=True)
             for key in ("title", "description"):
                 if payload.get(key) is not None and not isinstance(payload[key], str):
                     raise ValueError(f"{key} must be text")
             return _json(200, self._public(self.view(project).update(payload.get("title"), payload.get("description"))))
         raise HttpError(404, "no such API route")
 
-    def _delete(self, principal: Principal, route: list[str], query: dict, payload: dict) -> Answer:
+    def _delete(self, route: list[str], query: dict, payload: dict) -> Answer:
         """Deleting versions, artifacts, and projects: a write token of the project; forcing needs the owner token."""
         force = query.get("force", [""])[0].lower() in ("1", "true", "yes") or payload.get("force") is True
         reason = query.get("reason", [None])[0] or payload.get("reason")
@@ -493,25 +477,18 @@ class StoreApp:
         view = self.view(route[1])
         match route:
             case ["projects", project, "artifacts", name, "versions", number] if number.isdigit() or UID.fullmatch(number):
-                allow(principal, project, write=True)
-                _owner_for_force(principal, force)
                 return _json(200, view.delete_version(name, int(number) if number.isdigit() else number, reason=reason,
-                                                      force=force, by=principal.name))
+                                                      force=force, by="owner"))
             case ["projects", project, "artifacts", name]:
-                allow(principal, project, write=True)
-                _owner_for_force(principal, force)
-                return _json(200, view.delete_artifact(name, reason=reason, force=force, by=principal.name))
+                return _json(200, view.delete_artifact(name, reason=reason, force=force, by="owner"))
             case ["projects", project]:
-                allow(principal, project, write=True)
-                _owner_for_force(principal, force)
-                return _json(200, {**self.store.delete_project(view.project, reason=reason, force=force, by=principal.name),
+                return _json(200, {**self.store.delete_project(view.project, reason=reason, force=force, by="owner"),
                                    "project": project})
         raise HttpError(404, "no such API route")
 
-    def _put_json(self, principal: Principal, route: list[str], payload: dict) -> Answer:
+    def _put_json(self, route: list[str], payload: dict) -> Answer:
         match route:
             case ["projects", project, "retention"]:
-                allow(principal, project, write=True)
                 return _json(200, {"project": project, "rules": self.view(project).set_retention(payload.get("rules"))})
         raise HttpError(404, "no such API route")
 
@@ -547,11 +524,9 @@ class StoreApp:
         worker thread while the next piece arrives; fsynced, verified, and renamed into place at the end."""
         try:
             match = _segments(raw)
-            principal = self.auth.require(request.headers.get("authorization"))
+            self.auth.require(request.headers.get("authorization"))
             if match[1:4] != ["api", "v2", "blobs"] or len(match) != 5 or not SHA256.fullmatch(match[4]):
                 raise HttpError(404, "no such API route")
-            if not principal.write:
-                raise HttpError(403, "this token cannot write")
             try:
                 size = int(request.headers.get("content-length", ""))
             except ValueError:
@@ -603,11 +578,6 @@ class StoreApp:
                     pass
             await loop.run_in_executor(self.executor, writer.abort)
         return _json(201 if created else 200, {"sha256": sha, "created": created})
-
-
-def _owner_for_force(principal: Principal, force: bool) -> None:
-    if force and principal != OWNER:
-        raise HttpError(403, "only the owner token may force a deletion")
 
 
 def gc_schedule(app: StoreApp, interval: float, grace: float = GRACE, say=None) -> threading.Event:
@@ -672,7 +642,7 @@ class StoreServer:
             self.socket.listen(2048)
         except OSError as error:
             self.socket.close()
-            if error.errno == errno.EADDRINUSE:  # clients' [repo] remote names this port: never move it silently
+            if error.errno == errno.EADDRINUSE:  # clients' remote URL names this port: never move it silently
                 raise SystemExit(f"port {port} on {host} is in use (another `cairn server`?); choose one with --port") from None
             raise
         self.server_address = self.socket.getsockname()[:2]
@@ -751,7 +721,7 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
             store = LocalRepo(root, allow_network_fs=allow_network_fs, where="")
         except StoreError as error:
             raise SystemExit(f"cairn: {error}") from None
-        app = StoreApp(store, Auth(read_token(root / "token"), Tokens(root), no_auth), max_blob,
+        app = StoreApp(store, Auth(read_token(root / "token"), no_auth), max_blob,
                        own=refs.valid_project(own) if own is not None else None)
         server = StoreServer(app, host, port, app.auth.owner_token)
     except BaseException:
@@ -759,6 +729,9 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         raise
     server.lock = lock
     return server
+
+
+READY = "Serving; Ctrl-C stops it."
 
 
 def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
@@ -797,10 +770,10 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         print(f"  stored in {(root / 'token').resolve()} (owner-only)", flush=True)
     project = own if own is not None else "<project>"
     plain = host not in LOCAL_HOSTS
-    print(f"Other machines: [repo] remote = \"{here}{project}\"{' and allow_http = true' if plain else ''} in their cairn.toml,", flush=True)
+    print(f"Other machines: cairn remote set {here}{project}", flush=True)
     if not no_auth:
-        print("  and the token in CAIRN_TOKEN, [repo] token_file, their .cairn/token, or ~/.config/cairn/token"
-              " (`cairn token create <repo> --project <name>` makes a project-scoped one)", flush=True)
+        print(f"  and the token: copy {(root / 'token').resolve()} to their .cairn/token or ~/.config/cairn/token,"
+              " or set CAIRN_TOKEN", flush=True)
     if plain:
         print("warning: plain HTTP on a network address: use it over a VPN (Tailscale, WireGuard), an SSH tunnel, "
               "or an HTTPS reverse proxy", flush=True)
@@ -808,6 +781,7 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     if gc_interval:
         gc_schedule(server.app, gc_interval, gc_grace)
         print(f"Garbage collection every {gc_interval / 3600:g} h (grace {gc_grace / 3600:g} h)", flush=True)
+    print(READY, flush=True)  # always the startup block's last line
     previous = None
     if threading.current_thread() is threading.main_thread():  # SIGTERM stops the UI child too
         previous = signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))

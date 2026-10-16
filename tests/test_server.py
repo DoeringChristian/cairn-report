@@ -17,9 +17,10 @@ from cairn.client.http import Client
 from cairn import BadRange, LocalRepo, Remote, StoreError
 from cairn.store import LocalProject
 from cairn.server import make_server, serve_store
-from cairn.store.tokens import create_token, init_root, list_tokens, revoke_token
+from cairn.store.tokens import init_root
 
 from test_store import env, folder  # noqa: F401  (the project fixture and folder helper)
+from conftest import read_until, write_config
 
 
 @pytest.fixture
@@ -65,7 +66,7 @@ def remote(server, token=None, project="study") -> Remote:
 
 def use_remote(env, server, project="study"):
     """The project `env` with the remote `<server>/<project>`; returns that remote project (a Remote)."""
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/{project}"\ninterval = 1\n')
+    write_config(env, f'[remote]\nurl = "{server.url}/{project}"\n[repo]\ninterval = 1\n')
     return remote(server, project=project)
 
 
@@ -125,7 +126,7 @@ def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
         module.StoreServer.serve_forever = original
 
 
-# ------------------------------------------------------------- scoped tokens
+# ------------------------------------------------------------- the one token
 
 
 def seed(server):
@@ -134,73 +135,26 @@ def seed(server):
         store.connect(f"{server.url}/{project}").artifact("data").publish(folder(server.root.parent, f"seed-{project}", {"x.txt": project}))
 
 
-def test_scoped_tokens(server, env):
+def test_one_token_reaches_every_project_and_nothing_else_does(server, env):
     seed(server)
-    read = create_token(server.root, "alpha", name="reader")
-    write_token = create_token(server.root, "alpha", write=True, name="writer")
-    assert api(server, "GET", "/api/v2/projects/alpha", token=read)["name"] == "alpha"
-    assert [p["name"] for p in api(server, "GET", "/api/v2/projects", token=read)] == ["alpha"]
     assert [p["name"] for p in api(server, "GET", "/api/v2/projects")] == ["alpha", "beta"]
-    api(server, "GET", "/api/v2/projects/alpha/resolve?ref=data@latest", token=read)
-    # read-only: no writes, nothing outside its project
-    entry = {"path": "y.txt", "sha256": "0" * 64, "size": 1}
+    assert not (server.root / "tokens.jsonl").exists()
+    wrong = "x" * 43
     for method, path, body in (("POST", "/api/v2/projects/alpha/artifacts/data/publish", {"entries": []}),
-                               ("POST", "/api/v2/projects/alpha/artifacts/data/versions", {}),
                                ("POST", "/api/v2/blobs/missing", {"sha256": []}),
-                               ("POST", "/api/v2/projects/alpha/artifacts/data/aliases", {"alias": "x", "version": 1}),
                                ("PATCH", "/api/v2/projects/alpha", {"title": "t"}),
                                ("POST", "/api/v2/projects", {"name": "new"}),
-                               ("GET", "/api/v2/projects/beta", None),
+                               ("GET", "/api/v2/projects", None),
                                ("GET", "/api/v2/projects/beta/artifacts", None),
-                               ("GET", "/api/v2/projects/beta/resolve?ref=data@latest", None),
-                               ("GET", "/api/v2/projects/beta/ids?id=abcd", None),
-                               ("GET", "/api/v2/projects/beta/lineage?ref=data@latest", None),
                                ("GET", "/files/beta/data@v1//x.txt", None)):
-        assert call(server, method, path, body, token=read)[0] == 403, (method, path)
-    assert call(server, "PUT", "/api/v2/blobs/" + "a" * 64, body=b"x", token=read)[0] == 403
-    assert call(server, "GET", "/files/alpha/data@v1//x.txt", token=read)[0] == 200
-    # a write token publishes to its own project only
-    other = folder(server.root.parent, "more", {"z.txt": "more"})
-    assert store.connect(f"{server.url}/alpha", token=write_token).artifact("data").publish(other).number == 2
-    with pytest.raises(StoreError, match="cannot"):  # the store says the token cannot write there
-        store.connect(f"{server.url}/beta", token=write_token).artifact("data").publish(other)
-    assert call(server, "POST", "/api/v2/projects/beta/artifacts/data/publish", {"entries": [entry]}, token=write_token)[0] == 403
-    # ... and an input names a version of the same project: a reference with a project is refused
+        for token in (wrong, None):
+            assert call(server, method, path, body, token=token)[0] == 401, (method, path, token)
+    assert call(server, "PUT", "/api/v2/blobs/" + "a" * 64, body=b"x", token=wrong)[0] == 401
+    assert call(server, "GET", "/files/alpha/data@v1//x.txt")[0] == 200
+    # an input names a version of the same project: a reference with a project is refused
     status, _, data = call(server, "POST", "/api/v2/projects/alpha/artifacts/data/publish",
-                           {"entries": [], "inputs": ["beta:data@v1"]}, token=write_token)
+                           {"entries": [], "inputs": ["beta:data@v1"]})
     assert status == 400 and b"without a project" in data, data
-    # revoke: it stops working at once, and the list never shows token values
-    listing = list_tokens(server.root)
-    assert {row["name"] for row in listing} == {"reader", "writer"} and read not in json.dumps(listing)
-    revoke_token(server.root, "reader")
-    assert call(server, "GET", "/api/v2/projects/alpha", token=read)[0] == 401
-    assert call(server, "GET", "/api/v2/projects/alpha", token=write_token)[0] == 200
-    assert [row["name"] for row in list_tokens(server.root)] == ["writer"]
-
-
-def test_tokens_are_stored_hashed(server):
-    import hashlib
-
-    token = create_token(server.root, "alpha", write=True, name="w")
-    text = (server.root / "tokens.jsonl").read_text()
-    assert token not in text and hashlib.sha256(token.encode()).hexdigest() in text
-    assert oct((server.root / "tokens.jsonl").stat().st_mode & 0o777) == "0o600"
-    with pytest.raises(SystemExit, match="already exists"):
-        create_token(server.root, "alpha", name="w")
-    with pytest.raises(SystemExit, match="no active token"):
-        revoke_token(server.root, "nope")
-
-
-def test_token_commands(server, capsys):
-    main(["token", "create", str(server.root), "--project", "alpha", "--write", "--name", "ci"])
-    out = capsys.readouterr().out
-    token = re.search(r"Token: (\S+)", out).group(1)
-    assert api(server, "GET", "/api/v2/projects/alpha", token=token)["name"] == "alpha"  # the project was created
-    main(["token", "list", str(server.root)])
-    listing = capsys.readouterr().out
-    assert "ci\talpha\twrite" in listing and token not in listing
-    main(["token", "revoke", str(server.root), "ci"])
-    assert call(server, "GET", "/api/v2/projects/alpha", token=token)[0] == 401
 
 
 # -------------------------------------------------------------- API details
@@ -292,6 +246,8 @@ def test_pull_materializes_once_and_never_downloads_a_blob_twice(server, env, tm
     assert (store.pull("data@v1") / "b.txt").read_text() == "only in v1"  # publishing left the blobs in the repo
     assert blob_gets(server) == before
     monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "other-machine"))  # another machine's repo downloads each blob once
+    (tmp_path / "other-machine").mkdir()
+    shutil.copyfile(env / ".cairn" / "config.toml", tmp_path / "other-machine" / "config.toml")  # $CAIRN_DIR's config
     first = store.pull("data@v1")
     assert blob_gets(server) - before == 2
     assert store.pull("data@v1") == first and blob_gets(server) - before == 2  # materialized already
@@ -318,7 +274,7 @@ def test_cli_pull_prints_the_path_and_copies_into_a_folder(server, env, capsys):
     store.publish("data", folder(env, "d", {"a.txt": "1", "sub/b.txt": "2"}))
     main(["pull", "data@v1", "--no-record"])
     path = capsys.readouterr().out.strip()
-    assert (env / "cairn.toml").is_file() and not (env / ".cairn-inputs.jsonl").exists()
+    assert (env / ".cairn" / "config.toml").is_file() and not (env / ".cairn-inputs.jsonl").exists()
     with open(os.path.join(path, "a.txt")) as handle:
         assert handle.read() == "1"
     main(["pull", "data@v1", "--into", str(env / "copy")])
@@ -397,8 +353,6 @@ def test_overview_summary_and_file_list_routes(server, env):
     files = api(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops/versions/1/files")["files"]
     assert [f["path"] for f in files] == ["a.txt", "sub/b.txt"] and files[1]["size"] == 2
     assert call(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops/versions/9/files")[0] == 404
-    scoped = create_token(server.root, "other-project", name="s")
-    assert call(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops", token=scoped)[0] == 403
 
 
 def test_remote_store_read_file_streams_ranges(server, env):
@@ -453,11 +407,9 @@ def launch(tmp_path, *flags):
     root, port = tmp_path / "launch-store", free_port()
     process = subprocess.Popen([sys.executable, "-m", "cairn", "server", str(root), "--port", str(port), *flags],
                                stdout=subprocess.PIPE, text=True, cwd=tmp_path)
-    lines = []
-    while line := process.stdout.readline():
-        lines.append(line.rstrip())
-        if line.startswith("  clients read it") or line.startswith("Authentication is off"):
-            break
+    from cairn.server.app import READY
+
+    lines = read_until(process, lambda line: line == READY)
     return process, port, lines, root
 
 

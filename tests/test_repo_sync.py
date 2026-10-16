@@ -20,6 +20,7 @@ from cairn.store import OWN, LocalProject, LocalRepo
 
 from test_identity import Server
 from test_store import folder
+from conftest import write_config, config_file
 
 pytest.importorskip("uvicorn")
 
@@ -28,10 +29,9 @@ def project_at(base: Path, name: str, remote: str | None = None, extra: str = ""
     """A project folder (its own repo), with the project `study` of the server `remote` as its remote if given."""
     root = base / name
     root.mkdir(parents=True)
-    lines = ['[repo]', 'interval = 0.5']
-    if remote:
-        lines.append(f'remote = "{remote}/study"')
-    (root / "cairn.toml").write_text("\n".join(lines) + "\n" + extra)
+    lines = [f'[remote]\nurl = "{remote}/study"'] if remote else []
+    lines += ['[repo]', 'interval = 0.5']
+    write_config(root, "\n".join(lines) + "\n" + extra)
     return root
 
 
@@ -193,8 +193,8 @@ def test_a_remote_added_to_a_repo_takes_over_its_versions_oldest_first(server, t
     one_ref, one_uid, two_ref, two_uid, fit_ref, fit_uid = made.stdout.split()
     assert (one_ref, two_ref, fit_ref) == ("data@v1", "data@v2", "fit@v1")
 
-    with open(project / "cairn.toml", "a") as handle:  # now the project gets a remote
-        handle.write(f'remote = "{server.url}/study"\n')
+    with open(config_file(project), "a") as handle:  # now the project gets a remote
+        handle.write(f'[remote]\nurl = "{server.url}/study"\n')
     synced = cairn_cli(project, "sync")  # the first command that reaches the remote
     assert synced.returncode == 0, synced.stdout + synced.stderr
     assert "adopted 4 versions this repo numbered itself" in synced.stdout  # data v1, v2, the run, fit
@@ -246,7 +246,7 @@ def test_on_a_network_filesystem_jobs_keep_an_outbox_and_a_login_node_sends_it(s
     env = nfs_env(tmp_path)
     alone = project_at(tmp_path, "no-remote")
     refused = cairn_cli(alone, "publish", str(folder(tmp_path, "x", {"a": "1"})), "x", env=env)
-    assert refused.returncode == 1 and "network filesystem (nfs4)" in refused.stderr and "[repo] remote" in refused.stderr
+    assert refused.returncode == 1 and "network filesystem (nfs4)" in refused.stderr and "cairn remote set" in refused.stderr
     assert not (alone / ".cairn" / "metadata.sqlite3").exists()
 
     project = project_at(tmp_path, "cluster", server.url)
@@ -645,13 +645,10 @@ def test_a_direct_publish_sends_the_pending_versions_it_names_first(server, onli
     assert [v["uid"] for v in remote_versions(server, "a")] == [first.uid] and outbox(online) == []
 
 
-def test_a_token_that_may_not_write_leaves_versions_pending_not_rejected(server, online, tmp_path, monkeypatch):
-    from cairn.store.tokens import create_token
-
+def test_a_refused_token_leaves_versions_pending_not_rejected(server, online, tmp_path, monkeypatch):
     server.start()
-    reader = create_token(server.root, "study", write=False, name="reader")
-    monkeypatch.setenv("CAIRN_TOKEN", reader)
-    with pytest.raises(cairn.Forbidden, match="stays pending"):
+    monkeypatch.setenv("CAIRN_TOKEN", "x" * 43)
+    with pytest.raises(cairn.Unauthorized, match="refused"):
         cairn.connect().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
     status = cairn_cli(online, "status")
     assert status.stdout.startswith("pending\ta\t"), status.stdout  # pending, not rejected
@@ -684,8 +681,8 @@ def test_a_script_adopts_the_repos_own_versions_before_it_reads(server, tmp_path
     monkeypatch.chdir(project)
     local = cairn.connect().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "mine"}))
     assert local.number == 1
-    with open(project / "cairn.toml", "a") as handle:
-        handle.write(f'remote = "{server.url}/study"\n')
+    with open(config_file(project), "a") as handle:
+        handle.write(f'[remote]\nurl = "{server.url}/study"\n')
     server.start()
     used = cairn.connect().version("a@latest")  # first contact: the repo's own versions are sent first
     assert used.uid == local.uid and used.number == 1 and not used.pending

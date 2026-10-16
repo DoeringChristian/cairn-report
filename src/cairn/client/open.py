@@ -1,4 +1,4 @@
-"""The source-of-truth policy: which repo a project gets. The one place that reads `[repo] remote` and
+"""The source-of-truth policy: which repo a project gets. The one place that reads `[remote] url` and
 `[repo] allow_network_fs`, looks at the filesystem type, and decides:
 
     no remote                   StandaloneRepo(LocalProject)                the repo is the source of truth
@@ -7,7 +7,7 @@
     no remote, network fs       refused, with the cluster setup to use instead
 
 The repo holds the project's one project (store/local.py OWN). The remote is a project on a server:
-`[repo] remote = "<server>/<project>"`, whose last path segment is the project (`http.split_remote`); a remote
+`[remote] url = "<server>/<project>"` (`cairn remote set`), whose last path segment is the project (`http.split_remote`); a remote
 without one is a configuration error. `[repo] allow_network_fs = true` is the owner's word that one process on one
 host writes the repo: the database is used as on a local disk. Everything above (the object API, the CLI, reports,
 runs, the UI) works through the object this returns (client/repo.py) and never asks which one it is.
@@ -21,7 +21,7 @@ import sys
 import time
 from pathlib import Path
 
-from ..config import Config, load_config, locate, protect
+from ..config import Config, load_config, locate, protect, write_template
 from ..store import LocalProject, LocalRepo, StoreError, refs
 from ..store.errors import Unreachable
 from ..store.fs import network_filesystem, network_fs_message
@@ -43,21 +43,37 @@ def heartbeat_timeout(config: Config | None) -> float:
 
 
 def remote_url(config: Config | None) -> str | None:
-    """`[repo] remote` (None without one): `<server>/<project>`."""
+    """`[remote] url` (None without one): `<server>/<project>`."""
     url = ((config.repo.get("remote") if config else None) or "").strip().rstrip("/")
     return url or None
 
 
-def remote_parts(url: str, what: str = "[repo] remote") -> tuple[str, str]:
+def remote_parts(url: str, what: str = "[remote] url") -> tuple[str, str]:
     """(server URL, project) of a remote URL; SystemExit when it names no project (or not a valid one)."""
     server, project = split_remote(url)
     if project is None:
-        raise SystemExit(f"cairn: {what} = {url!r} names no project: a remote is <server>/<project>, e.g. "
+        raise SystemExit(f"cairn: {what} {url!r} names no project: a remote is <server>/<project>, e.g. "
                          f"{url.rstrip('/')}/my-study")
     if not refs.PROJECT.fullmatch(project):
-        raise SystemExit(f"cairn: {what} = {url!r}: its last path segment {project!r} is not a project name (lowercase "
+        raise SystemExit(f"cairn: {what} {url!r}: its last path segment {project!r} is not a project name (lowercase "
                          "letters, digits, '_', '.', '-')")
     return server, project
+
+
+def valid_remote(url: str) -> str:
+    """A remote URL as `cairn remote set` stores it: `http(s)://host[:port][/prefix]/<project>` (SystemExit otherwise)."""
+    from urllib.parse import urlparse
+
+    url = url.strip().rstrip("/")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment or parsed.params:
+        raise SystemExit(f"cairn: {url!r} is not a remote: it looks like http(s)://host[:port][/prefix]/<project>")
+    try:
+        parsed.port
+    except ValueError:
+        raise SystemExit(f"cairn: {url!r} has an invalid port") from None
+    remote_parts(url, "the remote")
+    return url
 
 
 def project_label(config: Config) -> str:
@@ -75,6 +91,8 @@ def make_repo_folder(repo: Path, found: bool) -> Path:
     new = not repo.exists()
     protect(repo)
     repo.mkdir(parents=True, exist_ok=True)
+    if new:
+        write_template(repo)
     if new and not found:
         print(f"cairn: created the repo {repo} (no repo or project above {Path.cwd()}; `cairn init` makes one on purpose)",
               file=sys.stderr, flush=True)
@@ -111,32 +129,18 @@ def find_token(config: Config | None) -> tuple[str, str | None, str]:
     """(token, where it came from, where it was looked for) for a client of the project's remote; the first found wins:
 
         1. $CAIRN_TOKEN
-        2. [repo] token_file (relative to the project folder)
-        3. the repo's `token` file (`<repo>/token`, normally .cairn/token)
-        4. ~/.config/cairn/token
+        2. the repo's `token` file (`<repo>/token`, normally .cairn/token)
+        3. ~/.config/cairn/token
 
-    So copying the token file into the project's `.cairn/` or into `~/.config/cairn/` is all a machine needs. A token
-    file readable by other users is used with a warning. ("", None, places) when there is none. (`<repo>/token` is also
-    the owner token when `cairn server` serves that repo; the server itself only ever reads its own repo's `token`.)"""
-    settings = config.repo if config else {}
-    files: list[tuple[Path, str]] = []
-    if settings.get("token_file"):
-        token_file = Path(settings["token_file"]).expanduser()
-        if not token_file.is_absolute() and config:
-            token_file = config.project / token_file
-        if not token_file.is_file():
-            raise SystemExit(f"the token file {token_file} ([repo] token_file) does not exist")
-        files.append((token_file, "[repo] token_file"))
-    if config is not None:
-        files.append((Path(config.cairn_dir) / "token", "the repo's token file"))
-    files.append((home_token(), "~/.config/cairn/token"))
-    shown = [f"${TOKEN_ENV}"] + ([] if settings.get("token_file") else ["[repo] token_file (not set)"]) + \
-        [str(path) for path, _ in files]
-    places = f"looked in {', '.join(shown)}"
+    So copying the server's token file into the project's `.cairn/` or into `~/.config/cairn/` is all a machine needs.
+    A token file readable by other users is used with a warning. ("", None, places) when there is none. (`<repo>/token`
+    is also the owner token when `cairn server` serves that repo; the server itself only ever reads its own repo's.)"""
+    files = ([Path(config.cairn_dir) / "token"] if config is not None else []) + [home_token()]
+    places = f"looked in ${TOKEN_ENV}, {', '.join(str(path) for path in files)}"
     token = os.environ.get(TOKEN_ENV, "").strip()
     if token:
         return token, f"${TOKEN_ENV}", places
-    for path, _ in files:
+    for path in files:
         if path.is_file():
             token = _read_token(path)
             if token:
@@ -144,20 +148,17 @@ def find_token(config: Config | None) -> tuple[str, str | None, str]:
     return "", None, places
 
 
-def client(config: Config | None, url: str | None = None, *, token: str | None = None, allow_http: bool = False,
-           timeout: float = 120) -> Client:
-    """An HTTP client for the server `url` (default: the server of `[repo] remote`); the token is `token`, else the
+def client(config: Config | None, url: str | None = None, *, token: str | None = None, timeout: float = 120) -> Client:
+    """An HTTP client for the server `url` (default: the server of `[remote] url`); the token is `token`, else the
     first found of `find_token`. Without one only a server started with --no-auth answers, and a refusal lists where
     a token was looked for."""
-    settings = config.repo if config else {}
     url = url or (remote_parts(remote_url(config))[0] if remote_url(config) else None)
     if not url:
-        raise SystemExit("no remote: set [repo] remote in cairn.toml")
+        raise SystemExit("no remote: `cairn remote set <server>/<project>` sets one")
     source, places = "the caller", None
     if token is None:
         token, source, places = find_token(config)
-    return Client(url, token, allow_http=allow_http or bool(settings.get("allow_http")), timeout=timeout,
-                  token_source=source if token else None, token_places=places)
+    return Client(url, token, timeout=timeout, token_source=source if token else None, token_places=places)
 
 
 def where(config: Config | None, root: Path) -> str:
@@ -167,7 +168,7 @@ def where(config: Config | None, root: Path) -> str:
 
 
 def _compose(root: Path, remote: Remote | None, config: Config | None, own: bool) -> ProjectRepo:
-    """The repo at `root`, with `remote` (None: without one). `own`: the repo is the project's (`[repo] remote` is its
+    """The repo at `root`, with `remote` (None: without one). `own`: the repo is the project's (`[remote] url` is its
     remote), so its database holds the remote's copies and its pulls are the run's inputs; a remote named only for
     this call gets an outbox and blobs, no copies."""
     make_repo_folder(root, config.found if config else True)
@@ -189,7 +190,7 @@ def _compose(root: Path, remote: Remote | None, config: Config | None, own: bool
 
 
 def open_repo(config: Config | None = None) -> ProjectRepo:
-    """The project's repo (`[cairn] dir`, `$CAIRN_DIR`; created if new), composed as the module doc says."""
+    """The project's repo (`.cairn`, or `$CAIRN_DIR`; created if new), composed as the module doc says."""
     config = config or load_config()
     url = remote_url(config)
     remote = None
@@ -206,14 +207,14 @@ def _config() -> Config | None:
         return None
 
 
-def open_server(url: str, *, token: str | None = None, allow_http: bool = False) -> Server:
+def open_server(url: str, *, token: str | None = None) -> Server:
     """A server (`https://host[/prefix]`): its projects, for an admin or `cairn ui --remote <server>`."""
-    return Server(client(_config(), url, token=token, allow_http=allow_http))
+    return Server(client(_config(), url, token=token))
 
 
 def open_remote(url: str, *, token: str | None = None) -> ProjectRepo:
     """The remote project `url` (`<server>/<project>`) with the working directory's repo for its outbox and files:
-    the project's own repo when `url` is its `[repo] remote`, else a repo that keeps no copies and records no inputs
+    the project's own repo when `url` is its `[remote] url`, else a repo that keeps no copies and records no inputs
     (another project's versions never become inputs of this project's runs)."""
     config = _config()
     own = config is not None and url.rstrip("/") == remote_url(config)
@@ -258,7 +259,7 @@ def served_root(config: Config) -> tuple[Path, str]:
 
 def own_project(directory: Path | None, root: Path) -> str | None:
     """The name a repo folder's own project is served under when the folder is the project's repo (`cairn server
-    <root>`, `cairn token create <root>`): the project folder's name; None for any other folder (a server's repo)."""
+    <root>`): the project folder's name; None for any other folder (a server's repo)."""
     try:
         config = load_config(directory)
     except (SystemExit, ValueError):

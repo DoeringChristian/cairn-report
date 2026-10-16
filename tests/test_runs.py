@@ -136,7 +136,7 @@ def test_finalize_study_after_a_dead_launcher(tmp_path):
 
 
 def test_a_fresh_folder_gets_one_repo_at_the_launch_folder(hydra_project):
-    """No `.cairn/` and no `cairn.toml` yet: a Hydra job (and a 2-trial multirun) whose job folder is the run's makes
+    """No `.cairn/` yet: a Hydra job (and a 2-trial multirun) whose job folder is the run's makes
     exactly one repo, in the folder it was launched from, and publishes its runs there."""
     from cairn.store import LocalRepo
 
@@ -150,7 +150,7 @@ def test_a_fresh_folder_gets_one_repo_at_the_launch_folder(hydra_project):
     dir: ${cairn.run:}
     subdir: ${hydra.job.num}""")
     (hydra_project / "configs" / "config.yaml").write_text(config)
-    assert not (hydra_project / ".cairn").exists() and not (hydra_project / "cairn.toml").exists()
+    assert not (hydra_project / ".cairn").exists()
     single = run(hydra_project)
     assert single.returncode == 0, single.stderr
     assert single.stderr.count("created the repo") == 1 and str(hydra_project / ".cairn") in single.stderr

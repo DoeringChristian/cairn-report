@@ -15,7 +15,7 @@ This is the light API (no server, UI, reports, matplotlib, plotly, or hydra is i
 
 and the object API and shortcuts:
 
-    repo = cairn.connect()                         # the project's repo (.cairn/), with its remote if [repo] remote names one
+    repo = cairn.connect()                         # the project's repo (.cairn/), with its remote if [remote] url names one
     crops = repo.artifact("datasets/crops")
     v3 = crops.version(3)                          # or "v3", an alias, a label, a uid, a short id; crops.latest
     v3.files, v3.metadata, v3.inputs, v3.consumers, v3.upstream(), v3.downstream(), v3.open("a.txt"), v3.pull()
@@ -27,10 +27,10 @@ and the object API and shortcuts:
     cairn.versions("models/student")
     cairn.lineage("models/student@v2")             # through the run: the data it came from, what consumed it
 
-Everything works on the project's repo: the folder `.cairn/` (`[cairn] dir`, `$CAIRN_DIR`), which holds the project
+Everything works on the project's repo: the folder `.cairn/` (or `$CAIRN_DIR`), which holds the project
 (one, so references name no project: `descent@v3`). Every write goes to the repo first. Without a remote the repo is
-the source of truth and numbers its versions. With `[repo] remote = "<server>/<project>"` (a project on a `cairn
-server`; the token from `$CAIRN_TOKEN` or `[repo] token_file`) the remote is: versions wait in the repo's outbox
+the source of truth and numbers its versions. With a remote (`cairn remote set <server>/<project>`, a project on a
+`cairn server`; the token from `$CAIRN_TOKEN`, `.cairn/token`, or `~/.config/cairn/token`) the remote is: versions wait in the repo's outbox
 (pending: a uid, no number) until the remote takes them, which happens at once when it answers and otherwise
 automatically later (`cairn status`, `cairn sync`); versions used from the remote are copied into the repo. The run
 (cairn/client/runs.py) points `$CAIRN_INPUTS` at its folder, so what the process and its plain subprocesses pull are

@@ -8,6 +8,7 @@ import cairn as store
 from cairn.cli import main
 
 from test_store import env, folder  # noqa: F401  (the project fixture and folder helper)
+from conftest import write_config
 
 
 def run(capsys, *argv):
@@ -52,8 +53,8 @@ def test_publish_needs_a_folder_and_a_name(env):
 
 
 def test_a_logger_table_is_an_unknown_key(env):
-    (env / "cairn.toml").write_text('[logger]\nbackends = ["mlflow"]\n')
-    with pytest.raises(ValueError, match=r"unknown keys \['logger'\]"):
+    write_config(env, '[logger]\nbackends = ["mlflow"]\n')
+    with pytest.raises(ValueError, match=r"unknown key 'logger'"):
         main(["publish"])
 
 

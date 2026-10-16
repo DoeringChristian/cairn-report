@@ -1,5 +1,4 @@
-"""Where a client looks for its token, first found wins: $CAIRN_TOKEN, [repo] token_file, the repo's `token` file,
-~/.config/cairn/token. A refusal names the source used (never the token); no token lists the places looked in."""
+"""Where a client looks for its token, first found wins: $CAIRN_TOKEN, the repo's `token` file, ~/.config/cairn/token. A refusal names the source used (never the token); no token lists the places looked in."""
 
 import os
 import threading
@@ -11,6 +10,7 @@ import cairn
 from cairn.client.open import client, find_token, home_token
 from cairn.config import load_config
 from cairn.store.tokens import init_root
+from conftest import write_config
 
 pytest.importorskip("uvicorn")
 
@@ -25,33 +25,29 @@ def write_token(path: Path, token: str, mode: int = 0o600) -> Path:
 @pytest.fixture
 def study(tmp_path, monkeypatch):
     folder = tmp_path / "study"
-    (folder / ".cairn").mkdir(parents=True)
+    folder.mkdir()
     monkeypatch.chdir(folder)
     return folder
 
 
-def configure(folder: Path, token_file: str | None = None, remote: str = "http://127.0.0.1:9/study") -> None:
-    lines = ["[repo]", f'remote = "{remote}"'] + ([f'token_file = "{token_file}"'] if token_file else [])
-    (folder / "cairn.toml").write_text("\n".join(lines) + "\n")
+def configure(folder: Path, remote: str = "http://127.0.0.1:9/study") -> None:
+    write_config(folder, f'[remote]\nurl = "{remote}"\n')
 
 
 def test_each_source_shadows_the_later_ones(study, monkeypatch, capsys):
     home = write_token(home_token(), "h" * 40)
     repo = write_token(study / ".cairn" / "token", "r" * 40)
-    own = write_token(study / "secrets" / "token", "f" * 40)
-    configure(study, "secrets/token")
+    configure(study)
     monkeypatch.setenv("CAIRN_TOKEN", "e" * 40)
     assert find_token(load_config())[:2] == ("e" * 40, "$CAIRN_TOKEN")
     monkeypatch.delenv("CAIRN_TOKEN")
-    assert find_token(load_config())[:2] == ("f" * 40, str(own))
-    configure(study)
     assert find_token(load_config())[:2] == ("r" * 40, str(repo))
     repo.unlink()
     assert find_token(load_config())[:2] == ("h" * 40, str(home))
     home.unlink()
     token, source, places = find_token(load_config())
     assert (token, source) == ("", None)
-    for place in ("$CAIRN_TOKEN", "[repo] token_file", str(study / ".cairn" / "token"), str(home)):
+    for place in ("$CAIRN_TOKEN", str(study / ".cairn" / "token"), str(home)):
         assert place in places
 
 
@@ -93,7 +89,7 @@ def test_no_token_lists_the_places_looked_in(study, server):
         cairn.connect().artifacts()
     message = str(caught.value)
     assert f"{url}/study needs a token, and none was found" in message
-    for place in ("$CAIRN_TOKEN", "[repo] token_file", str(study / ".cairn" / "token"), str(home_token())):
+    for place in ("$CAIRN_TOKEN", str(study / ".cairn" / "token"), str(home_token())):
         assert place in message
 
 

@@ -17,7 +17,7 @@ export interface VersionRow {
 }
 export interface Entry { path: string; sha256?: string; size?: number; link?: string }
 export interface Manifest extends Omit<VersionRow, "input_count" | "file_count" | "size"> { inputs: string[]; files: Entry[]; digest?: string }
-export interface Me { scope: "owner" | "project" | "remote"; project: string | null; auth: boolean; mode?: "local" | "server"; home?: string | null }
+export interface Me { auth: boolean; mode?: "local" | "server"; home?: string | null }
 export interface LineageNode { inputs: string[] | null; consumers: string[] | null; deleted?: boolean; kind?: string; status?: string }
 export interface Lineage { ref: string; depth: number; nodes: Record<string, LineageNode>; truncated: boolean }
 export type Row = Record<string, number | string>;

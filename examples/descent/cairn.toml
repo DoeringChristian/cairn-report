@@ -1,2 +1,0 @@
-# The example project: everything Cairn keeps lives in its repo, .cairn/ (no remote; no server needed).
-# With a remote, add: [repo] remote = "http://127.0.0.1:8800/descent-example" (a project on a `cairn server`).

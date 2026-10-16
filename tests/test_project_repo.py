@@ -13,6 +13,7 @@ import urllib.request
 from http.cookiejar import CookieJar
 
 import pytest
+from conftest import read_until, write_config
 
 pytest.importorskip("uvicorn")
 
@@ -42,7 +43,7 @@ def project(tmp_path, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     folder = tmp_path / "demo"  # the UI shows the repo's one project under the folder's name
     folder.mkdir()
-    (folder / "cairn.toml").write_text("")
+    write_config(folder, "")
     return folder
 
 
@@ -50,11 +51,7 @@ def start(project, *args):
     """Start `cairn <args>` in the project; returns the process and its lines up to the login link."""
     process = subprocess.Popen([sys.executable, "-m", "cairn", *args], cwd=project, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True)
-    lines = []
-    for line in process.stdout:
-        lines.append(line.rstrip())
-        if line.startswith("Log in:") or process.poll() is not None:
-            break
+    lines = read_until(process, lambda line: line.startswith("Log in:"))
     assert lines and lines[-1].startswith("Log in:"), lines
     return process, lines
 
@@ -140,6 +137,6 @@ def test_cairn_ui_creates_the_project_repo_and_logs_in_with_a_link(project):
 
 
 def test_cairn_server_refuses_a_project_with_a_remote(project):
-    (project / "cairn.toml").write_text('[repo]\nremote = "https://cairn.example.org/demo"\n')
+    write_config(project, '[remote]\nurl = "https://cairn.example.org/demo"\n[repo]\n')
     result = run(project, sys.executable, "-m", "cairn", "server")
     assert result.returncode == 1 and "this project's repo syncs with the remote https://cairn.example.org/demo" in result.stderr

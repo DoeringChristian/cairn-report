@@ -7,7 +7,8 @@
       outbox/<uid>/              versions on their way to the remote (client/outbox.py); their blobs are in blobs/
       versions/<uid>/files/      read-only folders `pull` returns (cache.py)
       drafts/  build/  share/    folders that become versions, report builds, shared pages
-      token  tokens.jsonl        the owner token and scoped tokens, for `cairn server` and `cairn ui` (tokens.py)
+      config.toml                the project's settings (config.py)
+      token                      the owner token of `cairn server`, or a client's token for the remote (tokens.py)
       heartbeats/<uid>           a running version's owner {time, host, pid}, rewritten while it runs (see `reap`)
       server.lock                locked by the `cairn server` serving this repo (db.ServerLock)
       tmp/                       uploads in progress

@@ -3,6 +3,7 @@ import math
 import shutil
 
 import matplotlib
+from conftest import write_config
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -21,7 +22,7 @@ def histogram(values):
 
 
 def test_round_trip(tmp_path):
-    (tmp_path / "cairn.toml").write_text("")
+    write_config(tmp_path, "")
     run = tmp_path / "outputs" / "demo" / "t0"
     log = Writer(run)
     log.add({"rmse": 0.5})
@@ -53,7 +54,7 @@ def test_rejects_bad_names_and_values(tmp_path):
 def test_report_reads_logged_run(tmp_path, monkeypatch):
     import cairn as store
 
-    (tmp_path / "cairn.toml").write_text("")
+    write_config(tmp_path, "")
     monkeypatch.chdir(tmp_path)
     run = tmp_path / "outputs" / "demo" / "2026-01-01_00-00-00"
     Writer(run).add({"rmse": 0.125})
@@ -86,7 +87,7 @@ def test_origin_capture_is_cheap(tmp_path):
 def test_add_and_add_star_with_metadata(tmp_path):
     from cairn.formats import read_series
 
-    (tmp_path / "cairn.toml").write_text("")
+    write_config(tmp_path, "")
     log = Writer(tmp_path / "run")
     log.add({"loss": 0.5, "psnr": 20.0, "step": 0})
     log.add({"loss": math.inf, "lr": 1e-3, "step": 1, "nested": {"a": [1, 2]}})

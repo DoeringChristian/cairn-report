@@ -5,7 +5,7 @@
     client/http.py    HTTP and folder scanning; client/remote.py the repo interface over HTTP
     client/sync.py    the sync engine: outbox -> remote -> the repo; pure mechanism (no configuration, no printing)
     client/repo.py    the two compositions (without and with a remote) behind one interface
-    client/open.py    the source-of-truth policy: the only place that reads [repo] remote / allow_network_fs and the
+    client/open.py    the source-of-truth policy: the only place that reads [remote] url / [repo] allow_network_fs and the
                       filesystem type, and composes the layers below
     the rest          the object API, publishing, drafts, runs, CLI, UI, reports: through what open.py composes
 """

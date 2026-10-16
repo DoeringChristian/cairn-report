@@ -1,12 +1,13 @@
 """Where the UI's data comes from, as projects: the project's repo on this machine (one project, named after the
 project folder or the remote's project: mode `local`), a repo folder on this machine or a server (its projects: mode
 `server`), or one project on a server (`--remote <server>/<project>`: mode `local`). Every project is reached through
-the repo interface without a project in its calls (store/interface.py). A backend also decides which tokens may log in.
+the repo interface without a project in its calls (store/interface.py). A backend also decides which token may log in.
 """
 
 from __future__ import annotations
 
 import hmac
+import os
 import secrets
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from ..client.http import Client, ClientError, split_remote
 from ..client.remote import Remote, Server
 from ..config import Config, load_config
 from ..store import OWN, LocalProject, LocalRepo, NotFound, Unauthorized, refs
-from ..store.tokens import OWNER, Tokens, read_token
+from ..store.tokens import read_token
 from .sessions import Session
 
 
@@ -101,8 +102,8 @@ class ServerProjects:
 
 
 class LocalBackend:
-    """A repo on this machine. Login tokens are the repo's owner token and its scoped tokens; `store` is what every
-    session reads through: the project's repo as its one project, or a repo folder's projects."""
+    """A repo on this machine. The login token is the repo's token (`owner`); `store` is what every session reads
+    through: the project's repo as its one project, or a repo folder's projects."""
 
     def __init__(self, root: Path, no_auth: bool, store=None, owner: str | None = None):
         root = Path(root).expanduser().resolve()
@@ -110,24 +111,19 @@ class LocalBackend:
             raise SystemExit(f"no repo folder {root}")
         self.root, self.describe = root, str(root)
         self.store = store if store is not None else FolderProjects(LocalRepo(root, where=""), _own_name(root))
-        if not no_auth and owner is not None:  # a project's own UI: a token for this launch only, never on disk
-            self.owner, self.tokens = owner, Tokens(root)
+        self.owner = ""
+        if not no_auth and owner is not None:  # a project's own UI (see open_backend)
+            self.owner = owner
         elif not no_auth:
             if not (root / "token").is_file():
                 raise SystemExit(f"{root} has no owner token (not a repo?); use --no-auth to browse it without a login")
-            self.owner, self.tokens = read_token(root / "token"), Tokens(root)
+            self.owner = read_token(root / "token")
 
     def anonymous(self) -> Session:
-        return Session(self.store, None)
+        return Session(self.store)
 
     def login(self, token: str) -> Session | None:
-        if hmac.compare_digest(token.encode(), self.owner.encode()):
-            return Session(self.store, OWNER)
-        principal = self.tokens.find(token)
-        return Session(self.store, principal) if principal else None
-
-    def valid(self, session: Session) -> bool:
-        return session.principal is OWNER or self.tokens.by_id(session.principal.id) is not None
+        return Session(self.store) if self.owner and hmac.compare_digest(token.encode(), self.owner.encode()) else None
 
 
 def _own_name(root: Path) -> str | None:
@@ -141,18 +137,18 @@ class RemoteBackend:
     """A server (`url`: its projects) or one project on it (`url` = `<server>/<project>`). Login tokens are checked by
     the server itself."""
 
-    def __init__(self, url: str, allow_http: bool, token: str = ""):
-        self.server_url, self.project = _server_or_project(url, allow_http)
-        self.client = Client(self.server_url, token, allow_http=allow_http)  # refuses plain HTTP to a non-local host
+    def __init__(self, url: str, token: str = ""):
+        self.server_url, self.project = _server_or_project(url)
+        self.client = Client(self.server_url, token)
         self.url = self.describe = url.rstrip("/")
-        self.allow_http, self.token = allow_http, token
+        self.token = token
 
     def _store(self, token: str):
-        server = Server(Client(self.server_url, token, allow_http=self.allow_http, token_source="the login"))
+        server = Server(Client(self.server_url, token, token_source="the login"))
         return OneProject(self.project, server.project(self.project)) if self.project else ServerProjects(server)
 
     def anonymous(self) -> Session:
-        return Session(self._store(self.token), None)
+        return Session(self._store(self.token))
 
     def login(self, token: str) -> Session | None:
         store = self._store(token)
@@ -160,20 +156,17 @@ class RemoteBackend:
             store.overviews()
         except Unauthorized:
             return None
-        return Session(store, None)
-
-    def valid(self, session: Session) -> bool:
-        return True  # a revoked token fails on its next request (401)
+        return Session(store)
 
 
-def _server_or_project(url: str, allow_http: bool) -> tuple[str, str | None]:
+def _server_or_project(url: str) -> tuple[str, str | None]:
     """(server URL, project or None) of `--remote URL`: a URL with a path is a project on a server
     (`<server>/<project>`) unless the server answers at the URL itself (a server behind a path prefix)."""
     server, project = split_remote(url)
     if project is None:
         return server, None
     try:
-        Client(url, "", allow_http=allow_http, timeout=10).json("GET", "/api/v2/repo")
+        Client(url, "", timeout=10).json("GET", "/api/v2/repo")
         return url.rstrip("/"), None  # the API answers here: a server behind a path prefix
     except ClientError as error:
         if error.status == 401:
@@ -183,24 +176,36 @@ def _server_or_project(url: str, allow_http: bool) -> tuple[str, str | None]:
     return server, refs.valid_project(project)
 
 
-def open_backend(remote: str | None = None, repo: str | Path | None = None, config: Config | None = None, no_auth: bool = False,
-                 allow_http: bool = False) -> LocalBackend | RemoteBackend:
+def open_backend(remote: str | None = None, repo: str | Path | None = None, config: Config | None = None,
+                 no_auth: bool = False) -> LocalBackend | RemoteBackend:
     """`--remote URL`, else `--repo FOLDER`, else the project's repo (created, with an owner token, if it is new; it
     reads through the project's remote when it has one, and shows its one project under the project folder's name, or
     the remote's project)."""
     from ..client.open import client, open_repo, project_label
 
     if remote:
-        allowed = allow_http or bool(config and config.repo.get("allow_http"))
-        token = client(config, remote, allow_http=allowed).token if no_auth else ""  # the first token open.find_token finds
-        return RemoteBackend(remote, allowed, token)
+        token = client(config, remote).token if no_auth else ""  # the first token open.find_token finds
+        return RemoteBackend(remote, token)
     if repo is not None:
         return LocalBackend(Path(repo), no_auth)
     config = config or load_config()
     root = Path(config.cairn_dir)
     store = open_repo(config)  # makes the repo if it is new
     # The project's own UI never writes <repo>/token: that file is a client's token for the remote (and a server's
-    # owner token), so a token made here would be sent to the remote. Without one, this launch logs in with a
-    # random token that only lives in this process (the one-time link carries it).
-    owner = None if (root / "token").is_file() else secrets.token_urlsafe(32)
+    # owner token), so a token made here would be sent to the remote. Without one, it logs in with <repo>/ui-token,
+    # made once (owner-only) and never sent anywhere, so a browser's session outlives a restart of the UI.
+    owner = None if (root / "token").is_file() else ui_token(root)
     return LocalBackend(root, no_auth, OneProject(project_label(config), store), owner=owner)
+
+
+def ui_token(root: Path) -> str:
+    """`<repo>/ui-token`: the login token of a project's own UI when the repo has no `token`, made on first use."""
+    path = Path(root) / "ui-token"
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return read_token(path)
+    with os.fdopen(descriptor, "w") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        handle.write(secrets.token_urlsafe(32) + "\n")
+    return read_token(path)

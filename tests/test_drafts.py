@@ -17,8 +17,9 @@ from cairn.cli import main
 from cairn.client import drafts
 from cairn.formats import read_scalars
 
-from test_objects import configured  # noqa: F401  (local store or store server, with cairn.toml)
+from test_objects import configured  # noqa: F401  (local store or store server, with .cairn/config.toml)
 from test_store import env, folder  # noqa: F401
+from conftest import write_config
 
 LABEL = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
 
@@ -107,7 +108,7 @@ def test_a_draft_published_while_the_server_is_down_is_pending(configured, env):
 
 
 def test_nested_drafts_are_outputs_of_the_one_run(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     outer = cairn.draft("outer")
     inner = cairn.draft("inner")
     with cairn.draft("innermost") as innermost:
@@ -162,7 +163,7 @@ def test_a_failed_run_keeps_the_edge_to_its_outputs(configured, env):
 
 
 def test_config_becomes_metadata(env, capsys):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     with cairn.draft("fit", config={"lr": 0.1, "model": {"depth": 3, "widths": [8, 16]}}) as fit:
         assert fit.config == {"lr": 0.1, "model": {"depth": 3, "widths": [8, 16]}}
         (fit.path / "a.txt").write_text("a")
@@ -205,7 +206,7 @@ def test_watch_marks_the_version_failed_on_an_exception(configured, env):
 
 
 def test_watch_syncs_in_the_background(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     store = cairn.connect()
     with cairn.draft("live", watch=True) as run:
         run._stop.set()  # restart the follower with a short interval
@@ -273,7 +274,7 @@ def test_a_local_store_shares_storage_with_the_published_blobs(env, monkeypatch)
     import cairn.store.fs
 
     monkeypatch.setattr(cairn.store.fs, "clone", lambda source, target: False)
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     with cairn.draft("big") as run:
         (run.path / "data.bin").write_bytes(os.urandom(1 << 16))
         inode = (run.path / "data.bin").stat().st_ino
@@ -429,7 +430,7 @@ def test_hydra_multirun_publishes_one_sweep_draft(hydra_project):
 
 def test_finalize_study_publishes_a_sweep_draft(env, capsys):
     pytest.importorskip("hydra")
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     sweep = drafts.Draft("sweep", activate=False)
     for trial in ("0", "1"):
         (sweep.folder / trial / ".hydra").mkdir(parents=True)

@@ -1,7 +1,7 @@
-"""Command line: `cairn init | build | serve | share | publish | pull | artifacts | versions | show | alias | delete | retention |
-gc | sync | status | prune | verify | server | ui | token | export-metadata | finalize-study | drafts`.
+"""Command line: `cairn init | remote | build | serve | share | publish | pull | artifacts | versions | show | alias | delete |
+retention | gc | sync | status | prune | verify | server | ui | export-metadata | finalize-study | drafts`.
 
-A repo holds one project, so no command names one, except the server admin's `cairn token create --project`.
+A repo holds one project, so no command names one. Settings live in the repo's `.cairn/config.toml` (config.py).
 References are `name[@vN|@uid|@<short id>|@alias|@label]`, or a bare short id; versions are shown with their short id.
 
 Every command that uses the repo first tries to send what waits for its remote, and once more at its end (quietly,
@@ -42,7 +42,7 @@ def cmd_publish(args) -> None:
     from .reports.publishing import is_report_folder, publish_report
     from .store import IncompleteRun
 
-    config = with_options(load_config(args.directory), args)
+    config = load_config(args.directory)
     meta, command = parse_meta(args.meta), args.command or None
     if args.folder is not None and is_report_folder(config, Path(args.folder)):
         if args.name or args.watch or command or args.label or args.alias or meta:
@@ -59,19 +59,12 @@ def cmd_publish(args) -> None:
         raise SystemExit(f"error: {error}")
 
 
-def with_options(config, args):
-    """The config with the command's `--allow-http` applied."""
-    from dataclasses import replace
-
-    return replace(config, repo={**config.repo, "allow_http": True}) if getattr(args, "allow_http", False) else config
-
-
 def cmd_pull(args) -> None:
     import shutil
 
     from .client.open import open_repo
 
-    config = with_options(load_config(args.directory), args)
+    config = load_config(args.directory)
     path = open_repo(config).pull(args.ref, record=not args.no_record, offline=args.offline)
     if args.into is None:
         return print(path)
@@ -91,7 +84,7 @@ def open_objects(args):
     from .client.objects import Repo
     from .client.open import open_repo
 
-    return Repo(open_repo(with_options(load_config(args.directory), args)))
+    return Repo(open_repo(load_config(args.directory)))
 
 
 def report(line: str) -> None:
@@ -103,7 +96,7 @@ def sync_quietly(args) -> None:
     from .client.open import sync_now
 
     try:
-        config = with_options(load_config(args.directory), args)
+        config = load_config(args.directory)
     except (SystemExit, ValueError):
         return
     sync_now(config, report)
@@ -305,11 +298,22 @@ def cmd_gc(args) -> None:
           f"({describe_bytes(result['temporary_bytes'])}); grace {grace / 3600:g} h")
 
 
+def make_repo(repo: Path) -> None:
+    """A new repo folder: `.gitignore`, `repo.json` (the folder becomes private to its owner), the config template."""
+    from .config import protect, write_template
+    from .store.local import repo_uid
+
+    protect(repo)
+    repo.mkdir(parents=True, exist_ok=True)
+    repo_uid(repo)
+    write_template(repo)
+
+
 def cmd_init(args) -> None:
     import os
 
-    from .config import BASE_NAME, protect
-    from .store.local import REPO_FILE, repo_uid
+    from .config import BASE_NAME
+    from .store.local import REPO_FILE
 
     if args.path is not None:
         repo = Path(args.path).expanduser().resolve() / BASE_NAME
@@ -319,10 +323,37 @@ def cmd_init(args) -> None:
         repo = Path.cwd().resolve() / BASE_NAME
     if (repo / REPO_FILE).is_file():
         return print(f"the repo {repo} exists already")
-    protect(repo)
-    repo.mkdir(parents=True, exist_ok=True)
-    repo_uid(repo)  # repo.json; the folder becomes private to its owner
-    print(f"created the repo {repo}")
+    make_repo(repo)
+    print(f"created the repo {repo} (settings: {repo / 'config.toml'}; `cairn remote set <url>` adds a remote)")
+
+
+def cmd_remote(args) -> None:
+    from .client.open import remote_url, valid_remote
+    from .config import set_remote
+
+    config = load_config(args.directory)
+    action = getattr(args, "remote_command", None)
+    current = remote_url(config)
+    if action is None:
+        return print(current or "no remote")
+    if action == "set":
+        url = valid_remote(args.url)
+        if not (config.cairn_dir / "repo.json").is_file():
+            make_repo(config.cairn_dir)
+            print(f"created the repo {config.cairn_dir}")
+        set_remote(config.source, url)
+        print(f"remote: {url}")
+        if url != current:
+            print("The next cairn command that uses the repo syncs with it (or run `cairn sync` now): versions this repo "
+                  "numbered itself are adopted, sent oldest first and renumbered by the remote (their uids stay, so "
+                  "lineage and reports stay valid). The token is $CAIRN_TOKEN, .cairn/token, or ~/.config/cairn/token.")
+        return
+    if current is None:
+        return print("no remote")
+    set_remote(config.source, None)
+    print(f"removed the remote {current}: this repo is the source of truth again. Versions keep their numbers (copies of "
+          "the remote's too), and pending ones stay pending: they wait in the outbox, unnumbered, until a remote is "
+          "set again.")
 
 
 def cmd_sync(args) -> None:
@@ -333,7 +364,7 @@ def cmd_sync(args) -> None:
     while True:
         result = store.sync(report=lambda line: print(line, flush=True))
         if result["remote"] is None:
-            return print("this repo has no remote ([repo] remote): there is nothing to sync")
+            return print("this repo has no remote (`cairn remote set <url>`): there is nothing to sync")
         waiting = [record for record in result["waiting"] if record["sync"] != "running"]
         running = [record for record in result["waiting"] if record["sync"] == "running"]
         if not args.watch:
@@ -457,17 +488,17 @@ def cmd_ui(args) -> None:
         raise SystemExit("ui takes --remote URL or --repo FOLDER, not both")
     config = None
     try:
-        config = with_options(load_config(args.directory), args)
+        config = load_config(args.directory)
     except (SystemExit, ValueError):
         if not (args.remote or args.repo):
             raise
-    backend = open_backend(args.remote, args.repo, config, no_auth=args.no_auth, allow_http=args.allow_http)
+    backend = open_backend(args.remote, args.repo, config, no_auth=args.no_auth)
     login = getattr(backend, "owner", "")  # the token the one-time login link logs in with
     if not login and not args.no_auth:
         from .client.open import client
 
         try:
-            login = client(config, args.remote, allow_http=args.allow_http).token  # the first token open.find_token finds
+            login = client(config, args.remote).token  # the first token open.find_token finds
         except SystemExit:
             login = ""
     serve_ui(backend, host=args.host, port=args.port, no_auth=args.no_auth,
@@ -485,33 +516,6 @@ def cmd_export_metadata(args) -> None:
         print(f"{args.folder / file}  {count} rows")
 
 
-def cmd_token_create(args) -> None:
-    from .store.tokens import create_token
-
-    from .client.open import own_project
-
-    token = create_token(args.root, args.project, write=args.write, name=args.name, own=own_project(args.directory, args.root))
-    print(f"Token: {token}")
-    print(f"  {'read and write' if args.write else 'read-only'} access to project {args.project!r}; shown only now, stored hashed.")
-
-
-def cmd_token_list(args) -> None:
-    from .store.tokens import list_tokens
-
-    rows = list_tokens(args.root)
-    for row in rows:
-        print(f"{row['name']}\t{row['project']}\t{'write' if row['write'] else 'read'}\t{row['created'][:19]}")
-    if not rows:
-        print("no scoped tokens")
-
-
-def cmd_token_revoke(args) -> None:
-    from .store.tokens import revoke_token
-
-    revoke_token(args.root, args.name)
-    print(f"revoked {args.name}")
-
-
 def cmd_finalize_study(args) -> None:
     from .runs.hydra import finalize_study
 
@@ -524,7 +528,7 @@ def cmd_finalize_study(args) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="cairn", description="Cairn: a repo of versioned artifacts for research (runs, their results, reports built from pinned artifacts), with an optional remote, a server, and a UI.")
     parser.add_argument("--version", action="version", version=f"cairn {__version__}")
-    parser.add_argument("-C", "--directory", type=Path, help="the project folder (default: the nearest folder upward with .cairn/repo.json or cairn.toml, else here)")
+    parser.add_argument("-C", "--directory", type=Path, help="the project folder (default: the nearest folder upward with .cairn/repo.json, else here)")
     commands = parser.add_subparsers(dest="command", required=True)
 
     build = commands.add_parser("build", help="build every report (or one)")
@@ -572,13 +576,11 @@ def main(argv: list[str] | None = None) -> None:
     publish.add_argument("--interval", type=float, help=argparse.SUPPRESS)
     publish.set_defaults(run=cmd_publish)
 
-    publish.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
     pull = commands.add_parser("pull", help="materialize an artifact version locally and print its path")
     pull.add_argument("ref", help="name[@vN|@<short id>|@alias|@label][//file], or a bare short id, e.g. datasets/crops@v3")
     pull.add_argument("--into", type=Path, help="copy it into this folder instead of printing the read-only path")
     pull.add_argument("--no-record", action="store_true", help="do not append the version to the inputs file ($CAIRN_INPUTS or .cairn-inputs.jsonl)")
     pull.add_argument("--offline", action="store_true", help="do not ask the remote: the repo's pending versions, its copies, and its mirrored aliases")
-    pull.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
     pull.set_defaults(run=cmd_pull)
 
     artifacts = commands.add_parser("artifacts", help="the repo's artifacts (latest version, versions, aliases)")
@@ -613,17 +615,23 @@ def main(argv: list[str] | None = None) -> None:
             command.add_argument("--keep-days", type=float, help="keep versions younger than D days")
             command.add_argument("--no-keep-aliased", action="store_true",
                                  help="aliased versions take a --keep-last place like any other (they are still never deleted)")
-        command.add_argument("--allow-http", action="store_true", help=argparse.SUPPRESS)
         command.set_defaults(run=cmd_retention)
     gc = commands.add_parser("gc", help="apply the retention rules and remove blobs no version names (the project's repo, its remote, or a repo folder)")
     gc.add_argument("root", nargs="?", type=Path, help="a repo folder on this machine (default: the project's repo, or its remote: the owner token)")
     gc.add_argument("--dry-run", action="store_true", help="only say what would be deleted and freed")
     gc.add_argument("--grace", default="24h", help="keep unreferenced blobs younger than this, e.g. 24h, 30m (default: 24h)")
     gc.set_defaults(run=cmd_gc)
-    init = commands.add_parser("init", help="create a repo, .cairn/, in a folder (default: here; $CAIRN_DIR if set); "
-                               "a repo that exists is left as it is")
+    init = commands.add_parser("init", help="create a repo, .cairn/ with a commented config.toml, in a folder (default: here; "
+                               "$CAIRN_DIR if set); a repo that exists is left as it is")
     init.add_argument("path", nargs="?", type=Path, help="the folder to create .cairn/ in (default: the working directory)")
     init.set_defaults(run=cmd_init)
+    remote = commands.add_parser("remote", help="show the repo's remote ([remote] url in .cairn/config.toml), or set or remove it")
+    remote.set_defaults(run=cmd_remote)
+    remote_commands = remote.add_subparsers(dest="remote_command")
+    remote_set = remote_commands.add_parser("set", help="sync with a project on a `cairn server`: http(s)://host[:port][/prefix]/<project>")
+    remote_set.add_argument("url")
+    remote_set.set_defaults(run=cmd_remote)
+    remote_commands.add_parser("remove", help="stop syncing: the repo becomes the source of truth").set_defaults(run=cmd_remote)
     sync = commands.add_parser("sync", help="send the repo's pending versions to its remote now, and mirror the remote's aliases")
     sync.add_argument("--watch", action="store_true", help="keep going every [repo] interval seconds (a login node's sender)")
     sync.set_defaults(run=cmd_sync)
@@ -634,20 +642,17 @@ def main(argv: list[str] | None = None) -> None:
     prune.add_argument("--max-size", help="then remove the least recently pulled until the repo is under this, e.g. 20G")
     prune.add_argument("--dry-run", action="store_true", help="only say what would be removed")
     prune.set_defaults(run=cmd_prune)
-    for command in (artifacts, versions, show, sync, status, delete, gc, prune):
-        command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
 
     verify = commands.add_parser("verify", help="re-hash what the repo holds (blobs, versions, read-only folders, the outbox); exit 1 on any problem")
     verify.add_argument("ref", nargs="?", help="name[@vN|@uid|@<short id>|@alias|@label], or a bare short id: one version")
     verify.add_argument("--repo", type=Path, help="a repo folder on this machine instead of the project's (a server's)")
     verify.add_argument("--repair", action="store_true", help="remove what can be made again (broken read-only folders; broken contents of a remote's versions), never the only copy")
-    verify.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
     verify.set_defaults(run=cmd_verify)
 
     store_serve = commands.add_parser("server", help="serve a repo to other machines (a new one gets an owner token); put an HTTPS reverse proxy in front")
     store_serve.add_argument("root", type=Path, nargs="?", help="the repo folder (default: the project's, .cairn; created if new)")
     store_serve.add_argument("--host", default="127.0.0.1")
-    store_serve.add_argument("--port", type=int, default=8800, help="the port; a taken port is an error (clients' [repo] remote names it)")
+    store_serve.add_argument("--port", type=int, default=8800, help="the port; a taken port is an error (clients' remote URL names it)")
     store_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
     store_serve.add_argument("--no-auth", action="store_true", help="no token, everyone acts as the owner (local testing; loopback hosts only)")
     store_serve.add_argument("--ui-port", type=int, help="port of the UI started beside the server (default: --port + 1)")
@@ -662,30 +667,13 @@ def main(argv: list[str] | None = None) -> None:
     export_metadata.add_argument("root", type=Path)
     export_metadata.add_argument("folder", type=Path)
     export_metadata.set_defaults(run=cmd_export_metadata)
-    token = commands.add_parser("token", help="project-scoped tokens of a served repo (a server admin's command)").add_subparsers(
-        dest="token_command", required=True)
-    token_create = token.add_parser("create", help="print a new token for one project of a served repo (shown once, stored hashed); "
-                                    "the project is made if it is new")
-    token_create.add_argument("root", type=Path, help="the served repo folder")
-    token_create.add_argument("--project", required=True, help="the project the token reaches (clients' remote <server>/<project>)")
-    token_create.add_argument("--write", action="store_true", help="allow publishing (default: read-only)")
-    token_create.add_argument("--name", help="a name to list and revoke it by")
-    token_create.set_defaults(run=cmd_token_create)
-    token_list = token.add_parser("list", help="list the scoped tokens (never their values)")
-    token_list.add_argument("root", type=Path)
-    token_list.set_defaults(run=cmd_token_list)
-    token_revoke = token.add_parser("revoke", help="stop a token from working")
-    token_revoke.add_argument("root", type=Path)
-    token_revoke.add_argument("name")
-    token_revoke.set_defaults(run=cmd_token_revoke)
 
     ui = commands.add_parser("ui", help="explore the repo in a browser: its reports, artifacts, versions (pending ones too), and lineage")
     ui.add_argument("--remote", help="a server's URL (its projects) or a project on it, <server>/<project>, instead of the project's repo")
     ui.add_argument("--repo", type=Path, help="a repo folder on this machine instead of the project's (a server's)")
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8801)
-    ui.add_argument("--no-auth", action="store_true", help="no login: use CAIRN_TOKEN / [repo] token_file for a remote (loopback hosts only)")
-    ui.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
+    ui.add_argument("--no-auth", action="store_true", help="no login: use the client's token (CAIRN_TOKEN, .cairn/token, ~/.config/cairn/token) for a remote (loopback hosts only)")
     ui.add_argument("--no-browser", action="store_true", help="do not open the one-time login link in a browser")
     ui.set_defaults(run=cmd_ui)
 

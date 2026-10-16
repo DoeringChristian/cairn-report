@@ -11,18 +11,19 @@ from cairn.store.uids import UID
 
 from test_identity import Server
 from test_store import env, folder  # noqa: F401
+from conftest import write_config
 
 
 @pytest.fixture(params=["local", "remote"])
 def configured(request, env, tmp_path, monkeypatch):
-    """cairn.toml pointing at a local store folder or at a running store server."""
+    """.cairn/config.toml pointing at a local store folder or at a running store server."""
     if request.param == "local":
-        (env / "cairn.toml").write_text("")
+        write_config(env, "")
         yield None
         return
     server = Server(tmp_path / "store-root").start()
     monkeypatch.setenv("CAIRN_TOKEN", server.token)
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/study"\n')
+    write_config(env, f'[remote]\nurl = "{server.url}/study"\n[repo]\n')
     yield server
     server.stop()
 

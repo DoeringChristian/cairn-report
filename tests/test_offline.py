@@ -17,6 +17,7 @@ from cairn.store.uids import UID
 
 from test_identity import Server
 from test_store import env, folder  # noqa: F401
+from conftest import write_config
 
 
 @pytest.fixture
@@ -24,7 +25,7 @@ def down(env, tmp_path, monkeypatch):
     """A configured remote that is not running yet (start it with `down.start()`)."""
     server = Server(tmp_path / "store-root")
     monkeypatch.setenv("CAIRN_TOKEN", server.token)
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/study"\n')
+    write_config(env, f'[remote]\nurl = "{server.url}/study"\n[repo]\n')
     import cairn.client.repo as repo
 
     monkeypatch.setattr(repo, "start_uploader", lambda *args, **kwargs: None)  # tests sync by hand
@@ -107,7 +108,7 @@ def test_any_cli_command_sends_pending_versions_first(down, env, capsys):
 def test_background_uploader_sends_when_the_server_answers(env, tmp_path, monkeypatch, capsys):
     server = Server(tmp_path / "store-root")
     monkeypatch.setenv("CAIRN_TOKEN", server.token)
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{server.url}/study"\n')
+    write_config(env, f'[remote]\nurl = "{server.url}/study"\n[repo]\n')
     version = cairn.connect().artifact("data").publish(folder(env, "d", {"a.txt": "1"}))
     assert version.number is None
     server.start()

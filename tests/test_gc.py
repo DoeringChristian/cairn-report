@@ -21,6 +21,7 @@ from cairn.store.gc import DAY, parse_duration
 
 from test_server import api, call, remote, server, use_remote  # noqa: F401  (the store server in a thread, helpers)
 from test_store import env, folder  # noqa: F401
+from conftest import write_config
 
 LATER = 2 * DAY  # a clock this far ahead sees every blob past the default grace period
 
@@ -345,19 +346,14 @@ def seed_two(server):
             r.publish("data", [entry])
 
 
-def test_deleting_through_the_server_needs_the_right_token(server):
-    from cairn.store.tokens import create_token
-
+def test_deleting_through_the_server_needs_the_token(server):
     seed_two(server)
-    reader = create_token(server.root, "alpha", name="reader")
-    writer = create_token(server.root, "alpha", write=True, name="writer")
+    writer = server.token
     path = "/api/v2/projects/alpha/artifacts/data/versions/3"
-    assert call(server, "DELETE", path, token=reader)[0] == 403
-    assert call(server, "DELETE", "/api/v2/projects/beta/artifacts/data/versions/3", token=writer)[0] == 403  # other project
-    assert call(server, "DELETE", path + "?force=1", token=writer)[0] == 403  # force: the owner only
+    assert call(server, "DELETE", path, token="x" * 43)[0] == 401
     assert api(server, "DELETE", path + "?reason=wrong%20crop", token=writer) == {"deleted": ["data@v3"], "skipped": []}
     tomb = api(server, "GET", path)
-    assert (tomb["status"], tomb["reason"], tomb["deleted_by"]) == ("deleted", "wrong crop", "writer")
+    assert (tomb["status"], tomb["reason"], tomb["deleted_by"]) == ("deleted", "wrong crop", "owner")
     assert call(server, "DELETE", path, token=writer)[0] == 410
     assert call(server, "GET", "/files/alpha/data@v3//f.txt")[0] == 410
     status, _, body = call(server, "GET", "/api/v2/projects/alpha/resolve?ref=data@v3")
@@ -374,24 +370,17 @@ def test_deleting_through_the_server_needs_the_right_token(server):
     assert call(server, "DELETE", "/api/v2/projects/alpha", token=writer)[0] == 409  # not empty
     assert api(server, "DELETE", "/api/v2/projects/alpha/artifacts/data", token=writer)["deleted"] == ["data@v2"]
     assert api(server, "DELETE", "/api/v2/projects/alpha", token=writer)["project"] == "alpha"
-    assert call(server, "DELETE", "/api/v2/projects/beta?force=1", token=writer)[0] == 403
     assert [item["name"] for item in api(server, "GET", "/api/v2/projects")] == ["beta"]
 
 
 def test_retention_and_gc_routes(server):
-    from cairn.store.tokens import create_token
-
     seed_two(server)
-    reader = create_token(server.root, "alpha", name="reader")
-    writer = create_token(server.root, "alpha", write=True, name="writer")
     rules = {"rules": [{"prefix": "", "keep_last": 1}]}
-    assert call(server, "PUT", "/api/v2/projects/alpha/retention", rules, token=reader)[0] == 403
-    assert call(server, "PUT", "/api/v2/projects/beta/retention", rules, token=writer)[0] == 403
-    assert call(server, "PUT", "/api/v2/projects/alpha/retention", {"rules": [{"keep_last": -1}]}, token=writer)[0] == 400
-    assert api(server, "PUT", "/api/v2/projects/alpha/retention", rules, token=writer)["rules"][0]["keep_last"] == 1
-    assert api(server, "GET", "/api/v2/projects/alpha/retention", token=reader)["rules"][0]["keep_last"] == 1
-    for token in (reader, writer):
-        assert call(server, "POST", "/api/v2/gc", {"dry_run": True}, token=token)[0] == 403
+    assert call(server, "PUT", "/api/v2/projects/alpha/retention", rules, token="x" * 43)[0] == 401
+    assert call(server, "PUT", "/api/v2/projects/alpha/retention", {"rules": [{"keep_last": -1}]})[0] == 400
+    assert api(server, "PUT", "/api/v2/projects/alpha/retention", rules)["rules"][0]["keep_last"] == 1
+    assert api(server, "GET", "/api/v2/projects/alpha/retention")["rules"][0]["keep_last"] == 1
+    assert call(server, "POST", "/api/v2/gc", {"dry_run": True}, token="x" * 43)[0] == 401
     dry = api(server, "POST", "/api/v2/gc", {})  # a dry run by default
     assert dry["dry_run"] and dry["deleted"] == ["data@v2 (project alpha)", "data@v1 (project alpha)"] and dry["blobs"] == 0
     assert [v["status"] for v in api(server, "GET", "/api/v2/projects/alpha/artifacts/data/versions")] == ["completed"] * 3
@@ -464,14 +453,14 @@ def test_publishes_racing_server_sweeps_end_complete_and_downloadable(server, en
 @pytest.fixture(params=["local", "remote"])
 def configured(request, env, tmp_path, monkeypatch):
     if request.param == "local":
-        (env / "cairn.toml").write_text("")
+        write_config(env, "")
         yield SimpleNamespace(root=env / ".cairn", remote=False)  # the project's repo, without a remote
         return
     from test_identity import Server
 
     started = Server(tmp_path / "store-root").start()
     monkeypatch.setenv("CAIRN_TOKEN", started.token)
-    (env / "cairn.toml").write_text(f'[repo]\nremote = "{started.url}/study"\n')
+    write_config(env, f'[remote]\nurl = "{started.url}/study"\n[repo]\n')
     yield SimpleNamespace(root=tmp_path / "store-root", remote=True)
     started.stop()
 

@@ -19,8 +19,9 @@ from cairn.client import drafts, runs
 from cairn.formats import read_jsonl
 
 from test_drafts import published_dataset
-from test_objects import configured  # noqa: F401  (local store or store server, with cairn.toml)
+from test_objects import configured  # noqa: F401  (local store or store server, with .cairn/config.toml)
 from test_store import env, folder  # noqa: F401
+from conftest import write_config, config_file
 
 
 def finish_and_sync(run):
@@ -52,7 +53,7 @@ def test_the_first_use_pull_or_draft_starts_the_run(configured, env):
 
 
 def test_one_run_per_process(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     run = cairn.init(name="train", config={"lr": 0.1}, metadata={"note": "first"}, system=False, code=False)
     assert run.name == "runs/train" and cairn.init() is run and cairn.init(name="train") is run and cairn.run == run
     with pytest.raises(cairn.StoreError, match="one run per process"):
@@ -89,7 +90,7 @@ def test_init_after_an_implicit_start_updates_the_running_run(configured, env):
 
 
 def test_use_refuses_versions_that_are_not_completed(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     run = cairn.init(name="producer", system=False, code=False)
     with pytest.raises(cairn.StoreError, match="running"):
         cairn.use(run.ref)
@@ -122,7 +123,7 @@ def test_running_inputs_by_uid_are_accepted_failed_and_unknown_ones_refused(conf
 
 
 def test_lineage_looks_through_runs(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     data = published_dataset(env, "datasets/a")
     first = cairn.init(name="train", system=False, code=False)
     cairn.use("datasets/a@v1")
@@ -148,7 +149,7 @@ def test_lineage_looks_through_runs(env):
 
 
 def test_open_drafts_are_published_with_the_run(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     run = cairn.init(name="loose", system=False, code=False)
     left_open = cairn.draft("forgotten")
     left_open.add({"x": 1})
@@ -158,7 +159,7 @@ def test_open_drafts_are_published_with_the_run(env):
 
 
 def test_a_subprocess_of_a_run_records_in_that_run(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     data = published_dataset(env)
     run = cairn.init(name="parent", system=False, code=False)
     child = "import cairn; cairn.use('datasets/toy@v1'); d = cairn.draft('child-out'); d.add({'x': 1}); d.publish(); assert not cairn.run"
@@ -171,7 +172,7 @@ def test_a_subprocess_of_a_run_records_in_that_run(env):
 def test_watch_syncs_a_running_run_to_the_server(configured, env):
     if configured is None:
         pytest.skip("a store server only (a local store syncs the run when it ends, unless watch=True)")
-    (env / "cairn.toml").write_text((env / "cairn.toml").read_text().replace("[repo]\n", "[repo]\ninterval = 0.2\n"))
+    write_config(env, config_file(env).read_text().replace("[repo]\n", "[repo]\ninterval = 0.2\n"))
     run = cairn.init(name="live", system=False, code=False)
     assert run.watch  # the default with a store server
     run.add({"loss": 1.0, "step": 0})
@@ -236,7 +237,7 @@ if mode == "fail":
 
 @pytest.fixture
 def script_project(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     (env / "job.py").write_text(SCRIPT)
     (env / "secrets.env").write_text("TOKEN=x")
     (env / "data").mkdir()
@@ -323,7 +324,7 @@ EXITS = [("sys.exit(3)", 3), ("raise SystemExit(4)", 4), ("sys.exit('boom')", 1)
 @pytest.mark.parametrize("statement, code", EXITS, ids=[statement.split("\n")[0] for statement, _ in EXITS])
 def test_a_non_zero_exit_fails_the_run(env, statement, code):
     """`sys.exit(n)` and `raise SystemExit(n)` that leave the script: n != 0 (or a message) fails the run."""
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     (env / "exit.py").write_text("import sys, cairn\ncairn.init(name='exit', system=False, code=False)\n" + statement + "\n")
     result = subprocess.run([sys.executable, "exit.py"], cwd=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == code, result.stderr
@@ -337,7 +338,7 @@ def test_a_non_zero_exit_fails_the_run(env, statement, code):
 
 
 def test_an_unhandled_exception_keeps_its_traceback_and_records_no_exit_code(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     (env / "boom.py").write_text("import cairn\ncairn.init(name='boom', system=False, code=False)\nraise ValueError('x')\n")
     assert subprocess.run([sys.executable, "boom.py"], cwd=env, capture_output=True).returncode == 1
     [kept] = drafts.drafts()
@@ -392,7 +393,7 @@ def test_a_local_version_is_failed_by_age_or_dead_owner_and_never_while_alive(tm
 
 
 def test_capture_and_system_can_be_turned_off(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     code = "import cairn; run = cairn.init(name='quiet', capture=False, system=False, code=False); print('hi')"
     result = subprocess.run([sys.executable, "-c", code], cwd=env, capture_output=True, text=True)
     assert result.returncode == 0 and result.stdout == "hi\n", result.stderr
@@ -401,7 +402,7 @@ def test_capture_and_system_can_be_turned_off(env):
 
 
 def test_the_default_name_follows_the_script(env):
-    (env / "cairn.toml").write_text("")
+    write_config(env, "")
     (env / "pkg").mkdir()
     (env / "pkg" / "__init__.py").write_text("")
     (env / "pkg" / "Train_Model.py").write_text("import cairn\nprint(cairn.init(system=False, code=False).name)\n")

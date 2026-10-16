@@ -29,7 +29,7 @@ from cairn.cli import main  # noqa: E402
 from cairn.server import make_server  # noqa: E402
 from cairn.store.tokens import init_root  # noqa: E402
 from cairn.ui import RemoteBackend, make_ui_server  # noqa: E402
-from conftest import make_data, write  # noqa: E402
+from conftest import make_data, write, write_config  # noqa: E402
 
 
 def png(path: Path, width: int, height: int) -> None:
@@ -46,8 +46,7 @@ def png(path: Path, width: int, height: int) -> None:
 def build_data(base: Path, url: str) -> None:
     project = base / "study"
     project.mkdir()
-    (project / "cairn.toml").write_text("")
-    (project / "cairn.toml").write_text(f'[repo]\nremote = "{url}/study"\ninterval = 1\n')
+    write_config(project, f'[remote]\nurl = "{url}/study"\n[repo]\ninterval = 1\n')
     os.chdir(project)
     os.environ.pop("CAIRN_INPUTS", None)
     toy = make_data(base)
@@ -318,7 +317,7 @@ def run(keep: bool) -> int:
     url = f"http://127.0.0.1:{store_httpd.server_address[1]}"
     os.environ["CAIRN_TOKEN"] = token
     build_data(base, url)
-    ui_httpd = make_ui_server(RemoteBackend(url, False), port=0)
+    ui_httpd = make_ui_server(RemoteBackend(url), port=0)
     ui_httpd.RequestHandlerClass.log_message = lambda *a: None
     threading.Thread(target=ui_httpd.serve_forever, daemon=True).start()
     ui = f"http://127.0.0.1:{ui_httpd.server_address[1]}"

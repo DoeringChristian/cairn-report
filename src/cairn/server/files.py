@@ -23,8 +23,7 @@ from urllib.parse import quote, unquote
 
 from ..ranges import byte_range
 from ..store import BadRange, refs
-from ..store.tokens import Principal
-from .auth import HttpError, allow
+from .auth import HttpError
 
 SMALL = 1 << 20
 PIECE = 1 << 20
@@ -75,10 +74,9 @@ def parse(raw_path: str) -> tuple[str, refs.Ref]:
     return project, refs.parse(f"{head}//{inner}")
 
 
-async def serve_file(app, request, principal: Principal, raw_path: str, query: dict):
+async def serve_file(app, request, raw_path: str, query: dict):
     """The response for one file request (the app maps HttpError, NotFound, and BadRange to statuses)."""
     project, ref = parse(raw_path)
-    allow(principal, project)
     store = app.view(project)
     loop = asyncio.get_running_loop()
     sha, immutable, descriptor, first, last, total, data = await loop.run_in_executor(

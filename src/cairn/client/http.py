@@ -1,6 +1,6 @@
 """The HTTP client and folder helpers behind `Remote` and publishing.
 
-`Client` talks to a server (bearer token, HTTPS unless the host is local or `allow_http`; the server may sit behind
+`Client` talks to a server (bearer token; plain HTTP to a non-local host works, with one warning per process; the server may sit behind
 a path prefix, `https://host/prefix`); `split_remote` is the one place that reads a remote URL `<server>/<project>`;
 `scan` and `entries_for` turn a folder into manifest entries (hashes from a store.hashes.HashCache);
 `upload_missing` sends only the blobs the remote lacks. Nothing here reads the configuration or knows about repos.
@@ -199,17 +199,27 @@ def split_remote(url: str) -> tuple[str, str | None]:
     return urlunparse(parsed._replace(path=head)).rstrip("/"), project
 
 
+_warned = threading.Event()
+
+
+def warn_plain_http(host: str) -> None:
+    """One line on stderr, once per process, the first time a client talks plain HTTP to a non-local host."""
+    if not _warned.is_set():
+        _warned.set()
+        print(f"warning: plain HTTP to {host}: the token is sent unencrypted; fine over a VPN (Tailscale) or an SSH tunnel",
+              file=sys.stderr, flush=True)
+
+
 class Client:
     """HTTP to one server, `url` (with a path prefix if it sits behind one: requests go to `<prefix>/api/...`)."""
 
-    def __init__(self, url: str, token: str, allow_http: bool = False, timeout: float = 120, token_source: str | None = None,
+    def __init__(self, url: str, token: str, timeout: float = 120, token_source: str | None = None,
                  token_places: str | None = None):
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:
             raise SystemExit(f"server URL {url!r} must look like https://host[:port][/prefix]")
-        if parsed.scheme == "http" and parsed.hostname not in LOCAL_HOSTS and not allow_http:
-            raise SystemExit(f"refusing to send the token over plain HTTP to {parsed.hostname}; "
-                             "use https://, an SSH tunnel to localhost, or [repo] allow_http (--allow-http)")
+        if parsed.scheme == "http" and parsed.hostname not in LOCAL_HOSTS:
+            warn_plain_http(parsed.hostname)
         self.url, self.parsed, self.token, self.timeout = url.rstrip("/"), parsed, token, timeout
         self.base = parsed.path.rstrip("/")  # the server's path prefix ("" at the root of its host)
         self.token_source = token_source  # where the token came from, for messages (never the token itself)

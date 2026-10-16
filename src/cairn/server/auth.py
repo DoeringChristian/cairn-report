@@ -1,10 +1,8 @@
-"""Who a request acts as: the owner token, scoped tokens, and the project checks every route makes."""
+"""Who may make a request: the holder of the repo's one token (the owner's), or everyone with `no_auth`."""
 
 from __future__ import annotations
 
 import hmac
-
-from ..store.tokens import OWNER, Principal, Tokens
 
 
 class HttpError(Exception):
@@ -14,30 +12,21 @@ class HttpError(Exception):
 
 
 class Auth:
-    """Bearer-token authentication: the owner token, the scoped tokens of `tokens`, or (`no_auth`) everyone as the owner."""
+    """Bearer-token authentication against the owner token, or (`no_auth`) none."""
 
-    def __init__(self, owner_token: str, tokens: Tokens, no_auth: bool = False):
-        self.owner_token, self.tokens, self.no_auth = owner_token, tokens, no_auth
+    def __init__(self, owner_token: str, no_auth: bool = False):
+        self.owner_token, self.no_auth = owner_token, no_auth
 
-    def principal_for(self, token: str) -> Principal | None:
-        if hmac.compare_digest(token.encode(), self.owner_token.encode()):
-            return OWNER
-        return self.tokens.find(token)
+    def valid(self, token: str) -> bool:
+        return hmac.compare_digest(token.encode(), self.owner_token.encode())
 
-    def bearer(self, header: str | None) -> Principal | None:
-        """The principal of an `Authorization` header value, or None (no or an unknown token)."""
+    def bearer(self, header: str | None) -> bool:
+        """Whether an `Authorization` header value carries the owner token."""
         if self.no_auth:
-            return OWNER
+            return True
         header = header or ""
-        return self.principal_for(header[7:].strip()) if header.startswith("Bearer ") else None
+        return header.startswith("Bearer ") and self.valid(header[7:].strip())
 
-    def require(self, header: str | None) -> Principal:
-        principal = self.bearer(header)
-        if principal is None:
+    def require(self, header: str | None) -> None:
+        if not self.bearer(header):
             raise HttpError(401, "missing or invalid token")
-        return principal
-
-
-def allow(principal: Principal, project: str, write: bool = False) -> None:
-    if not principal.can(project, write):
-        raise HttpError(403, f"this token cannot {'write' if write else 'read'} project {project!r}")
