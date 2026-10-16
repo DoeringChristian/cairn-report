@@ -308,6 +308,7 @@ class SyncedRepo(ProjectRepo):
         self.outbox = Outbox(self.root)
         self.engine = Sync(self.outbox, remote, copies, self.root, heartbeat_timeout)
         self._down_until = 0.0  # the remote did not answer: reads and background sends skip it until then
+        self._quick: SyncedRepo | None = None  # this repo with short request timeouts (`quick`)
         self._reached = False  # reach() looked at the remote once (and adopted what the repo numbered itself)
         self.ask = _Guarded(self)
 
@@ -799,17 +800,30 @@ class SyncedRepo(ProjectRepo):
             return self.resolve(Ref(project, name, None), warn=lambda line: None)[2]
 
     def down(self) -> bool:
-        """Whether the remote was slow to fail a moment ago (DOWN_FOR seconds): then it is not asked for reads and
-        background sends (a refused connection fails at once and is always tried again)."""
-        return time.monotonic() < self._down_until
+        """Whether the remote was slow to fail a moment ago (DOWN_FOR seconds), in this process: then it is not asked for
+        reads and sends that would hold up the caller (a refused connection fails at once and is always tried again)."""
+        return time.monotonic() < max(self._down_until, _DOWN.get(self.url, 0.0))
+
+    @property
+    def quick(self) -> "SyncedRepo":
+        """This repo with a remote that gives up after QUICK seconds per request: what a process sends and reads while it
+        works (a run, a publish, the UI), so a remote that stops answering costs it seconds, not minutes. `sync()` and
+        the background uploader take their time."""
+        if self._quick is None:
+            self._quick = self.with_timeout(QUICK)
+            self._quick._quick = self._quick
+        self._quick.remote._uid = self._quick.remote._uid or self.remote._uid
+        self._quick.remote.client.token = self.remote.client.token
+        return self._quick
 
     def reach(self) -> None:
         """Before the first request of this process: a quick look whether the remote answers at all (PROBE seconds), so a
-        host that hangs makes one short wait, not one long one per request. Raises Unreachable."""
-        if self._reached:
-            return
+        host that hangs makes one short wait, not one long one per request. Raises Unreachable, also while the remote
+        is down (`down`)."""
         if self.down():
             raise Unreachable(f"the remote at {self.url} did not answer a moment ago")
+        if self._reached:
+            return
         began = time.monotonic()
         try:
             if self.remote._uid is None:
@@ -827,9 +841,10 @@ class SyncedRepo(ProjectRepo):
         self._reached = True
 
     def _failed(self, began: float) -> None:
-        """The remote did not answer: if finding that out took long (a host that drops packets), skip it for a while."""
+        """The remote did not answer: if finding that out took long (a host that drops packets), skip it for a while (every
+        repo of this process does)."""
         if time.monotonic() - began >= SLOW:
-            self._down_until = time.monotonic() + DOWN_FOR
+            self._down_until = _DOWN[self.url] = time.monotonic() + DOWN_FOR
 
     def _send_now(self, record: dict) -> dict:
         """Send an entry that is final now; when the remote does not answer it stays pending (a warning says so, and a
@@ -837,7 +852,7 @@ class SyncedRepo(ProjectRepo):
         began = time.monotonic()
         try:
             self.reach()
-            self.engine.send(record)
+            self.quick.engine.send(record)
         except Waiting as error:
             if isinstance(error.__cause__, (Unauthorized, Forbidden)):  # the caller should know at once; it stays pending
                 raise type(error.__cause__)(f"{error.__cause__}; {record['project']}:{record['name']}@{record['uid']} stays "
@@ -892,7 +907,7 @@ class SyncedRepo(ProjectRepo):
         began = time.monotonic()
         try:
             self.reach()
-            self.engine.send(record, claim=False)
+            self.quick.engine.send(record, claim=False)
         except NotRecorded:
             pass
         except Unreachable:
@@ -1001,7 +1016,9 @@ class SyncedRepo(ProjectRepo):
 
 DOWN_FOR = 30.0  # seconds a remote that was slow to fail is not asked again for reads and background sends
 SLOW = 2.0  # seconds: a failure that took this long counts as slow (a refused connection takes milliseconds)
-PROBE = 10.0  # seconds the first look at the remote may take
+PROBE = 3.0  # seconds the first look at the remote may take
+QUICK = 10.0  # seconds a request a process makes while it works may wait for each answer (`SyncedRepo.quick`)
+_DOWN: dict[str, float] = {}  # remote URL -> until when this process does not ask it (`SyncedRepo.down`)
 
 
 class _Guarded:
@@ -1012,7 +1029,7 @@ class _Guarded:
         self._repo = repo
 
     def __getattr__(self, name: str):
-        target = getattr(self._repo.remote, name)
+        target = getattr(self._repo.quick.remote, name)
 
         def call(*args, **kwargs):
             repo = self._repo
@@ -1090,7 +1107,7 @@ def _flush_at_exit() -> None:
     """At exit: one quick attempt to send what this process left pending (the next command or `cairn sync` sends the rest)."""
     for repo in list(_exit_flush.values()):
         try:
-            if any(record["sync"] == "pending" for record in repo.records()):
+            if not repo.down() and any(record["sync"] == "pending" for record in repo.records()):
                 repo.with_timeout(EXIT_TIMEOUT).engine.flush()
         except Exception:  # noqa: BLE001 - never a traceback at exit
             pass

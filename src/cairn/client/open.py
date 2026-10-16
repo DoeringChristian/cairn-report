@@ -190,6 +190,7 @@ def sync_now(config: Config, report=None, timeout: float = 10) -> dict | None:
         repo = open_repo(config)
         if not repo.engine.waiting():
             return None
+        repo.reach()  # a remote that does not answer costs one short look (and none at the end of the command)
         return repo.with_timeout(timeout).sync(report, refresh=False)
     except Unreachable:
         return None

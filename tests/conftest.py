@@ -78,8 +78,10 @@ def isolated_roots(tmp_path, monkeypatch):
     monkeypatch.delenv("CAIRN_TOKEN", raising=False)
     monkeypatch.chdir(tmp_path)  # no project root above it: tests that need one make it (the `project` fixture)
     monkeypatch.delenv("CAIRN_RUN", raising=False)
-    from cairn.client import drafts, runs
+    from cairn.client import drafts, repo, runs
     from cairn.store import inputs
+
+    repo._DOWN.clear()  # a remote one test found down is not down for the next
 
     monkeypatch.setattr(runs, "CAPTURE_DEFAULT", False)  # the runs pytest itself starts leave its output alone
     monkeypatch.setattr(runs, "SYSTEM_INTERVAL", 3600.0)

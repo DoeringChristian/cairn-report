@@ -479,6 +479,7 @@ def test_listings_with_3000_versions_and_500_pending_entries(tmp_path):
     pending = listing_times(offline, "500 pending outbox entries, remote refuses", names, env)
     assert pending["ui project warm"] < 1.0 and pending["ui artifact warm"] < 1.0
 
+
 # ====================================================================== remotes: a real `cairn server`, and a faulty one
 
 
@@ -587,6 +588,137 @@ class FaultProxy:
         self.listener.close()
         for client in self.held:
             client.close()
+
+
+RUN_TIMING = """
+import json, sys, time
+began = time.perf_counter()
+import cairn
+imported = time.perf_counter()
+run = cairn.init(name="timed", config={"x": 1}, code=False, system=False)
+started = time.perf_counter()
+for step in range(20):
+    run.add({"loss": 1.0 / (step + 1), "step": step})
+added = time.perf_counter()
+with cairn.draft("result") as result:
+    result.add_json("value", {"ok": True})
+drafted = time.perf_counter()
+run.finish()
+finished = time.perf_counter()
+print(json.dumps({"init": started - imported, "add": added - started, "draft": drafted - added, "finish": finished - drafted,
+                  "uid": run.uid, "result": result.version.uid}))
+"""
+
+
+def timed_run(project: Path, env=None) -> dict:
+    began = time.perf_counter()
+    process = spawn(project, "timed.py", env=env)
+    out, err = finish(process, 300)
+    assert process.returncode == 0, err
+    row = json.loads(out.strip().splitlines()[-1])
+    row["process"] = time.perf_counter() - began
+    return row
+
+
+def timed_publish(project: Path, index: int, env=None) -> float:
+    data = project / f"data-{index}"
+    data.mkdir()
+    (data / "a.txt").write_text(f"publish {index}")
+    began = time.perf_counter()
+    result = cli(project, "publish", str(data), "data", env=env)
+    assert result.returncode == 0, result.stderr
+    return time.perf_counter() - began
+
+
+HANG_LATER = """
+import json, pathlib, time, cairn
+run = cairn.init(name="later", code=False, system=False)
+pathlib.Path("started").write_text(run.uid)
+while not pathlib.Path("go").exists():
+    time.sleep(0.05)
+run.add({"x": 1})
+began = time.perf_counter()
+with cairn.draft("out") as out:
+    out.add_json("v", {"a": 1})
+drafted = time.perf_counter()
+run.finish()
+print(json.dumps({"draft": drafted - began, "finish": time.perf_counter() - drafted, "uid": run.uid, "out": out.version.uid}))
+"""
+
+
+def test_remote_outages_do_not_slow_runs_and_everything_is_sent_once(tmp_path):
+    """The remote refuses, hangs (connected, never answering), errors (500), is slow (1 s per connection), and stops
+    answering while a run runs; then it recovers. Runs and publishes are timed against a repo without a remote, and
+    every version is sent exactly once at the end."""
+    baseline = project_at(tmp_path, "baseline")
+    script(baseline, "timed.py", RUN_TIMING)
+    base_runs = [timed_run(baseline) for _ in range(2)]
+    base_publish = [timed_publish(baseline, index) for index in range(2)]
+
+    server = RealServer(tmp_path / "remote").start()
+    proxy = FaultProxy(server.port, delay=1.0)
+    env = base_env(CAIRN_TOKEN=server.token)
+    project = project_at(tmp_path, "study", proxy.url)
+    for name, code in (("timed.py", RUN_TIMING), ("later.py", HANG_LATER)):
+        script(project, name, code)
+    report, runs, results = [], [], []
+    try:
+        for index, mode in enumerate(("forward", "refuse", "hang", "error", "slow", "forward")):
+            proxy.mode = mode
+            row = timed_run(project, env)
+            runs.append(row["uid"])
+            results.append(row["result"])
+            report.append((mode, row, timed_publish(project, index, env)))
+        proxy.mode = "forward"  # the remote stops answering while a run runs
+        began = time.perf_counter()
+        later = spawn(project, "later.py", env=env)
+        while not (project / "started").exists():
+            assert later.poll() is None and time.perf_counter() - began < 60, finish(later)
+            time.sleep(0.05)
+        proxy.mode = "hang"
+        (project / "go").write_text("")
+        began = time.perf_counter()
+        out, err = finish(later, 600)
+        assert later.returncode == 0, err
+        ended = time.perf_counter() - began
+        hung = json.loads(out.strip().splitlines()[-1])
+        runs.append(hung["uid"])
+        proxy.mode = "forward"
+        synced = cli(project, "sync", env=env)
+        assert synced.returncode == 0, synced.stdout + synced.stderr
+    finally:
+        proxy.close()
+    lines = [f"  {'baseline':<8} init {base_runs[-1]['init']:6.2f} s  draft {base_runs[-1]['draft']:6.2f} s  finish "
+             f"{base_runs[-1]['finish']:6.2f} s  process {base_runs[-1]['process']:6.2f} s  cli publish {base_publish[-1]:6.2f} s"]
+    for mode, row, published in report:
+        lines.append(f"  {mode:<8} init {row['init']:6.2f} s  draft {row['draft']:6.2f} s  finish {row['finish']:6.2f} s  "
+                     f"process {row['process']:6.2f} s  cli publish {published:6.2f} s")
+    lines.append(f"  hangs while running: draft {hung['draft']:.2f} s, finish {hung['finish']:.2f} s, the rest of the process {ended:.2f} s")
+    print("\nruns and publishes while the remote misbehaves:\n" + "\n".join(lines))
+
+    # everything was sent exactly once, numbered contiguously by the remote, and the repo agrees
+    remote = LocalRepo(server.root)
+    check_numbers(remote)
+    on_remote = {version["uid"]: version for name in remote.artifacts("study") for version in remote.versions("study", name)}
+    for uid in runs + results + [hung["out"]]:
+        assert on_remote[uid]["status"] == "completed", on_remote[uid]
+    assert sorted(version["uid"] for version in remote.versions("study", "runs/timed")) == sorted(runs[:-1])  # numbered as they arrived
+    assert len(remote.versions("study", "data")) == 6
+    assert not (project / ".cairn" / "outbox").exists() or not list((project / ".cairn" / "outbox").iterdir())
+    status = cli(project, "status", env=env)
+    assert "nothing pending" in status.stdout, status.stdout + status.stderr
+    verify_clean(project, env)
+    local = LocalRepo(project / ".cairn")
+    for name in ("runs/timed", "data", "result"):
+        assert [(v["version"], v["uid"]) for v in local.versions("study", name)] == \
+            [(v["version"], v["uid"]) for v in remote.versions("study", name)]
+    server.stop()
+    timings = {mode: (row, published) for mode, row, published in report}
+    for mode in ("refuse", "hang", "error"):  # a remote that does not answer costs a run one short look at most
+        row, published = timings[mode]
+        assert row["init"] < 4 and row["draft"] < 1 and row["finish"] < 1 and row["process"] < 6, (mode, row)
+        assert published < 6, (mode, published)
+    assert hung["draft"] < 4 and ended < 20, (hung, ended)
 
 
 # ====================================================================== 6. a remote added later, with a version running
