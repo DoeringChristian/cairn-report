@@ -974,7 +974,12 @@ pull downloads it again).
 (APFS `clonefile`, Btrfs/XFS `FICLONE`): they cost no space, are files of their own, and editing one
 (after a `chmod`) cannot touch the blob. Where cloning is unsupported, files are hard-linked and always
 read-only (`0444`): a hard link shares the blob's inode, so writing through a writable one would corrupt
-the blob and every version that shares it. If hard links fail too (another filesystem), they are copied.
+the blob and every version that shares it. If hard links fail too (another filesystem), they are copied. A process running as
+root ignores read-only modes, so it always gets copies, never hard links. For everyone else Cairn guards the links:
+it records each linked blob's inode, size, and modification time, compares them (no hashing) at every later use of
+the folder, `cairn verify`, and every send of the blob, and hashes a blob whose record changed: a file that was only
+touched is accepted, contents that were written to are refused, naming the file and the versions that use them, and
+`cairn verify --repair` downloads them again from the remote where it has them. Never write to a pulled file: copy it.
 
 **`cairn verify`** re-hashes and exits 1 on any problem it cannot fix:
 

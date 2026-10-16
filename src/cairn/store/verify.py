@@ -21,7 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .blobs import SHA256
-from .folders import FILES, read_record, remove
+from .errors import StoreError
+from .folders import FILES, check_links, read_record, remove
 from .digest import manifest_digest, sha256_file
 
 
@@ -188,6 +189,10 @@ def verify_folders(root: Path | str, repair: bool = False) -> Report:
                 problem.repaired = True
             continue
         first = len(report.problems)
+        try:
+            check_links(root, folder, record)  # a hard-linked file written to: its blob, and every version using it
+        except StoreError as error:
+            report.add("link", folder, str(error))
         if not check_entries(files, entries, report, digest, label) and repair:
             for problem in report.problems[first:]:
                 problem.repaired = True

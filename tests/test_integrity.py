@@ -292,8 +292,8 @@ def test_tampered_cache_blob_fails_the_pull_and_verify_repairs_it(server, env, c
         store.pull("data@v1")
     assert not cache_module.version_folder(env / ".cairn", version_id).exists()
     out, err = run(capsys, "verify", "--repair")  # repaired problems exit 0
-    assert str(blob) in out and "(removed)" in out and not blob.exists()
-    assert (store.pull("data@v1") / "a.txt").read_text() == "shared"  # downloaded again
+    assert str(blob) in out and "(removed)" in out and blob.read_text() == "shared"  # downloaded again at once
+    assert (store.pull("data@v1") / "a.txt").read_text() == "shared"
     run(capsys, "verify")
 
 

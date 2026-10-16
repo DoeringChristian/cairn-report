@@ -42,7 +42,7 @@ from ..store import refs
 from ..store.blobs import blob_path, now
 from ..store.digest import manifest_digest
 from ..store.errors import Forbidden, MissingBlobs, NotFound, StoreError, Unauthorized, Unreachable
-from ..store.folders import hostname, update_record
+from ..store.folders import check_link, hostname, update_record
 from ..store.ids import is_id
 from ..store.local import read_repo_file, repo_id, update_repo_file
 from ..store.outbox import Outbox, belongs
@@ -233,6 +233,7 @@ class Sync:
         missing = set(self.remote.missing(files)) if any("sha256" in item for item in files) else set()
         for item in files:
             if item.get("sha256") in missing:
+                check_link(self.root, item["sha256"])  # never send contents a hard link let a process write to
                 blob = blob_path(self.root, item["sha256"])
                 if not blob.is_file():
                     raise StoreError(

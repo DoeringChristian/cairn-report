@@ -5,6 +5,14 @@
                                           "accessed", "accessed_at"}
     <repo>/versions/<id>/files/           the version's files, read-only: what `pull` returns
     <repo>/blobs/<aa>/<sha256>            the contents they are made from (blobs.py)
+    <repo>/links/<sha256>.json            [inode, size, mtime_ns] of a blob that read-only folders hard-link
+
+Where the filesystem cannot clone, a read-only folder's files are hard links of the blobs (read-only). A process that
+runs as root ignores that mode, so there they are always copies. For the rest, the link guard: a linked blob's stat
+is recorded when it is linked, and every later use of the folder, `cairn verify`, and every send of the blob compares
+it (no hashing). A blob whose stat changed is hashed: still its contents (only touched), the record is updated;
+else the use is refused with the file and the versions that use it, and `cairn verify --repair` drops it so it is
+downloaded again (from the remote, where it has it).
 
 A version folder is named by its id, never by name and number, so versions never collide. The folders are
 derived from the blobs: deleting one loses nothing (the next pull makes it again), and `cairn prune` trims them.
@@ -27,7 +35,7 @@ import time
 from pathlib import Path
 
 from . import refs
-from .blobs import now
+from .blobs import blob_path, now
 from .digest import manifest_digest, sha256_file
 from .errors import NotFound, StoreError
 from .fs import clone
@@ -142,6 +150,91 @@ def touch(folder: Path, record: dict | None = None) -> None:
         pass
 
 
+LINKS = "links"
+
+
+def _as_root() -> bool:
+    geteuid = getattr(os, "geteuid", None)
+    return geteuid is not None and geteuid() == 0
+
+
+def _stat_key(info: os.stat_result) -> list[int]:
+    return [info.st_ino, info.st_size, info.st_mtime_ns]
+
+
+def note_link(root: Path | str, sha: str) -> None:
+    """A read-only folder hard-links the blob `sha`: record its stat (the link guard, see the module doc)."""
+    try:
+        info = os.stat(blob_path(root, sha))
+        (Path(root) / LINKS).mkdir(exist_ok=True)
+        write_json(Path(root) / LINKS / f"{sha}.json", _stat_key(info))
+    except OSError:
+        pass
+
+
+def users(root: Path | str, sha: str) -> list[str]:
+    """The versions this repo's read-only folders and outbox entries have the contents `sha` in (for messages)."""
+    found = []
+    for base, key in ((Path(root) / "versions", "manifest"), (Path(root) / "outbox", None)):
+        for folder in sorted(base.iterdir()) if base.is_dir() else []:
+            record = read_record(folder) if ".tmp-" not in folder.name else None
+            manifest = (record or {}).get(key) if key else record
+            if not isinstance(manifest, dict) or not any(
+                item.get("sha256") == sha for item in manifest.get("files") or []
+            ):
+                continue
+            name = record.get("name") or "?"
+            number = manifest.get("version", manifest.get("number"))
+            found.append(refs.exact(name, number) if number is not None else f"{name} ({record['id'][: refs.SHORT]})")
+    return list(dict.fromkeys(found))
+
+
+def check_link(root: Path | str, sha: str, path: Path | None = None) -> None:
+    """The link guard for one blob (and, with `path`, the read-only file that should be a hard link of it): nothing to
+    do while its stat is the recorded one; else it is hashed, and StoreError names what changed."""
+    index = Path(root) / LINKS / f"{sha}.json"
+    known = read_json(index)
+    if not isinstance(known, list):
+        return
+    blob = blob_path(root, sha)
+    try:
+        info = os.stat(blob)
+    except FileNotFoundError:
+        return  # dropped (`verify --repair`, gc): made again from the remote when it is needed
+    try:
+        replaced = path is not None and os.lstat(path).st_ino != info.st_ino
+    except FileNotFoundError:
+        replaced = True
+    if _stat_key(info) == known and not replaced:
+        return
+    actual, _ = sha256_file(blob)
+    if actual != sha:
+        used = ", ".join(users(root, sha)) or "none here"
+        raise StoreError(
+            f"{path or blob} was written to through a hard link: the stored contents {blob} now hash to "
+            f"{actual[:16]}..., not {sha[:16]}... (versions with these contents: {used}). Files of read-only folders "
+            "must never be written; `cairn verify --repair` drops the damaged contents so they are downloaded again "
+            "from the remote where it has them (a pending version's only copy cannot be restored)"
+        )
+    if replaced:
+        raise StoreError(
+            f"{path}: a file of a read-only folder was replaced or removed; `cairn verify --repair` makes the folder "
+            "again"
+        )
+    write_json(index, _stat_key(info))  # only touched: its contents are what they were
+
+
+def check_links(root: Path | str, folder: Path, record: dict) -> None:
+    """The link guard for every hard-linked file of a read-only folder (its record's `linked` paths)."""
+    linked = record.get("linked") or []
+    if not linked:
+        return
+    shas = {item["path"]: item.get("sha256") for item in (record.get("manifest") or {}).get("files") or []}
+    for relative in linked:
+        if shas.get(relative):
+            check_link(root, shas[relative], Path(folder) / FILES / relative)
+
+
 def place_file(source: Path, path: Path) -> str:
     """Make `path` (new) a read-only file with `source`'s contents, sharing storage where that is safe: a
     copy-on-write clone (APFS `clonefile`, Btrfs/XFS `FICLONE`) when the filesystem has them; else a hard link;
@@ -153,6 +246,9 @@ def place_file(source: Path, path: Path) -> str:
     filesystems that cannot clone. (The blob itself becomes read-only too: it is the same inode.)"""
     if clone(source, path):
         how = "clone"
+    elif _as_root():  # root writes through read-only modes: never a hard link of a blob
+        shutil.copyfile(source, path)
+        how = "copy"
     else:
         try:
             os.link(source, path)
@@ -164,15 +260,18 @@ def place_file(source: Path, path: Path) -> str:
     return how
 
 
-def link_files(entries: list[dict], target: Path, blob, digest: str | None = None, label: str = "version") -> None:
+def link_files(
+    entries: list[dict], target: Path, blob, digest: str | None = None, label: str = "version", root=None
+) -> list[str]:
     """Fill `target` with the entries' files: `blob(entry)` gives each content's path; the file is placed with
     `place_file` (clone, else read-only hard link, else copy).
 
     The pull is verified: each placed file is hashed and must match its entry's sha256 and size, and the
     manifest digest (digest.py) of what was placed must equal `digest` (when the version has one). A mismatch
-    raises a StoreError naming the file; the caller removes the partial folder."""
+    raises a StoreError naming the file; the caller removes the partial folder. Returns the paths it hard-linked (and,
+    with the repo `root`, records each linked blob's stat for the link guard)."""
     target.mkdir(parents=True, exist_ok=True)
-    placed = []
+    placed, linked = [], []
     for entry in entries:
         path = target / entry["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,7 +280,10 @@ def link_files(entries: list[dict], target: Path, blob, digest: str | None = Non
             placed.append(entry)
             continue
         source = blob(entry)
-        place_file(source, path)
+        if place_file(source, path) == "link":
+            linked.append(entry["path"])
+            if root is not None:
+                note_link(root, entry["sha256"])
         sha, size = sha256_file(path)
         if sha != entry["sha256"] or size != entry["size"]:
             raise StoreError(
@@ -194,6 +296,7 @@ def link_files(entries: list[dict], target: Path, blob, digest: str | None = Non
         raise StoreError(
             f"{label}: the files pulled hash to {manifest_digest(placed)}, not the manifest digest {digest}"
         )
+    return linked
 
 
 def install(build: Path, folder: Path) -> None:
@@ -226,6 +329,7 @@ def materialize_version(store, name: str, version: dict, root: Path | str) -> Pa
     folder = version_folder(root, id)
     record = read_record(folder)
     if record and (folder / FILES).is_dir():
+        check_links(root, folder, record)
         touch(folder, record)
         return folder / FILES
     folder.parent.mkdir(parents=True, exist_ok=True)
@@ -233,12 +337,13 @@ def materialize_version(store, name: str, version: dict, root: Path | str) -> Pa
     try:
         build.mkdir()
         label = refs.shown(name, version)
-        link_files(
+        linked = link_files(
             version["files"],
             build / FILES,
             lambda entry: store.blob_file(name, version["version"], entry, root),
             version.get("digest"),
             label,
+            root,
         )
         write_json(
             build / RECORD,
@@ -251,6 +356,7 @@ def materialize_version(store, name: str, version: dict, root: Path | str) -> Pa
                 "manifest": version,
                 "accessed": now(),
                 "accessed_at": time.time(),
+                **({"linked": linked} if linked else {}),
             },
         )
         install(build, folder)

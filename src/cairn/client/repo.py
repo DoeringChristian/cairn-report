@@ -1313,12 +1313,32 @@ class SyncedRepo(ProjectRepo):
             )
         report = Report()
         check_blobs(self.root / "blobs", report, repair=repair, keep=self._keep())
+        if repair:
+            self._fetch_again(report)
         report.merge(verify_copies(self.copies.copies()))
         report.merge(verify_folders(self.root, repair))
         return report.merge(verify_outbox(self.outbox, self.root))
 
     def prune(self, older_than: float | None = None, max_size: int | None = None, dry_run: bool = False) -> dict:
         return prune_folders(self.root, older_than, max_size, dry_run, keep=self._keep())
+
+    def _fetch_again(self, report: Report) -> None:
+        """After `verify --repair` dropped damaged blobs: download each again from the remote, from a version of it the
+        repo has a copy of (best effort: what the remote does not answer for is downloaded at the next pull)."""
+        dropped = {
+            Path(problem.path).name for problem in report.problems if problem.kind == "blob" and problem.repaired
+        }
+        if not dropped:
+            return
+        for name, state in self.copies.copies():
+            for entry in state.get("files") or []:
+                sha = entry.get("sha256")
+                if sha in dropped and len(sha) == 64:
+                    try:
+                        self.blob_file(name, state["version"], entry, self.root)
+                        dropped.discard(sha)
+                    except (StoreError, OSError):
+                        pass
 
 
 DOWN_FOR = 30.0  # seconds a remote that was slow to fail is not asked again for reads and background sends
