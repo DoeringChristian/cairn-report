@@ -79,19 +79,19 @@ before it, so there is no migration and no compatibility code, and a project sta
 - **Layers:** `store/` (the repo core) changes a repo folder and knows nothing of HTTP or configuration;
   `client/remote.py` is the repo interface over HTTP; `client/sync.py` is the sync engine; `client/open.py`
   alone decides between no remote, a remote, and a network filesystem. `tests/test_boundaries.py` enforces it.
-
-## 0.13.1
-
-- `cairn server` with no folder serves the project's store folder (`.cairn/store`), creating it if
-  needed. While it runs (it writes `<folder>/server.json`), the project's scripts and commands send
-  their versions through it instead of being refused as a second writer.
-- `cairn ui` with the project's store folder creates it if it is new and browses it through a running
-  `cairn server` if there is one. It prints a one-time login link (a random code, valid once for 10
-  minutes; never the token) and opens it in the browser (`--no-browser` to skip); `cairn server`
-  prints one too. A taken port moves the UI to a free one.
-- The UI's session cookie is `Secure` behind an HTTPS reverse proxy (`X-Forwarded-Proto: https`) and on
-  public addresses, and plain for HTTP to this machine, where browsers refuse a `Secure` cookie.
-- The repository is github.com/DoeringChristian/cairn (formerly cairn-report).
+- **The UI:** a local `cairn ui` opens its one project directly; versions show their short id; copied
+  references are `name@vN`. Every image (the file preview, the thumbnails in a version's file list, figure
+  cards) opens the reports' lightbox: one gallery per version, arrows and swipe, zoom, pan, Escape. The pages
+  are built from one component library (`web/src/components/`), shown on `/palette` ("Components" in the rail).
+- **`cairn ui` writes no token** into the project's repo; its login link carries one that lives only as
+  long as that `cairn ui`. `cairn server` prints its owner token and the token file's path at every launch.
+- **The example** (`examples/descent`) is four commands run from its folder; `run_example.py` is gone.
+- **Logging in to the UI:** `cairn ui` and `cairn server` print a one-time login link (a random code, valid
+  once for 10 minutes; never the token), and `cairn ui` opens it in the browser (`--no-browser` to skip). A
+  taken UI port moves the UI to a free one; a taken server port is an error.
+- **The UI's session cookie** is `Secure` behind an HTTPS reverse proxy (`X-Forwarded-Proto: https`) and on
+  public addresses, and plain over HTTP to this machine, where browsers refuse a `Secure` cookie.
+- **The repository** is github.com/DoeringChristian/cairn (formerly cairn-report).
 
 ## 0.13.0: the first Cairn release
 
