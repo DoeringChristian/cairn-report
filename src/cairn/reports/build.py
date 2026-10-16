@@ -111,6 +111,34 @@ UNSAFE_HTML = re.compile(
 )
 DELIMITERS = set("|‖()[]{}⟨⟩⌈⌉⌊⌋/∣∥")
 BARE_MO = re.compile(r"<mo>(&#x([0-9A-Fa-f]+);|[^<])</mo>")
+# latex2mathml leaves a delimiter command as text after \big, \Big, \bigg, ... (`\big\lVert` gives <mo ...>\lVert</mo>):
+# the symbols those commands stand for, put back after conversion.
+SIZED_DELIMITERS = {
+    "lVert": "‖",
+    "rVert": "‖",
+    "Vert": "‖",
+    "|": "‖",
+    "lvert": "|",
+    "rvert": "|",
+    "vert": "|",
+    "langle": "⟨",
+    "rangle": "⟩",
+    "{": "{",
+    "}": "}",
+    "lbrace": "{",
+    "rbrace": "}",
+    "lfloor": "⌊",
+    "rfloor": "⌋",
+    "lceil": "⌈",
+    "rceil": "⌉",
+    "lbrack": "[",
+    "rbrack": "]",
+    "backslash": "∖",
+}
+SIZED_MO = re.compile(r"(<mo\b[^>]*>)\\([A-Za-z]+|[{}|])(</mo>)")
+LEFTOVER_COMMAND = re.compile(r">[^<]*\\([A-Za-z]+|[^A-Za-z<]?)[^<]*<")  # any backslash left in MathML text
+# LaTeX operator names latex2mathml does not know (every other standard one, \\det to \\varprojlim, it does)
+MISSING_OPERATORS = re.compile(r"\\(arg)(?![A-Za-z])")
 VALUE = re.compile(r"\{\{(.+?)\}\}")
 # Graphviz defaults in the report palette; attributes in the diagram override them.
 GRAPHVIZ_DEFAULTS = (
@@ -139,6 +167,27 @@ def check_html(markup: str, origin: str) -> str:
     if match:
         raise ValueError(f"{origin}: disallowed HTML {match.group(0)!r}")
     return markup
+
+
+def sized_delimiters(mathml: str) -> str:
+    """Put back the symbols of delimiter commands latex2mathml leaves as text after a size command (`\\big\\lVert`)."""
+
+    def fix(match):
+        symbol = SIZED_DELIMITERS.get(match.group(2))
+        return f"{match.group(1)}{symbol}{match.group(3)}" if symbol else match.group(0)
+
+    return SIZED_MO.sub(fix, mathml)
+
+
+def to_mathml(latex: str, display: str) -> str:
+    """LaTeX to MathML; LaTeX the converter could not turn into MathML (a `\\command` left as text) is an error, so
+    a report never shows broken notation."""
+    source = MISSING_OPERATORS.sub(r"\\operatorname{\1}", latex)
+    mathml = unstretch_delimiters(sized_delimiters(latex_to_mathml(source, display=display)))
+    leftover = LEFTOVER_COMMAND.search(mathml)
+    if leftover:
+        raise ValueError(f"unsupported LaTeX \\{leftover.group(1)} in ${latex.strip()[:80]}$")
+    return mathml
 
 
 def unstretch_delimiters(mathml: str) -> str:
@@ -828,7 +877,10 @@ def render(build: Build) -> str:
                 f"{path}: {{{{ }}}} values are not evaluated inside $...$ formulas; write the value next to the formula: ${content.strip()[:60]}$"
             )
         display = "block" if options.get("display_mode") else "inline"
-        mathml = unstretch_delimiters(latex_to_mathml(content, display=display))
+        try:
+            mathml = to_mathml(content, display)
+        except ValueError as error:
+            raise ValueError(f"{path}: {error}") from None
         return f'<span class="math-tex" data-latex="{esc(content.strip())}">{mathml}</span>'
 
     md = (

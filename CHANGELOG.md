@@ -50,6 +50,9 @@ A version's **id** is now its only identity, as a commit's hash is in git, and e
   and reports what it converted. A 0.14 version's id is the SHA-256 of its uid, so a server and its clients,
   upgraded one by one, agree on every id, and every short id 0.14 printed still names the same version. Every other
   command refuses a 0.14 repo: `this repo was made by Cairn 0.14: run \`cairn upgrade\``.
+- **Report math:** a delimiter command after a size command (`\big\lVert … \big\rVert`, `\Big\langle`, `\bigg\{`)
+  and `\arg` were shown as literal LaTeX (a converter gap); they render now. LaTeX the converter leaves as text
+  is a build error naming the formula, so a report never shows broken notation.
 - **The 0.14.1 fixes** (never released on their own) are part of this release:
   - **A running version mirrors its folder.** A file that leaves the folder of a run, a draft or a `cairn publish
     --watch` (deleted, renamed, or excluded since) now leaves the running version at the next live sync, and
