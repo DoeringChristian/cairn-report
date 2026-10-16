@@ -1171,7 +1171,7 @@ class LocalRepo:
             if not apply:
                 continue
             files = state.get("files") or []
-            tomb = {key: state[key] for key in ("version", "uid", "label", "created", "completed", "metadata", "inputs", "source")
+            tomb = {key: state[key] for key in ("version", "uid", "short_id", "label", "created", "completed", "metadata", "inputs", "source")
                     if key in state}
             tomb.update(status="deleted", was=state["status"], files=[], file_count=sum("sha256" in entry for entry in files),
                         size=sum(entry.get("size") or 0 for entry in files), deleted_at=stamp, deleted_by=by, reason=reason)

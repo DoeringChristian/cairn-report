@@ -256,6 +256,18 @@ def served_root(config: Config) -> tuple[Path, str]:
     return make_repo_folder(Path(config.cairn_dir), config.found), project_label(config)
 
 
+def own_project(directory: Path | None, root: Path) -> str | None:
+    """The name a repo folder's own project is served under when the folder is the project's repo (`cairn server
+    <root>`, `cairn token create <root>`): the project folder's name; None for any other folder (a server's repo)."""
+    try:
+        config = load_config(directory)
+    except (SystemExit, ValueError):
+        return None
+    if Path(config.cairn_dir).resolve() != Path(root).resolve() or remote_url(config):
+        return None
+    return project_label(config)
+
+
 def sync_now(config: Config, report=None, timeout: float = 10) -> dict | None:
     """Send what waits for the configured remote, if anything does (the start and end of every repo command). Looks at
     the outbox first, so a command with nothing pending makes no request. Never raises: what is left stays pending;

@@ -130,12 +130,13 @@ function showHeader(data) {
   bundleLinks($(".hero"));
 }
 /* The Data panel: each input the report was built from, pinned to an exact version. The version carries its exact
-   reference in data-artifact. Served by the store UI (`cairn ui`, under /p/<project>/r/), it links to that version's artifact page
-   (/p/<project>/a/<name>@v<n>); in local and bundle modes it stays plain text. */
+   reference (`name@v<n>`, in the report's own project) in data-artifact. Served by the store UI (`cairn ui`, under
+   /p/<project>/r/), it links to that version's artifact page in the same project (/p/<project>/a/<name>@v<n>); in local
+   and bundle modes it stays plain text. */
 const STORE_SERVED = !BUNDLE && /^\/p\/[^/]+\/r\//.test(location.pathname);
 function artifactPage(exact) {
-  const match = /^([^:@/]+):(.+)@(v\d+)$/.exec(exact);
-  return STORE_SERVED && match ? `/p/${encodeURIComponent(match[1])}/a/${match[2].split("/").map(encodeURIComponent).join("/")}@${match[3]}` : null;
+  const here = /^\/p\/([^/]+)\/r\//.exec(location.pathname), match = /^(.+)@(v\d+)$/.exec(exact);
+  return STORE_SERVED && here && match ? `/p/${here[1]}/a/${match[1].split("/").map(encodeURIComponent).join("/")}@${match[2]}` : null;
 }
 function showData(inputs) {
   const panel = $("#data-panel"); if (!panel) return;

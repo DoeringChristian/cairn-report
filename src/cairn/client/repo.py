@@ -670,7 +670,7 @@ class SyncedRepo(ProjectRepo):
             say(_pending_warning(key, name, pending["uid"]))
             return name, manifest_of(pending)
         if found is None:
-            raise NotFound(f"{reason}, and the repo {self.root} has no version for {key}")
+            raise Unreachable(f"{reason}, and the repo {self.root} has no version for {key}")
         if found.get("pending"):
             say(_pending_warning(key, name, found["uid"]))
             return name, found

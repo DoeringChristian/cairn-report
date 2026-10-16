@@ -438,11 +438,13 @@ def cmd_server(args) -> None:
         raise SystemExit(str(error)) from None
     if interval is not None and interval <= 0:
         raise SystemExit("--gc-interval must be longer than 0")
+    from .client.open import own_project, served_root
+
     root, own = args.root, None
     if root is None:  # the project's own repo (.cairn by default), its project served under the folder's name
-        from .client.open import served_root
-
         root, own = served_root(load_config(args.directory))
+    else:
+        own = own_project(args.directory, root)
     serve_store(root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3), no_auth=args.no_auth,
                 ui_port=None if args.no_ui else args.ui_port if args.ui_port is not None else args.port + 1 if args.port else 0,
                 allow_network_fs=args.allow_network_fs, gc_interval=interval, gc_grace=grace, own=own)
@@ -486,16 +488,9 @@ def cmd_export_metadata(args) -> None:
 def cmd_token_create(args) -> None:
     from .store.tokens import create_token
 
-    own = None
-    try:  # the project's own repo: its project is served under the project folder's name
-        from .client.open import project_label
+    from .client.open import own_project
 
-        config = load_config(args.directory)
-        if Path(config.cairn_dir).resolve() == args.root.resolve():
-            own = project_label(config)
-    except (SystemExit, ValueError):
-        pass
-    token = create_token(args.root, args.project, write=args.write, name=args.name, own=own)
+    token = create_token(args.root, args.project, write=args.write, name=args.name, own=own_project(args.directory, args.root))
     print(f"Token: {token}")
     print(f"  {'read and write' if args.write else 'read-only'} access to project {args.project!r}; shown only now, stored hashed.")
 
