@@ -78,14 +78,19 @@ def hydra_project(tmp_path):
                     raise RuntimeError("asked to fail")
                 (output_dir / "result.txt").write_text("ok")
         """))
-    for command in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+    for command in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"],
+    ):
         subprocess.run(["git", *command], cwd=tmp_path, check=True)
     return tmp_path
 
 
 def run(project, *overrides):
-    return subprocess.run([sys.executable, "experiments/run.py", *overrides], cwd=project,
-                          capture_output=True, text=True)
+    return subprocess.run(
+        [sys.executable, "experiments/run.py", *overrides], cwd=project, capture_output=True, text=True
+    )
 
 
 def test_single_run_records_status_snapshot_and_latest(hydra_project):
@@ -124,7 +129,9 @@ def test_finalize_study_after_a_dead_launcher(tmp_path):
     for trial in ("0", "1"):
         (study / trial / ".hydra").mkdir(parents=True)
         (study / trial / ".hydra" / "config.yaml").write_text("run:\n  name: sweep\n")
-        (study / trial / "run.json").write_text(json.dumps({"status": "completed", "started": "t0", "code_revision": "abc"}))
+        (study / trial / "run.json").write_text(
+            json.dumps({"status": "completed", "started": "t0", "code_revision": "abc"})
+        )
     (study / ".submitit").mkdir()
     (study / ".submitit" / "123_1").mkdir()
     assert finalize_study(study) is True
@@ -140,15 +147,18 @@ def test_a_fresh_folder_gets_one_repo_at_the_launch_folder(hydra_project):
     exactly one repo, in the folder it was launched from, and publishes its runs there."""
     from cairn.store import LocalRepo
 
-    config = CONFIG.replace("""  run:
+    config = CONFIG.replace(
+        """  run:
     dir: outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S-%f}
   sweep:
     dir: outputs/${run.name}/${now:%Y-%m-%d_%H-%M-%S-%f}
-    subdir: ${hydra.job.num}""", """  run:
+    subdir: ${hydra.job.num}""",
+        """  run:
     dir: ${cairn.run:}
   sweep:
     dir: ${cairn.run:}
-    subdir: ${hydra.job.num}""")
+    subdir: ${hydra.job.num}""",
+    )
     (hydra_project / "configs" / "config.yaml").write_text(config)
     assert not (hydra_project / ".cairn").exists()
     single = run(hydra_project)

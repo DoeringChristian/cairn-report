@@ -17,7 +17,9 @@ def run_script(folder: Path, code: str, **env) -> subprocess.CompletedProcess:
     script.write_text(textwrap.dedent(code))
     environment = {**os.environ, **env}
     environment.pop("CAIRN_DEBUG", None)
-    return subprocess.run([sys.executable, str(script)], cwd=folder, capture_output=True, text=True, timeout=120, env=environment)
+    return subprocess.run(
+        [sys.executable, str(script)], cwd=folder, capture_output=True, text=True, timeout=120, env=environment
+    )
 
 
 @pytest.fixture
@@ -36,10 +38,13 @@ def frames(traceback: str) -> list[str]:
 
 
 def test_an_unknown_artifact_raises_from_cairn_use(study):
-    result = run_script(study, """
+    result = run_script(
+        study,
+        """
         import cairn
         cairn.use("nope@latest")
-        """)
+        """,
+    )
     assert result.returncode == 1
     error = result.stderr
     listed = frames(error)
@@ -53,13 +58,16 @@ def test_an_unknown_artifact_raises_from_cairn_use(study):
 
 
 def test_a_method_raises_from_itself(study):
-    result = run_script(study, """
+    result = run_script(
+        study,
+        """
         import cairn
         repo = cairn.connect()
         repo.artifact("data").publish("data")
         artifact = repo.artifact("missing")
         artifact.latest.files
-        """)
+        """,
+    )
     error = result.stderr
     cairn_frames = [line for line in frames(error) if "script.py" not in line]
     assert len(cairn_frames) == 1 and cairn_frames[0].endswith("in Version.files"), error
@@ -68,10 +76,13 @@ def test_a_method_raises_from_itself(study):
 
 
 def test_an_ambiguous_or_unknown_short_id_says_so_from_the_call(study):
-    result = run_script(study, """
+    result = run_script(
+        study,
+        """
         import cairn
         cairn.connect().version("ffff9999")
-        """)
+        """,
+    )
     error = result.stderr
     cairn_frames = [line for line in frames(error) if "script.py" not in line]
     assert len(cairn_frames) == 1 and cairn_frames[0].endswith("in Repo.version"), error
@@ -79,7 +90,9 @@ def test_an_ambiguous_or_unknown_short_id_says_so_from_the_call(study):
 
 
 def test_an_internal_bug_keeps_its_full_traceback(study):
-    result = run_script(study, """
+    result = run_script(
+        study,
+        """
         import cairn
         import cairn.client.objects as objects
 
@@ -89,7 +102,8 @@ def test_an_internal_bug_keeps_its_full_traceback(study):
         objects.Repo.artifacts.__wrapped__  # the public wrapper keeps the original
         objects.ProjectRepo.stage = broken
         cairn.connect().artifact("data").publish("data")
-        """)
+        """,
+    )
     error = result.stderr
     assert "ValueError: a bug" in error
     assert any("cairn/client/objects.py" in line for line in frames(error)), error  # the inner frames are kept
@@ -97,20 +111,26 @@ def test_an_internal_bug_keeps_its_full_traceback(study):
 
 
 def test_cairn_debug_shows_every_frame(study):
-    result = run_script(study, """
+    result = run_script(
+        study,
+        """
         import os
         os.environ["CAIRN_DEBUG"] = "1"
         import cairn
         cairn.use("nope@latest")
-        """)
+        """,
+    )
     assert "cairn/store/local.py" in result.stderr
 
 
 def test_no_run_raises_from_cairn_run(study):
-    result = run_script(study, """
+    result = run_script(
+        study,
+        """
         import cairn
         cairn.run.add({"loss": 1.0})
-        """)
+        """,
+    )
     error = result.stderr
     cairn_frames = [line for line in frames(error) if "script.py" not in line]
     assert len(cairn_frames) == 1 and cairn_frames[0].endswith("in cairn.run"), error

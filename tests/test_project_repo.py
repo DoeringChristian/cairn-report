@@ -49,8 +49,9 @@ def project(tmp_path, monkeypatch):
 
 def start(project, *args):
     """Start `cairn <args>` in the project; returns the process and its lines up to the login link."""
-    process = subprocess.Popen([sys.executable, "-m", "cairn", *args], cwd=project, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True)
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cairn", *args], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
     lines = read_until(process, lambda line: line.startswith("  Log in "))
     assert lines and lines[-1].startswith("  Log in "), lines
     return process, lines
@@ -82,7 +83,9 @@ def link_of(lines):
 
 
 def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(project):
-    slow = subprocess.Popen([sys.executable, "-c", SLOW], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    slow = subprocess.Popen(
+        [sys.executable, "-c", SLOW], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
     store = project / ".cairn"
     for _ in range(400):  # the run is started (the repo exists) before any server
         if (store / "metadata.sqlite3").exists():
@@ -90,7 +93,9 @@ def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(pr
         time.sleep(0.05)
     server, lines = start(project, "server", "--port", "0")
     try:
-        assert any("(created, with a new owner token)" in line for line in lines)  # an existing repo gets its owner token
+        assert any(
+            "(created, with a new owner token)" in line for line in lines
+        )  # an existing repo gets its owner token
         (project / "go").touch()  # the run finishes while the server serves the repo
         out, err = slow.communicate(timeout=120)
         assert slow.returncode == 0, err
@@ -112,8 +117,13 @@ def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(pr
             assert again.url.endswith("/login")
 
         port = re.search(r"API +http://127.0.0.1:(\d+)/", "\n".join(lines)).group(1)
-        second = subprocess.Popen([sys.executable, "-m", "cairn", "server", str(project / "other-repo"), "--port", port,
-                                   "--no-ui"], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        second = subprocess.Popen(
+            [sys.executable, "-m", "cairn", "server", str(project / "other-repo"), "--port", port, "--no-ui"],
+            cwd=project,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
         shown = read_until(second, lambda line: line.startswith("Serving;"))
         try:  # a taken port moves the second server to the next free one, and says so before its address
             text = "\n".join(shown)
@@ -147,4 +157,7 @@ def test_cairn_ui_creates_the_project_repo_and_logs_in_with_a_link(project):
 def test_cairn_server_refuses_a_project_with_a_remote(project):
     write_config(project, '[remote]\nurl = "https://cairn.example.org/demo"\n[repo]\n')
     result = run(project, sys.executable, "-m", "cairn", "server")
-    assert result.returncode == 1 and "this project's repo syncs with the remote https://cairn.example.org/demo" in result.stderr
+    assert (
+        result.returncode == 1
+        and "this project's repo syncs with the remote https://cairn.example.org/demo" in result.stderr
+    )

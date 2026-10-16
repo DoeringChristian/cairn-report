@@ -56,9 +56,9 @@ def error_line(text: str) -> str:
     """`cairn: text`, the form of every error the command line ends with (its paths shortened, see `short_paths`)."""
     for prefix in ("error: ", "ERROR: "):
         if text.startswith(prefix):
-            text = text[len(prefix):]
+            text = text[len(prefix) :]
     text = short_paths(text)
-    text = text[len("cairn: "):] if text.startswith("cairn: ") else text
+    text = text[len("cairn: ") :] if text.startswith("cairn: ") else text
     return f"{style('cairn:', 'red', sys.stderr)} {text}"
 
 
@@ -137,7 +137,9 @@ def plural(count: int, word: str) -> str:
 def files(entries) -> str:
     """`1 file, 12 KB` of a list of entries with a `size` (attribute or key)."""
     entries = list(entries)
-    total = sum((entry.get("size", 0) if isinstance(entry, dict) else getattr(entry, "size", 0)) or 0 for entry in entries)
+    total = sum(
+        (entry.get("size", 0) if isinstance(entry, dict) else getattr(entry, "size", 0)) or 0 for entry in entries
+    )
     return f"{plural(len(entries), 'file')}, {size(total)}"
 
 

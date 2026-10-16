@@ -107,14 +107,18 @@ class Sync:
         while it does not answer, StoreError when the remote is not this repo's."""
         uid = self.remote.uid
         if uid == repo_uid(self.root):
-            raise StoreError(f"the remote {self.remote.url} is the server of this very repo ({self.root}); processes on its "
-                             "machine open the repo directly: `cairn remote remove`")
+            raise StoreError(
+                f"the remote {self.remote.url} is the server of this very repo ({self.root}); processes on its "
+                "machine open the repo directly: `cairn remote remove`"
+            )
         bound = self.copies.meta("remote")
         if bound and bound != self._bound(uid):
-            raise StoreError(f"the repo {self.root} holds the versions of another remote ({bound}: a server's uid and its "
-                             f"project); the remote {self.remote.url} is a different one ({self._bound(uid)}). A repo has one "
-                             "remote: set it back with `cairn remote set`, or start a new repo (move the folder away once `cairn status` "
-                             "shows nothing pending)")
+            raise StoreError(
+                f"the repo {self.root} holds the versions of another remote ({bound}: a server's uid and its "
+                f"project); the remote {self.remote.url} is a different one ({self._bound(uid)}). A repo has one "
+                "remote: set it back with `cairn remote set`, or start a new repo (move the folder away once `cairn status` "
+                "shows nothing pending)"
+            )
         update_repo_file(self.root, remote={"url": self.remote.url, "uid": uid})
         return uid
 
@@ -212,7 +216,9 @@ class Sync:
             if item.get("sha256") in missing:
                 blob = blob_path(self.root, item["sha256"])
                 if not blob.is_file():
-                    raise StoreError(f"the staged contents of {item['path']} ({item['sha256'][:12]}) left the repo {self.root}")
+                    raise StoreError(
+                        f"the staged contents of {item['path']} ({item['sha256'][:12]}) left the repo {self.root}"
+                    )
                 sources[item["sha256"]] = (blob, item["size"])
         if sources:
             self.remote.upload(sources, None, quiet=True, what=what)
@@ -224,7 +230,9 @@ class Sync:
         remote, name = self.remote, record["name"]
         remote.create()
         if record["status"] == "completed":
-            record["digest"] = manifest_digest(record["files"])  # the remote recomputes it from the files and refuses a mismatch
+            record["digest"] = manifest_digest(
+                record["files"]
+            )  # the remote recomputes it from the files and refuses a mismatch
         manifest = {key: record.get(key) for key in ("label", "metadata", "source")}
         if record["status"] in ("completed", "failed"):
             self._start_inputs(record)
@@ -233,8 +241,15 @@ class Sync:
                 self._upload(record["files"], name)
                 self.outbox.refresh_claim(claimed)
                 try:
-                    record["number"] = remote.publish(name, record["files"], inputs=record["inputs"],
-                                                      aliases=record["aliases"], uid=record["uid"], digest=record["digest"], **manifest)
+                    record["number"] = remote.publish(
+                        name,
+                        record["files"],
+                        inputs=record["inputs"],
+                        aliases=record["aliases"],
+                        uid=record["uid"],
+                        digest=record["digest"],
+                        **manifest,
+                    )
                     break
                 except MissingBlobs:  # the remote's garbage collection removed a blob since we checked: send it again
                     if attempt == RETRIES - 1:
@@ -244,11 +259,18 @@ class Sync:
             record["number"] = remote.start_version(name, uid=record["uid"], **manifest)
             record["pushed_metadata"] = record.get("metadata")
             self.outbox.save(record)
-        if record.get("pushed_metadata", record.get("metadata")) != record.get("metadata") and record["status"] == "running":
+        if (
+            record.get("pushed_metadata", record.get("metadata")) != record.get("metadata")
+            and record["status"] == "running"
+        ):
             remote.set_metadata(name, record["number"], record.get("metadata") or {})  # changed while it ran
             record["pushed_metadata"] = record.get("metadata")
             self.outbox.save(record)
-        fresh = [item for item in record["files"] if record["pushed"].get(item["path"]) != (item.get("sha256") or item.get("link"))]
+        fresh = [
+            item
+            for item in record["files"]
+            if record["pushed"].get(item["path"]) != (item.get("sha256") or item.get("link"))
+        ]
         try:
             if fresh:
                 for attempt in range(RETRIES):
@@ -286,7 +308,8 @@ class Sync:
     def _start_inputs(self, record: dict) -> None:
         """An input that is a running version of this repo (the run an output comes from; also one that failed since
         and is not sent yet) must exist on the remote before the output names it: create it there now, running
-        (idempotent by uid; its owner, or the next sync, sends the rest). A pending input that is final is sent first."""
+        (idempotent by uid; its owner, or the next sync, sends the rest). A pending input that is final is sent first.
+        """
         for uid in _input_uids(record):
             other = self.outbox.load(uid)
             if other is None or other.get("number") is not None:
@@ -295,7 +318,9 @@ class Sync:
                 if other.get("sync") == "pending":
                     self.send(other)  # a pending version the record consumed: it goes first
                 if self.outbox.load(uid) is not None:
-                    raise Waiting(f"{record['name']}@{record['uid']} waits for its input {other['name']}@{uid}, which is not sent yet")
+                    raise Waiting(
+                        f"{record['name']}@{record['uid']} waits for its input {other['name']}@{uid}, which is not sent yet"
+                    )
                 continue
             manifest = {key: other.get(key) for key in ("label", "metadata", "source")}
             self.remote.create()
@@ -326,8 +351,10 @@ class Sync:
             except Unreachable:
                 raise
             except Exception as error:  # noqa: BLE001 - the repo could not record it: keep the entry, never reject it
-                raise NotRecorded(f"the remote has {name}@v{manifest.get('version')} (uid {manifest.get('uid')}), but "
-                                  f"the repo could not record it yet ({type(error).__name__}: {error}); the next sync does") from error
+                raise NotRecorded(
+                    f"the remote has {name}@v{manifest.get('version')} (uid {manifest.get('uid')}), but "
+                    f"the repo could not record it yet ({type(error).__name__}: {error}); the next sync does"
+                ) from error
         self.outbox.remove(record)
         return True
 
@@ -346,8 +373,9 @@ class Sync:
             manifest = self.remote.get_version(record["name"], record["uid"])
         except StoreError:
             return False
-        return manifest.get("status") in ("completed", "failed", "deleted") and \
-            (record["status"] == manifest.get("status") or manifest.get("status") == "deleted")
+        return manifest.get("status") in ("completed", "failed", "deleted") and (
+            record["status"] == manifest.get("status") or manifest.get("status") == "deleted"
+        )
 
     def send(self, record: dict, claim: bool = True) -> bool:
         """Push one entry; a refusal marks it rejected (and raises), not answering leaves it pending (and raises).
@@ -377,7 +405,9 @@ class Sync:
             record.update(sync="rejected", error=str(error))
             self.outbox.save(record)
             raise
-        except OSError as error:  # a file of this repo (a blob being read): not the remote's verdict; try again next time
+        except (
+            OSError
+        ) as error:  # a file of this repo (a blob being read): not the remote's verdict; try again next time
             raise NotRecorded(f"{record['name']}@{record['uid']}: {error}") from error
         finally:
             self.outbox.release(claimed)
@@ -388,7 +418,8 @@ class Sync:
 
         First the repo's own earlier versions are adopted (see `adopt`). A running entry whose owner is gone
         (`Outbox.dead`) is failed first. Returns a report: {"sent": [entries], "rejected": [entries], "waiting":
-        [entries still pending or running], "failed": [entries failed here], "adopted": count, "lines": [what happened]}."""
+        [entries still pending or running], "failed": [entries failed here], "adopted": count, "lines": [what happened]}.
+        """
         result = {"sent": [], "rejected": [], "waiting": [], "failed": [], "adopted": 0, "lines": []}
         say = result["lines"].append
         try:
@@ -415,10 +446,16 @@ class Sync:
                     continue
                 try:
                     current = self.outbox.load(record["uid"])
-                    if current is None or current["sync"] != "running" or self.outbox.dead(current, self.timeout) is None:
+                    if (
+                        current is None
+                        or current["sync"] != "running"
+                        or self.outbox.dead(current, self.timeout) is None
+                    ):
                         continue
                     record = current
-                    record.update(sync="pending", status="failed", error=f"failed by {hostname()}: {why}", completed=now())
+                    record.update(
+                        sync="pending", status="failed", error=f"failed by {hostname()}: {why}", completed=now()
+                    )
                     self.outbox.save(record)  # a queued failure, so nothing stays running for good
                 finally:
                     self.outbox.release(claimed)
@@ -467,15 +504,34 @@ class Sync:
             adopted.append(state["uid"])
             if state["status"] == "deleted" or self.outbox.folder_of(state["uid"]).exists():
                 continue
-            aliases = [alias for alias, number in self.copies.aliases(name).items()
-                       if number == state["version"] and alias != "latest"]
+            aliases = [
+                alias
+                for alias, number in self.copies.aliases(name).items()
+                if number == state["version"] and alias != "latest"
+            ]
             failed = state["status"] == "failed"
-            record = {"uid": state["uid"], "kind": "running" if failed else "publish", "sync": "pending", "status": state["status"],
-                      "url": self.remote.url, "store": uid, "name": name, "label": state.get("label"),
-                      "metadata": state.get("metadata") or {}, "inputs": self._adopted_inputs(state.get("inputs") or []),
-                      "aliases": aliases, "source": state.get("source"), "files": state.get("files") or [],
-                      "created": state.get("created") or now(), "completed": state.get("completed"), "number": None, "pushed": {},
-                      "owner": {"host": hostname(), "pid": os.getpid()}, "error": None, "adopted": state["version"]}
+            record = {
+                "uid": state["uid"],
+                "kind": "running" if failed else "publish",
+                "sync": "pending",
+                "status": state["status"],
+                "url": self.remote.url,
+                "store": uid,
+                "name": name,
+                "label": state.get("label"),
+                "metadata": state.get("metadata") or {},
+                "inputs": self._adopted_inputs(state.get("inputs") or []),
+                "aliases": aliases,
+                "source": state.get("source"),
+                "files": state.get("files") or [],
+                "created": state.get("created") or now(),
+                "completed": state.get("completed"),
+                "number": None,
+                "pushed": {},
+                "owner": {"host": hostname(), "pid": os.getpid()},
+                "error": None,
+                "adopted": state["version"],
+            }
             if not failed:
                 record["digest"] = manifest_digest(record["files"])
             self.outbox.create(record, running=False)

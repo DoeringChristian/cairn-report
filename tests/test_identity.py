@@ -33,7 +33,9 @@ class Server:
 
     def __init__(self, root: Path, port: int | None = None):
         self.root, self.port = root, port or free_port()
-        self.token = (root / "token").read_text().strip() if (root / "token").exists() else init_root(root).read_text().strip()
+        self.token = (
+            (root / "token").read_text().strip() if (root / "token").exists() else init_root(root).read_text().strip()
+        )
         self.url = f"http://127.0.0.1:{self.port}"
         self.httpd, self.requests = None, []
 
@@ -165,12 +167,18 @@ def test_concurrent_pulls_into_one_repo(tmp_path, monkeypatch, env):
     try:
         remote = server.remote()
         files = {f"part{index}/f{index}.txt": f"content {index} " * 200 for index in range(24)}
-        cairn.connect(f"{server.url}/study", token=server.token).artifact("data").publish(folder(tmp_path, "data", files))
+        cairn.connect(f"{server.url}/study", token=server.token).artifact("data").publish(
+            folder(tmp_path, "data", files)
+        )
         cache = tmp_path / "shared-cache"
         context = multiprocessing.get_context("spawn")
         barrier, results = context.Barrier(7), context.Queue()
-        processes = [context.Process(target=_pull_in_a_process, args=(server.url, server.token, "data@v1", str(cache), barrier, results))
-                     for _ in range(7)]
+        processes = [
+            context.Process(
+                target=_pull_in_a_process, args=(server.url, server.token, "data@v1", str(cache), barrier, results)
+            )
+            for _ in range(7)
+        ]
         for process in processes:
             process.start()
         answers = [results.get(timeout=120) for _ in processes]
@@ -222,14 +230,23 @@ def test_server_keeps_client_uids_and_exposes_the_store_uid(tmp_path, env):
         assert call("POST", path, {"uid": uid, "entries": entries, "metadata": {"other": 1}})[0] == 409
         assert call("POST", path, {"uid": "nope", "entries": entries})[0] == 400
         running = new_uid()
-        status, started = call("POST", "/api/v2/projects/study/artifacts/data/versions", {"uid": running, "label": "live"})
+        status, started = call(
+            "POST", "/api/v2/projects/study/artifacts/data/versions", {"uid": running, "label": "live"}
+        )
         assert status == 201 and started == {"version": 2, "uid": running}
-        assert call("POST", "/api/v2/projects/study/artifacts/data/versions", {"uid": running, "label": "live"})[1]["version"] == 2
+        assert (
+            call("POST", "/api/v2/projects/study/artifacts/data/versions", {"uid": running, "label": "live"})[1][
+                "version"
+            ]
+            == 2
+        )
         assert call("GET", f"/api/v2/projects/study/artifacts/data/versions/{uid}")[1]["version"] == 1
         assert call("GET", f"/api/v2/projects/study/resolve?ref=data@{uid}")[1]["version"]["uid"] == uid
         short = refs.default_short_id(uid)
-        assert call("GET", f"/api/v2/projects/study/resolve?ref={short}")[1] == {"name": "data", "version": call(
-            "GET", f"/api/v2/projects/study/artifacts/data/versions/{uid}")[1]}
+        assert call("GET", f"/api/v2/projects/study/resolve?ref={short}")[1] == {
+            "name": "data",
+            "version": call("GET", f"/api/v2/projects/study/artifacts/data/versions/{uid}")[1],
+        }
         status, body = call("GET", f"/files/study/data@{uid}//x.txt")
         assert status == 200 and body == b"x"
         assert remote.get_version("data", uid)["version"] == 1

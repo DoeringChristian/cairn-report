@@ -59,14 +59,22 @@ def opened(store, name: str, selector: str | None, path: str, range_header: str 
     size = max(last - first + 1, 0)
     if size <= SMALL:
         try:
-            return entry["sha256"], immutable, None, first, last, total, os.pread(descriptor, size, first) if size else b""
+            return (
+                entry["sha256"],
+                immutable,
+                None,
+                first,
+                last,
+                total,
+                os.pread(descriptor, size, first) if size else b"",
+            )
         finally:
             os.close(descriptor)
     return entry["sha256"], immutable, descriptor, first, last, total, None
 
 
 def parse(raw_path: str) -> tuple[str, refs.Ref]:
-    rest = unquote(raw_path)[len("/files/"):]
+    rest = unquote(raw_path)[len("/files/") :]
     project, _, remainder = rest.partition("/")
     head, separator, inner = remainder.partition("//")
     if not separator:
@@ -80,11 +88,16 @@ async def serve_file(app, request, raw_path: str, query: dict):
     store = app.view(project)
     loop = asyncio.get_running_loop()
     sha, immutable, descriptor, first, last, total, data = await loop.run_in_executor(
-        app.executor, opened, store, ref.name, ref.selector, ref.path, request.headers.get("range"))
+        app.executor, opened, store, ref.name, ref.selector, ref.path, request.headers.get("range")
+    )
     etag = f'"{sha}"'
-    headers = {"ETag": etag, "X-Content-Type-Options": "nosniff", "Accept-Ranges": "bytes",
-               "Cache-Control": "private, max-age=31536000, immutable" if immutable else "no-cache",
-               "Content-Security-Policy": "sandbox"}  # a pushed HTML file must not act as the store's origin
+    headers = {
+        "ETag": etag,
+        "X-Content-Type-Options": "nosniff",
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, max-age=31536000, immutable" if immutable else "no-cache",
+        "Content-Security-Policy": "sandbox",
+    }  # a pushed HTML file must not act as the store's origin
     if request.headers.get("if-none-match") == etag:
         if descriptor is not None:
             os.close(descriptor)
@@ -121,8 +134,17 @@ def _send_blocking(socket_fd: int, file_fd: int, offset: int, count: int) -> int
 class Body:
     """An ASGI response for a file: headers, then the bytes `first`..`first+size-1` of `descriptor` (closed after)."""
 
-    def __init__(self, status: int, headers: dict, descriptor: int | None, first: int, size: int, app, data: bytes | None = None):
-        self.status, self.headers, self.descriptor, self.first, self.size, self.app = status, headers, descriptor, first, size, app
+    def __init__(
+        self, status: int, headers: dict, descriptor: int | None, first: int, size: int, app, data: bytes | None = None
+    ):
+        self.status, self.headers, self.descriptor, self.first, self.size, self.app = (
+            status,
+            headers,
+            descriptor,
+            first,
+            size,
+            app,
+        )
         self.data = data  # the whole body, already read (small files and ranges)
 
     async def __call__(self, scope, receive, send) -> None:
@@ -138,7 +160,9 @@ class Body:
             if sendfile_enabled() and await self._zero_copy(scope, send, loop):
                 return
             position, remaining = self.first, self.size  # the next piece is read while this one is sent
-            upcoming = loop.run_in_executor(self.app.executor, os.pread, self.descriptor, min(PIECE, remaining), position)
+            upcoming = loop.run_in_executor(
+                self.app.executor, os.pread, self.descriptor, min(PIECE, remaining), position
+            )
             try:
                 while remaining > 0:
                     data = await upcoming
@@ -147,7 +171,9 @@ class Body:
                         raise EOFError("the blob ended early")
                     position, remaining = position + len(data), remaining - len(data)
                     if remaining > 0:
-                        upcoming = loop.run_in_executor(self.app.executor, os.pread, self.descriptor, min(PIECE, remaining), position)
+                        upcoming = loop.run_in_executor(
+                            self.app.executor, os.pread, self.descriptor, min(PIECE, remaining), position
+                        )
                     await send({"type": "http.response.body", "body": data, "more_body": remaining > 0})
             finally:
                 if upcoming is not None:  # the client went away: let the read finish before the descriptor closes
@@ -160,8 +186,11 @@ class Body:
     async def _zero_copy(self, scope, send, loop) -> bool:
         """Send the body with `os.sendfile`; False (nothing sent yet) where the server does not allow it."""
         cycle = getattr(scope.get("cairn.send"), "__self__", None)
-        if cycle is None or type(cycle).__module__ != "uvicorn.protocols.http.httptools_impl" \
-                or not all(hasattr(cycle, name) for name in ("transport", "expected_content_length", "disconnected")):
+        if (
+            cycle is None
+            or type(cycle).__module__ != "uvicorn.protocols.http.httptools_impl"
+            or not all(hasattr(cycle, name) for name in ("transport", "expected_content_length", "disconnected"))
+        ):
             return False
         transport = cycle.transport
         socket = transport.get_extra_info("socket")
@@ -173,7 +202,9 @@ class Body:
             await asyncio.sleep(0.0005)
         self.app.zero_copy_sends += 1
         try:
-            sent = await loop.run_in_executor(self.app.executor, _send_blocking, socket.fileno(), self.descriptor, self.first, self.size)
+            sent = await loop.run_in_executor(
+                self.app.executor, _send_blocking, socket.fileno(), self.descriptor, self.first, self.size
+            )
         except (OSError, EOFError, TimeoutError):  # the client went away (or stalled): drop the connection
             cycle.disconnected = True
             transport.close()

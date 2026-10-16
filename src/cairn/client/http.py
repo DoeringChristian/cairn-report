@@ -215,8 +215,14 @@ def warn_plain_http(host: str) -> None:
 class Client:
     """HTTP to one server, `url` (with a path prefix if it sits behind one: requests go to `<prefix>/api/...`)."""
 
-    def __init__(self, url: str, token: str, timeout: float = 120, token_source: str | None = None,
-                 token_places: str | None = None):
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        timeout: float = 120,
+        token_source: str | None = None,
+        token_places: str | None = None,
+    ):
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:
             raise SystemExit(f"cairn: bad server URL {url!r}: use https://host[:port][/prefix]")
@@ -248,7 +254,9 @@ class Client:
         if left is None:
             return self.timeout
         if left <= 0:
-            raise ClientError(f"{self.url} not reachable: out of time" + (f" ({method} {path})" if debug() else ""), None)
+            raise ClientError(
+                f"{self.url} not reachable: out of time" + (f" ({method} {path})" if debug() else ""), None
+            )
         return min(self.timeout, left)
 
     def _connection(self, limit: float | None = None):
@@ -257,10 +265,17 @@ class Client:
         limit = self.timeout if limit is None else limit
         reach = min(CONNECT_TIMEOUT, limit)
         if self.parsed.scheme == "https":
-            connection = http.client.HTTPSConnection(self.parsed.hostname, self.parsed.port, timeout=reach,
-                                                     context=ssl.create_default_context(), blocksize=BLOCK)
+            connection = http.client.HTTPSConnection(
+                self.parsed.hostname,
+                self.parsed.port,
+                timeout=reach,
+                context=ssl.create_default_context(),
+                blocksize=BLOCK,
+            )
         else:
-            connection = http.client.HTTPConnection(self.parsed.hostname, self.parsed.port, timeout=reach, blocksize=BLOCK)
+            connection = http.client.HTTPConnection(
+                self.parsed.hostname, self.parsed.port, timeout=reach, blocksize=BLOCK
+            )
         try:
             connection.connect()
             connection.sock.settimeout(limit)
@@ -272,8 +287,16 @@ class Client:
             raise
         return connection
 
-    def request(self, method: str, path: str, body=None, headers: dict | None = None,
-                expect=(200,), stream_to: Path | None = None, upload: bool = False):
+    def request(
+        self,
+        method: str,
+        path: str,
+        body=None,
+        headers: dict | None = None,
+        expect=(200,),
+        stream_to: Path | None = None,
+        upload: bool = False,
+    ):
         """One request on a kept-alive connection (see `_Pool`). A kept-alive connection the remote closed meanwhile is
         noticed when the request fails on it: the request is sent once more on a new one (every request of the API is
         idempotent; a body that cannot be sent twice always goes on a connection used a moment ago, or a new one)."""
@@ -335,7 +358,9 @@ class Client:
     def stream(self, path: str, headers: dict | None = None, expect=(200, 206)):
         """GET as (status, response headers, chunks); the connection closes when the chunks end or are closed."""
         try:
-            connection = self._connection(self._limit("GET", path))  # its own: the chunks are read later, maybe never whole
+            connection = self._connection(
+                self._limit("GET", path)
+            )  # its own: the chunks are read later, maybe never whole
         except (OSError, http.client.HTTPException) as error:
             raise _no_answer("GET", path, self.url, error) from error
         try:
@@ -364,14 +389,19 @@ class Client:
 
     def upload(self, sha: str, file: Path, size: int) -> None:
         with file.open("rb") as handle:
-            self.request("PUT", f"/api/v2/blobs/{sha}", body=Limited(handle, size),
-                         headers={"Content-Length": str(size), "Content-Type": "application/octet-stream"},
-                         expect=(200, 201), upload=True)
+            self.request(
+                "PUT",
+                f"/api/v2/blobs/{sha}",
+                body=Limited(handle, size),
+                headers={"Content-Length": str(size), "Content-Type": "application/octet-stream"},
+                expect=(200, 201),
+                upload=True,
+            )
 
     def missing(self, hashes: list[str]) -> set[str]:
         missing: set[str] = set()
         for start in range(0, len(hashes), BATCH):
-            _, answer = self.json("POST", "/api/v2/blobs/missing", {"sha256": hashes[start:start + BATCH]})
+            _, answer = self.json("POST", "/api/v2/blobs/missing", {"sha256": hashes[start : start + BATCH]})
             missing.update(answer["missing"])
         return missing
 
@@ -482,8 +512,14 @@ def entries_for(files: dict[str, dict], cache) -> tuple[list[dict], dict[str, Pa
     return entries, sources
 
 
-def upload_missing(client: Client, sources: dict[str, tuple[Path, int]], cache=None, workers: int = 4,
-                   errors: list | None = None, quiet: bool = False) -> tuple[set[str], int]:
+def upload_missing(
+    client: Client,
+    sources: dict[str, tuple[Path, int]],
+    cache=None,
+    workers: int = 4,
+    errors: list | None = None,
+    quiet: bool = False,
+) -> tuple[set[str], int]:
     """Upload the contents the remote lacks. Returns (hashes that failed, bytes sent); `errors` collects why."""
     missing = client.missing(sorted(sources))
     failed: set[str] = set()
@@ -500,8 +536,10 @@ def upload_missing(client: Client, sources: dict[str, tuple[Path, int]], cache=N
             if errors is not None:
                 errors.append(error)
             if not quiet:
-                warn(f"{short_path(file)} not uploaded ({cause(error) if isinstance(error, OSError) else error}); retried next time",
-                     once=False)
+                warn(
+                    f"{short_path(file)} not uploaded ({cause(error) if isinstance(error, OSError) else error}); retried next time",
+                    once=False,
+                )
             return 0
 
     began = time.monotonic()

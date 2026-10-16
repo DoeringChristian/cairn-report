@@ -18,8 +18,22 @@ def run(capsys, *argv):
 
 def test_publish_folder_records_label_alias_and_meta(env, capsys):
     data = folder(env, "data", {"a.txt": "one", "sub/b.txt": "two"})
-    out = run(capsys, "publish", str(data), "crops", "--label", "first", "--alias", "paper", "--alias", "keep",
-              "--meta", "psnr=31.2", "--meta", "note=hello")
+    out = run(
+        capsys,
+        "publish",
+        str(data),
+        "crops",
+        "--label",
+        "first",
+        "--alias",
+        "paper",
+        "--alias",
+        "keep",
+        "--meta",
+        "psnr=31.2",
+        "--meta",
+        "note=hello",
+    )
     [version] = store.versions("crops")
     assert out.startswith(f"published crops@v1 ({version['short_id']}, 2 files, ")
     assert version["label"] == "first" and version["metadata"] == {"psnr": 31.2, "note": "hello"}
@@ -75,8 +89,20 @@ WRITER = textwrap.dedent("""
 def watch(capsys, target, code):
     (target.parent / "writer.py").write_text(WRITER)
     with pytest.raises(SystemExit) as exit:
-        main(["publish", str(target), "sweep", "--interval", "0.5", "--",
-              sys.executable, str(target.parent / "writer.py"), str(target), str(code)])
+        main(
+            [
+                "publish",
+                str(target),
+                "sweep",
+                "--interval",
+                "0.5",
+                "--",
+                sys.executable,
+                str(target.parent / "writer.py"),
+                str(target),
+                str(code),
+            ]
+        )
     return exit.value.code, capsys.readouterr()
 
 
@@ -84,7 +110,11 @@ def test_watch_command_makes_one_completed_version(env, capsys):
     code, output = watch(capsys, env / "out", 0)
     assert code == 0 and "published sweep@v1 (" in output.out and ", 3 files" in output.out
     [version] = store.versions("sweep")
-    assert version["status"] == "completed" and [e["path"] for e in version["files"]] == ["first.txt", "log.txt", "second.txt"]
+    assert version["status"] == "completed" and [e["path"] for e in version["files"]] == [
+        "first.txt",
+        "log.txt",
+        "second.txt",
+    ]
     assert "synced" in output.out  # synced while the command still ran
     root = store.pull("sweep@latest")
     assert (root / "log.txt").read_text() == "final" and (root / "second.txt").read_text() == "second"
@@ -107,8 +137,10 @@ def test_inputs_pulled_by_the_command_are_recorded(env, capsys, monkeypatch):
     capsys.readouterr()
     out = env / "out"
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)  # publish --watch points the command at the folder itself
-    script = (f"import cairn as store; import pathlib; pathlib.Path({str(out)!r}).mkdir(exist_ok=True); "
-              "store.pull('datasets/toy@v1'); (pathlib.Path(" + repr(str(out)) + ") / 'r.txt').write_text('r')")
+    script = (
+        f"import cairn as store; import pathlib; pathlib.Path({str(out)!r}).mkdir(exist_ok=True); "
+        "store.pull('datasets/toy@v1'); (pathlib.Path(" + repr(str(out)) + ") / 'r.txt').write_text('r')"
+    )
     with pytest.raises(SystemExit) as exit:
         main(["publish", str(out), "fit", "--interval", "0.5", "--", sys.executable, "-c", script])
     assert exit.value.code == 0

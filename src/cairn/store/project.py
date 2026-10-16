@@ -13,12 +13,56 @@ from pathlib import Path
 
 from .local import OWN, LocalRepo
 
-_PROJECT = ("summaries", "summaries_stamped", "summary", "artifacts", "versions", "get_version", "aliases", "alias_log",
-            "version_numbers", "last_number", "resolve", "find", "ids", "lineage", "start_version", "add_files", "set_metadata",
-            "complete_version", "fail_version", "publish", "set_alias", "delete_version", "delete_artifact", "retention",
-            "set_retention", "read_file", "open_file", "put_copy", "mirror_aliases", "local_versions", "copies")
-_FOLDER = ("missing", "missing_hashes", "put_blob", "blob_writer", "put_file", "blob_path", "has_blob", "meta", "set_meta",
-           "beat", "reap", "forget_versions", "gc", "verify", "export_metadata")
+_PROJECT = (
+    "summaries",
+    "summaries_stamped",
+    "summary",
+    "artifacts",
+    "versions",
+    "get_version",
+    "aliases",
+    "alias_log",
+    "version_numbers",
+    "last_number",
+    "resolve",
+    "find",
+    "ids",
+    "lineage",
+    "start_version",
+    "add_files",
+    "set_metadata",
+    "complete_version",
+    "fail_version",
+    "publish",
+    "set_alias",
+    "delete_version",
+    "delete_artifact",
+    "retention",
+    "set_retention",
+    "read_file",
+    "open_file",
+    "put_copy",
+    "mirror_aliases",
+    "local_versions",
+    "copies",
+)
+_FOLDER = (
+    "missing",
+    "missing_hashes",
+    "put_blob",
+    "blob_writer",
+    "put_file",
+    "blob_path",
+    "has_blob",
+    "meta",
+    "set_meta",
+    "beat",
+    "reap",
+    "forget_versions",
+    "gc",
+    "verify",
+    "export_metadata",
+)
 
 
 class LocalProject:

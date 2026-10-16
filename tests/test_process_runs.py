@@ -116,8 +116,11 @@ def test_running_inputs_by_uid_are_accepted_failed_and_unknown_ones_refused(conf
     with pytest.raises(cairn.StoreError, match="failed"):
         store.artifact("out4").publish(data, inputs=[f"runs/job@{uid}"])
     marks = store.backend.lineage(out.ref, marks=True)
-    assert marks["inputs"] == ["runs/job@v1"] and marks["nodes"]["runs/job@v1"] == {"status": "failed", "kind": "run",
-                                                                                  "short_id": store.version("runs/job@v1").short_id}
+    assert marks["inputs"] == ["runs/job@v1"] and marks["nodes"]["runs/job@v1"] == {
+        "status": "failed",
+        "kind": "run",
+        "short_id": store.version("runs/job@v1").short_id,
+    }
     with pytest.raises(cairn.Protected):  # the failed run is still an input of a version: protected as before
         store.version("runs/job@v1").delete()
 
@@ -140,10 +143,15 @@ def test_lineage_looks_through_runs(env):
     assert evals.inputs == ["runs/evaluate@v1"] and evals.run.ref == "runs/evaluate@v1"
     assert [v.ref for v in evals.upstream()] == ["models/m@v1"]
     assert [v.ref for v in data.downstream()] == ["models/m@v1"]
-    assert cairn.lineage("models/m@v1") == {"inputs": [data.ref], "consumers": ["evals/m@v1"],
-                                            "runs": ["runs/train@v1", "runs/evaluate@v1"]}
-    assert cairn.lineage("models/m@v1", through_runs=False) == {"inputs": ["runs/train@v1"],
-                                                                "consumers": ["runs/evaluate@v1"]}
+    assert cairn.lineage("models/m@v1") == {
+        "inputs": [data.ref],
+        "consumers": ["evals/m@v1"],
+        "runs": ["runs/train@v1", "runs/evaluate@v1"],
+    }
+    assert cairn.lineage("models/m@v1", through_runs=False) == {
+        "inputs": ["runs/train@v1"],
+        "consumers": ["runs/evaluate@v1"],
+    }
     run = store.version("runs/train@v1")
     assert [v.ref for v in run.upstream()] == [data.ref] and [v.ref for v in run.downstream()] == ["models/m@v1"]
 
@@ -243,7 +251,11 @@ def script_project(env):
     (env / "data").mkdir()
     (env / "data" / "big.json").write_text("{}")
     (env / ".gitignore").write_text(".cairn/\n")
-    for command in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+    for command in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"],
+    ):
         subprocess.run(["git", *command], cwd=env, check=True)
     (env / "untracked.py").write_text("x = 1\n")
     published_dataset(env)
@@ -253,8 +265,15 @@ def script_project(env):
 def job(project, mode, **kwargs):
     environ = {key: value for key, value in os.environ.items() if not key.startswith("SLURM_")}
     environ |= {"SLURM_JOB_ID": "123", "SLURM_ARRAY_TASK_ID": "4", "CUDA_VISIBLE_DEVICES": "0", "MY_SECRET": "hidden"}
-    return subprocess.Popen([sys.executable, "job.py", mode], cwd=project, env=environ, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, **kwargs)
+    return subprocess.Popen(
+        [sys.executable, "job.py", mode],
+        cwd=project,
+        env=environ,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        **kwargs,
+    )
 
 
 def test_a_script_is_a_run_that_completes_at_exit(script_project):
@@ -273,7 +292,9 @@ def test_a_script_is_a_run_that_completes_at_exit(script_project):
     assert "hello err" in (folder_ / "logs" / "stderr.txt").read_text()
     samples = read_jsonl(folder_ / "system" / "metrics.jsonl")
     assert len(samples) >= 2 and all("time" in row and "disk_percent" in row for row in samples)
-    assert any("cpu_percent" in row or "load_1m" in row for row in samples) and any("memory_percent" in row or "process_max_rss_gb" in row for row in samples)
+    assert any("cpu_percent" in row or "load_1m" in row for row in samples) and any(
+        "memory_percent" in row or "process_max_rss_gb" in row for row in samples
+    )
     info = json.loads((folder_ / "system" / "info.json").read_text())
     assert info["host"] and info["argv"] == ["job.py", "ok"] and info["cwd"] == str(script_project) and info["pid"]
     assert info["slurm"] == {"job_id": "123", "array_task_id": "4"} and info["run"].startswith("runs/job@")
@@ -281,7 +302,9 @@ def test_a_script_is_a_run_that_completes_at_exit(script_project):
     assert "packages" not in info and "cairn==" in (folder_ / "environment" / "pip-freeze.txt").read_text()
     manifest = json.loads((folder_ / "code" / "manifest.json").read_text())
     assert manifest["mode"] == "git" and len(manifest["commit"]) == 40
-    assert (folder_ / "code" / "git-tree.tar.gz").is_file() and (folder_ / "code" / "untracked" / "untracked.py").is_file()
+    assert (folder_ / "code" / "git-tree.tar.gz").is_file() and (
+        folder_ / "code" / "untracked" / "untracked.py"
+    ).is_file()
     assert "secrets.env" not in manifest["working_files"] and "data/big.json" not in manifest["working_files"]
     assert not (folder_ / "run.json").exists()  # the version's status is the record
     assert [row["loss"] for row in read_jsonl(folder_ / "metrics.jsonl")] == [1.0]
@@ -316,16 +339,25 @@ def test_sigterm_fails_the_run(script_project):
     assert "terminated by signal SIGTERM" in (kept.folder / "logs" / "error.txt").read_text()
 
 
-EXITS = [("sys.exit(3)", 3), ("raise SystemExit(4)", 4), ("sys.exit('boom')", 1), ("raise SystemExit('boom')", 1),
-         ("def main():\n    sys.exit(5)\nmain()", 5), ("sys.exit(0)", 0), ("sys.exit()", 0),
-         ("try:\n    sys.exit(2)\nexcept SystemExit:\n    pass", 0)]
+EXITS = [
+    ("sys.exit(3)", 3),
+    ("raise SystemExit(4)", 4),
+    ("sys.exit('boom')", 1),
+    ("raise SystemExit('boom')", 1),
+    ("def main():\n    sys.exit(5)\nmain()", 5),
+    ("sys.exit(0)", 0),
+    ("sys.exit()", 0),
+    ("try:\n    sys.exit(2)\nexcept SystemExit:\n    pass", 0),
+]
 
 
 @pytest.mark.parametrize("statement, code", EXITS, ids=[statement.split("\n")[0] for statement, _ in EXITS])
 def test_a_non_zero_exit_fails_the_run(env, statement, code):
     """`sys.exit(n)` and `raise SystemExit(n)` that leave the script: n != 0 (or a message) fails the run."""
     write_config(env, "")
-    (env / "exit.py").write_text("import sys, cairn\ncairn.init(name='exit', system=False, code=False)\n" + statement + "\n")
+    (env / "exit.py").write_text(
+        "import sys, cairn\ncairn.init(name='exit', system=False, code=False)\n" + statement + "\n"
+    )
     result = subprocess.run([sys.executable, "exit.py"], cwd=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == code, result.stderr
     version = cairn.connect().version("runs/exit@latest" if code == 0 else "runs/exit@v1")
@@ -339,7 +371,9 @@ def test_a_non_zero_exit_fails_the_run(env, statement, code):
 
 def test_an_unhandled_exception_keeps_its_traceback_and_records_no_exit_code(env):
     write_config(env, "")
-    (env / "boom.py").write_text("import cairn\ncairn.init(name='boom', system=False, code=False)\nraise ValueError('x')\n")
+    (env / "boom.py").write_text(
+        "import cairn\ncairn.init(name='boom', system=False, code=False)\nraise ValueError('x')\n"
+    )
     assert subprocess.run([sys.executable, "boom.py"], cwd=env, capture_output=True).returncode == 1
     [kept] = drafts.drafts()
     assert "ValueError: x" in (kept.folder / "logs" / "error.txt").read_text()
@@ -380,13 +414,21 @@ def test_a_local_version_is_failed_by_age_or_dead_owner_and_never_while_alive(tm
     beats = tmp_path / "store" / "heartbeats"
     now = time.time()
     (beats / stale).write_text(json.dumps({"time": now - 10_000, "host": "other-host", "pid": 1}))  # too old
-    (beats / foreign).write_text(json.dumps({"time": now - 5, "host": "other-host", "pid": 2 ** 22}))  # recent, elsewhere
+    (beats / foreign).write_text(json.dumps({"time": now - 5, "host": "other-host", "pid": 2**22}))  # recent, elsewhere
     reaped = dict(cairn.LocalRepo(tmp_path / "store", heartbeat_timeout=600).reaped)
     assert list(reaped) == ["run@v2 (project p)"] and "no heartbeat since" in reaped["run@v2 (project p)"]
     states = {version["uid"]: version["status"] for version in store.versions("p", "run")}
-    assert states == {mine: "running", stale: "failed", foreign: "running", bare: "running"}  # `bare` never had a heartbeat
+    assert states == {
+        mine: "running",
+        stale: "failed",
+        foreign: "running",
+        bare: "running",
+    }  # `bare` never had a heartbeat
     time.sleep(0.05)
-    assert {ref for ref, _ in store.reap(0.01)} == {"run@v1 (project p)", "run@v3 (project p)"}  # a tiny timeout: whoever has not beaten lately
+    assert {ref for ref, _ in store.reap(0.01)} == {
+        "run@v1 (project p)",
+        "run@v3 (project p)",
+    }  # a tiny timeout: whoever has not beaten lately
     assert {v["status"] for v in store.versions("p", "run")} == {"failed", "running"}
     store.complete_version("p", "run", 4)
     assert not (beats / bare).exists()
@@ -408,10 +450,19 @@ def test_the_default_name_follows_the_script(env):
     (env / "pkg" / "Train_Model.py").write_text("import cairn\nprint(cairn.init(system=False, code=False).name)\n")
     by_module = subprocess.run([sys.executable, "-m", "pkg.Train_Model"], cwd=env, capture_output=True, text=True)
     by_path = subprocess.run([sys.executable, "pkg/Train_Model.py"], cwd=env, capture_output=True, text=True)
-    by_code = subprocess.run([sys.executable, "-c", "import cairn; print(cairn.init(system=False, code=False).name)"], cwd=env,
-                             capture_output=True, text=True)
-    assert [by_module.stdout.strip(), by_path.stdout.strip(), by_code.stdout.strip()] == \
-        ["runs/pkg.train_model", "runs/train_model", "runs/interactive"], by_module.stderr + by_path.stderr
+    by_code = subprocess.run(
+        [sys.executable, "-c", "import cairn; print(cairn.init(system=False, code=False).name)"],
+        cwd=env,
+        capture_output=True,
+        text=True,
+    )
+    assert [by_module.stdout.strip(), by_path.stdout.strip(), by_code.stdout.strip()] == [
+        "runs/pkg.train_model",
+        "runs/train_model",
+        "runs/interactive",
+    ], (
+        by_module.stderr + by_path.stderr
+    )
 
 
 # ------------------------------------------------------------------ Hydra: ${cairn.run:}
@@ -473,13 +524,19 @@ def run_project(configured, env):
     (env / "experiments" / "run.py").write_text(RUN)
     (env / "experiments" / "toy.py").write_text(TOY)
     (env / ".gitignore").write_text(".cairn/\n")
-    for command in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+    for command in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"],
+    ):
         subprocess.run(["git", *command], cwd=env, check=True)
     return env
 
 
 def hydra(project, *overrides):
-    return subprocess.run([sys.executable, "experiments/run.py", *overrides], cwd=project, capture_output=True, text=True)
+    return subprocess.run(
+        [sys.executable, "experiments/run.py", *overrides], cwd=project, capture_output=True, text=True
+    )
 
 
 def synced():
@@ -496,8 +553,15 @@ def test_a_hydra_job_is_a_run_in_its_job_folder(run_project):
     store = synced()
     run = store.version("runs/demo@latest")
     paths = {f.path for f in run.files}
-    assert {"result.txt", "metrics.jsonl", ".hydra/config.yaml", "provenance/manifest.json", "logs/stdout.txt",
-            "system/info.json", "system/metrics.jsonl"} <= paths and "run.json" not in paths
+    assert {
+        "result.txt",
+        "metrics.jsonl",
+        ".hydra/config.yaml",
+        "provenance/manifest.json",
+        "logs/stdout.txt",
+        "system/info.json",
+        "system/metrics.jsonl",
+    } <= paths and "run.json" not in paths
     assert run.status == "completed" and run.inputs == [dataset.ref] and run.consumers == ["models/toy@v1"]
     assert run.metadata["kind"] == "run" and run.metadata["config"]["experiment"]["pull"] == "datasets/toy@latest"
     assert run.metadata["overrides"] == ["experiment.pull=datasets/toy@latest"]
@@ -526,7 +590,10 @@ def test_a_hydra_sweep_is_a_run_per_trial_and_a_summary_run(run_project):
     trial0, trial1, summary = store.artifact("runs/demo").versions()
     assert [trial0.metadata["sweep"]["num"], trial1.metadata["sweep"]["num"]] == [0, 1]
     assert trial0.label == f"{summary.label}/0" and trial1.label == f"{summary.label}/1"
-    assert trial0.metadata["sweep"]["uid"] == summary.uid and trial0.metadata["config"]["experiment"]["pull"] == "datasets/a@v1"
+    assert (
+        trial0.metadata["sweep"]["uid"] == summary.uid
+        and trial0.metadata["config"]["experiment"]["pull"] == "datasets/a@v1"
+    )
     assert trial0.inputs == [first.ref] and trial1.inputs == [second.ref]
     assert {".hydra/config.yaml", "result.txt", "logs/stdout.txt"} <= {f.path for f in trial0.files}
     assert summary.metadata["kind"] == "run" and summary.inputs == [trial0.ref, trial1.ref]

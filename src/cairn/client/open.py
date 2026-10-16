@@ -53,8 +53,9 @@ def remote_parts(url: str, what: str = "[remote] url") -> tuple[str, str]:
     """(server URL, project) of a remote URL; SystemExit when it names no project (or not a valid one)."""
     server, project = split_remote(url)
     if project is None:
-        raise SystemExit(f"cairn: {what} {url!r} names no project (use <server>/<project>, e.g. "
-                         f"{url.rstrip('/')}/my-study)")
+        raise SystemExit(
+            f"cairn: {what} {url!r} names no project (use <server>/<project>, e.g. " f"{url.rstrip('/')}/my-study)"
+        )
     if not refs.PROJECT.fullmatch(project):
         raise SystemExit(f"cairn: {what} {url!r}: {project!r} is not a project name (lowercase letters, digits, _ . -)")
     return server, project
@@ -66,7 +67,13 @@ def valid_remote(url: str) -> str:
 
     url = url.strip().rstrip("/")
     parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment or parsed.params:
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.hostname
+        or parsed.query
+        or parsed.fragment
+        or parsed.params
+    ):
         raise SystemExit(f"cairn: {url!r} is not a remote (use http(s)://host[:port][/prefix]/<project>)")
     try:
         parsed.port
@@ -109,7 +116,9 @@ def existing_repo(config: Config) -> Path:
     already (SystemExit otherwise: nothing is created)."""
     repo = Path(config.cairn_dir)
     if not (repo / "repo.json").is_file():
-        raise SystemExit(f"cairn: no repo here ({short_path(repo)} does not exist)\n" + hint("run `cairn init`", sys.stderr))
+        raise SystemExit(
+            f"cairn: no repo here ({short_path(repo)} does not exist)\n" + hint("run `cairn init`", sys.stderr)
+        )
     return repo
 
 
@@ -162,7 +171,9 @@ def client(config: Config | None, url: str | None = None, *, token: str | None =
 
 def where(config: Config | None, root: Path) -> str:
     """What messages say about where the repo's versions were looked for: `the repo <root> (how it was found)`."""
-    how = config.located if config and config.located and Path(config.cairn_dir).resolve() == Path(root).resolve() else ""
+    how = (
+        config.located if config and config.located and Path(config.cairn_dir).resolve() == Path(root).resolve() else ""
+    )
     return f"the repo {root}" + (f" ({how})" if how else "")
 
 
@@ -177,12 +188,16 @@ def _compose(root: Path, remote: Remote | None, config: Config | None, own: bool
     if remote is None:
         if fstype:
             raise StoreError(network_fs_message(root, fstype))
-        repo = StandaloneRepo(LocalProject(LocalRepo(root, allow_network_fs=allowed, heartbeat_timeout=beat,
-                                                     where=where(config, root))))
+        repo = StandaloneRepo(
+            LocalProject(LocalRepo(root, allow_network_fs=allowed, heartbeat_timeout=beat, where=where(config, root)))
+        )
         repo.own = own
         return repo
-    copies = LocalProject(LocalRepo(root, allow_network_fs=allowed, heartbeat_timeout=beat, where=where(config, root))) \
-        if own and not fstype else NoCopies()
+    copies = (
+        LocalProject(LocalRepo(root, allow_network_fs=allowed, heartbeat_timeout=beat, where=where(config, root)))
+        if own and not fstype
+        else NoCopies()
+    )
     repo = SyncedRepo(remote, root, copies, beat)
     repo.own = own
     return repo
@@ -252,7 +267,10 @@ def served_root(config: Config) -> tuple[Path, str]:
     a copy of another server's), and the name its one project is served under (the project folder's)."""
     url = remote_url(config)
     if url:
-        raise SystemExit(f"cairn: this project's repo syncs with the remote {url}\n" + hint("to serve a repo folder: cairn server <folder>", sys.stderr))
+        raise SystemExit(
+            f"cairn: this project's repo syncs with the remote {url}\n"
+            + hint("to serve a repo folder: cairn server <folder>", sys.stderr)
+        )
     return make_repo_folder(Path(config.cairn_dir), config.found), project_label(config)
 
 

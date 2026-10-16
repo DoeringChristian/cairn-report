@@ -124,8 +124,9 @@ def now() -> str:
 def code_revision(root: Path) -> str:
     """The git commit of the project at `root`, or "unversioned"."""
     try:
-        return subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
-                              capture_output=True, text=True, check=True).stdout.strip()
+        return subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return "unversioned"
 
@@ -177,10 +178,19 @@ def _job_run(cfg: Any, output_dir: Path, overrides: list[str], multirun: bool, n
     if found is not None and found.record.get("kind") == "run":
         if not found.trial:
             return runs.init(name, config=config, metadata=metadata, _adopt=found, code=False), "run"
-        sweep = {"uid": found.uid, "label": found.label, "num": int(num) if str(num).isdigit() else num, "ref": found.ref}
+        sweep = {
+            "uid": found.uid,
+            "label": found.label,
+            "num": int(num) if str(num).isdigit() else num,
+            "ref": found.ref,
+        }
         label = f"{found.label}/{num}"
-        return runs.init(name, config=config, metadata={**metadata, "sweep": sweep}, label=label, _folder=output_dir,
-                         code=False), "trial"
+        return (
+            runs.init(
+                name, config=config, metadata={**metadata, "sweep": sweep}, label=label, _folder=output_dir, code=False
+            ),
+            "trial",
+        )
     return runs.init(name, config=config, metadata=metadata, code=not (output_dir / "provenance").exists()), None
 
 
@@ -229,9 +239,16 @@ def run_experiment(cfg: Any, base: type | None = None, require_source_snapshot: 
         experiment.run(output_dir)
     except BaseException as error:
         if record is not None:
-            write_status(output_dir, {**record, "status": "failed", "ended": now(),
-                                      "error": f"{type(error).__name__}: {error}",
-                                      "traceback": traceback.format_exc()})
+            write_status(
+                output_dir,
+                {
+                    **record,
+                    "status": "failed",
+                    "ended": now(),
+                    "error": f"{type(error).__name__}: {error}",
+                    "traceback": traceback.format_exc(),
+                },
+            )
         if draft is not None:
             draft.fail(error) if single else draft.deactivate()
         _end_trial(run, kind, output_dir, error)
@@ -254,8 +271,14 @@ def _end_trial(run, kind, output_dir: Path, error) -> None:
     finally:
         if kind == "trial":
             sweep = (run.record.get("metadata") or {}).get("sweep") or {}
-            line = {"num": sweep.get("num"), "uid": run.uid, "label": run.label, "ref": version.ref if version is not None else run.ref,
-                    "status": "failed" if error is not None or version is None else "completed", "time": now()}
+            line = {
+                "num": sweep.get("num"),
+                "uid": run.uid,
+                "label": run.label,
+                "ref": version.ref if version is not None else run.ref,
+                "status": "failed" if error is not None or version is None else "completed",
+                "time": now(),
+            }
             with (output_dir.parent / TRIALS).open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(line) + "\n")
 
@@ -272,8 +295,15 @@ def _trial_runs(study: Path) -> dict[str, dict]:
     return {str(line.get("num")): line for line in read_jsonl(study / TRIALS) if line.get("num") is not None}
 
 
-def complete_study(study: Path, name: str, trials: list[str], started: str | None, revision: str,
-                   metadata: dict | None = None, **extra: Any) -> bool:
+def complete_study(
+    study: Path,
+    name: str,
+    trials: list[str],
+    started: str | None,
+    revision: str,
+    metadata: dict | None = None,
+    **extra: Any,
+) -> bool:
     """Complete a study (only when every trial completed). A `${cairn.run:}` sweep publishes its folder as the summary
     run, whose inputs are the trial runs; a sweep draft is published (its inputs: the trials' runs), with `metadata`
     added; a plain study gets run.json and moves latest. Kept (not published) when a trial did not complete."""
@@ -286,9 +316,19 @@ def complete_study(study: Path, name: str, trials: list[str], started: str | Non
     rows = [{"trial": trial, "status": records[trial].get("status", "missing")} for trial in trials]
     complete = bool(rows) and all(row["status"] == "completed" for row in rows)
     study.mkdir(parents=True, exist_ok=True)
-    write_status(study, {"status": "completed" if complete else "failed", "kind": "study",
-                         "name": validate_run_name(name), "started": started, "ended": now(),
-                         "code_revision": revision, "trials": rows, **extra})
+    write_status(
+        study,
+        {
+            "status": "completed" if complete else "failed",
+            "kind": "study",
+            "name": validate_run_name(name),
+            "started": started,
+            "ended": now(),
+            "code_revision": revision,
+            "trials": rows,
+            **extra,
+        },
+    )
     if draft is not None and not draft.trial:
         if metadata:
             draft.set_metadata(**metadata)
@@ -311,12 +351,23 @@ def _complete_run_sweep(reserved, study: Path, name: str, trials: list[str], met
     from ..client.runs import Run
 
     listed = _trial_runs(study)
-    numbers = sorted(set(trials) | set(listed), key=lambda item: (not item.isdigit(), int(item) if item.isdigit() else 0, item))
-    rows = [{"trial": number, "status": listed.get(number, {}).get("status", "missing"), "ref": listed.get(number, {}).get("ref")}
-            for number in numbers]
+    numbers = sorted(
+        set(trials) | set(listed), key=lambda item: (not item.isdigit(), int(item) if item.isdigit() else 0, item)
+    )
+    rows = [
+        {
+            "trial": number,
+            "status": listed.get(number, {}).get("status", "missing"),
+            "ref": listed.get(number, {}).get("ref"),
+        }
+        for number in numbers
+    ]
     complete = bool(rows) and all(row["status"] == "completed" for row in rows)
     inputs = [row["ref"] for row in rows if row["status"] == "completed" and row["ref"]]
-    summary = {**metadata, "sweep": {"trials": rows, **{key: value for key, value in extra.items() if value is not None}}}
+    summary = {
+        **metadata,
+        "sweep": {"trials": rows, **{key: value for key, value in extra.items() if value is not None}},
+    }
     run = Run(validate_run_name(name), adopt=reserved, metadata=summary, inputs=inputs)
     if complete:
         run.publish()
@@ -327,8 +378,9 @@ def _complete_run_sweep(reserved, study: Path, name: str, trials: list[str], met
 
 
 def _numbered(study: Path) -> list[str]:
-    return sorted((p.name for p in study.iterdir() if p.is_dir() and p.name.isdigit()), key=int) \
-        if study.is_dir() else []
+    return (
+        sorted((p.name for p in study.iterdir() if p.is_dir() and p.name.isdigit()), key=int) if study.is_dir() else []
+    )
 
 
 try:
@@ -348,8 +400,14 @@ class StudyCompletion(Callback):
 
     def on_multirun_end(self, config: Any, **kwargs) -> None:
         study = getattr(self, "study", Path(config.hydra.sweep.dir).resolve())
-        complete_study(study, str(config.run.name), _numbered(study), getattr(self, "started", None),
-                       getattr(self, "revision", None) or code_revision(Path.cwd()), metadata=_study_metadata(config))
+        complete_study(
+            study,
+            str(config.run.name),
+            _numbered(study),
+            getattr(self, "started", None),
+            getattr(self, "revision", None) or code_revision(Path.cwd()),
+            metadata=_study_metadata(config),
+        )
 
 
 def _study_metadata(config: Any) -> dict:
@@ -381,16 +439,18 @@ def finalize_study(study: Path) -> bool:
     if (study / "run.json").exists():
         raise SystemExit(f"{study}/run.json already exists; nothing to finalize")
     present = set(_numbered(study))
-    submitted = {p.name.rsplit("_", 1)[1] for p in (study / ".submitit").glob("*_*")
-                 if p.name.rsplit("_", 1)[1].isdigit()}
+    submitted = {
+        p.name.rsplit("_", 1)[1] for p in (study / ".submitit").glob("*_*") if p.name.rsplit("_", 1)[1].isdigit()
+    }
     trials = sorted(present | submitted, key=int)
     if not trials:
         raise SystemExit(f"{study} has no trials")
     records = [_trial_status(study / trial) for trial in trials]
     running = [trial for trial, record in zip(trials, records) if record.get("status") == "running"]
     if running:
-        raise SystemExit(f"trial(s) {', '.join(running)} still 'running'; confirm with squeue/sacct "
-                         "that their jobs ended first")
+        raise SystemExit(
+            f"trial(s) {', '.join(running)} still 'running'; confirm with squeue/sacct " "that their jobs ended first"
+        )
     config_file = study / min(present, key=int) / ".hydra" / "config.yaml" if present else None
     config = yaml.safe_load(config_file.read_text()) if config_file and config_file.is_file() else {}
     name = str(((config or {}).get("run") or {}).get("name") or study.parent.name)
@@ -405,7 +465,9 @@ def finalize_study(study: Path) -> bool:
             metadata = _study_metadata(OmegaConf.load(sweep))
         except ImportError:
             pass
-    return complete_study(study, name, trials, started, revision, metadata=metadata, finalized_by="cairn finalize-study")
+    return complete_study(
+        study, name, trials, started, revision, metadata=metadata, finalized_by="cairn finalize-study"
+    )
 
 
 def _finalize_run_sweep(reserved, study: Path) -> bool:
@@ -416,14 +478,22 @@ def _finalize_run_sweep(reserved, study: Path) -> bool:
     from ..store.folders import read_json
 
     present = set(_numbered(study))
-    submitted = {p.name.rsplit("_", 1)[1] for p in (study / ".submitit").glob("*_*") if p.name.rsplit("_", 1)[1].isdigit()}
+    submitted = {
+        p.name.rsplit("_", 1)[1] for p in (study / ".submitit").glob("*_*") if p.name.rsplit("_", 1)[1].isdigit()
+    }
     listed = _trial_runs(study)
     trials = sorted(present | submitted | set(listed), key=int)
     if not trials:
         raise SystemExit(f"{study} has no trials")
-    running = [trial for trial in trials if trial not in listed and (read_json(study / f"{trial}.draft.json") or {}).get("state") == "open"]
+    running = [
+        trial
+        for trial in trials
+        if trial not in listed and (read_json(study / f"{trial}.draft.json") or {}).get("state") == "open"
+    ]
     if running:
-        raise SystemExit(f"trial(s) {', '.join(running)} still running; confirm with squeue/sacct that their jobs ended first")
+        raise SystemExit(
+            f"trial(s) {', '.join(running)} still running; confirm with squeue/sacct that their jobs ended first"
+        )
     metadata, name = {}, None
     sweep = study / "multirun.yaml"
     if sweep.is_file():

@@ -101,8 +101,10 @@ def test_pending_version_is_usable_before_upload(down, env, capsys, monkeypatch)
 
     report = env / "reports" / "r" / "report.md"  # a report's inputs: resolve the pending version too
     report.parent.mkdir(parents=True)
-    report.write_text("---\ntitle: R\ninputs:\n  data: data@best\n---\n\n"
-                      "```python exec hide\nn = int((inputs.data / 'n.txt').read_text()) + 1\n```\n\nThe answer is {{ n }}.\n")
+    report.write_text(
+        "---\ntitle: R\ninputs:\n  data: data@best\n---\n\n"
+        "```python exec hide\nn = int((inputs.data / 'n.txt').read_text()) + 1\n```\n\nThe answer is {{ n }}.\n"
+    )
     build_all(load_config(env))
     assert "42" in (env / ".cairn" / "build" / "r" / "narrative.html").read_text()
 
@@ -191,13 +193,17 @@ def _flush_in_a_process(project, token, barrier, results):
 def test_concurrent_senders_on_one_outbox_send_each_version_once(down, env, tmp_path, capsys, monkeypatch):
     """Five processes (jobs and a login node sharing one project) send the same pending versions at once."""
     store = cairn.connect()
-    uids = [store.artifact(f"data{index % 3}").publish(folder(env, f"d{index}", {"a.txt": f"{index}" * 5000})).uid
-            for index in range(8)]
+    uids = [
+        store.artifact(f"data{index % 3}").publish(folder(env, f"d{index}", {"a.txt": f"{index}" * 5000})).uid
+        for index in range(8)
+    ]
     assert len(outbox_versions(env)) == 8
     down.start()
     context = multiprocessing.get_context("spawn")
     barrier, results = context.Barrier(5), context.Queue()
-    processes = [context.Process(target=_flush_in_a_process, args=(str(env), down.token, barrier, results)) for _ in range(5)]
+    processes = [
+        context.Process(target=_flush_in_a_process, args=(str(env), down.token, barrier, results)) for _ in range(5)
+    ]
     for process in processes:
         process.start()
     sent = [uid for _ in processes for uid in results.get(timeout=120)]
@@ -211,8 +217,9 @@ def test_concurrent_senders_on_one_outbox_send_each_version_once(down, env, tmp_
     assert sorted(v["uid"] for name in ("data0", "data1", "data2") for v in down.versions(name)) == sorted(uids)
     assert outbox_versions(env) == []
     assert not [path for path in (env / ".cairn").rglob("*") if ".tmp-" in path.name or ".flushing-" in path.name]
-    numbers = sorted((copy["version"], name) for name in ("data0", "data1", "data2")
-                     for copy in store.backend.copies.versions(name))
+    numbers = sorted(
+        (copy["version"], name) for name in ("data0", "data1", "data2") for copy in store.backend.copies.versions(name)
+    )
     assert len(numbers) == 8  # every one recorded in the repo with the remote's number
 
 
@@ -237,7 +244,8 @@ def test_sync_mirrors_the_remotes_aliases_into_the_repo(down, env, capsys, monke
     with monkeypatch.context() as other:  # another machine publishes v2 and moves best
         other.setenv("CAIRN_DIR", str(env.parent / "other-repo"))
         cairn.connect(f"{down.url}/study", token=down.token).artifact("data").publish(
-            folder(env, "d2", {"a.txt": "two"}), aliases=["best"])
+            folder(env, "d2", {"a.txt": "two"}), aliases=["best"]
+        )
     cairn.pull("data@v2", record=False)  # copied into the repo, but the repo still says best is v1
     out, err = run(capsys, "pull", "data@best", "--offline", "--no-record")
     assert (Path(out.strip()) / "a.txt").read_text() == "one"

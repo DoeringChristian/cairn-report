@@ -24,4 +24,5 @@ def session_id(token: str) -> str:
 @dataclass
 class Session:
     """What a browser session acts as: a store handle carrying the token."""
+
     store: object  # the repo interface (store/interface.py): the project's repo, a repo folder, or a remote

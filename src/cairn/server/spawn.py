@@ -25,7 +25,19 @@ def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool
     """
     where = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
     url = f"http://[{where}]:{port}" if ":" in where else f"http://{where}:{port}"
-    command = [sys.executable, "-m", "cairn", "ui", "--remote", url, "--host", host, "--port", str(ui_port), "--no-browser"]
+    command = [
+        sys.executable,
+        "-m",
+        "cairn",
+        "ui",
+        "--remote",
+        url,
+        "--host",
+        host,
+        "--port",
+        str(ui_port),
+        "--no-browser",
+    ]
     if no_auth:
         command.append("--no-auth")
     env = dict(os.environ)
@@ -34,7 +46,9 @@ def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool
         env["CAIRN_TOKEN"] = owner_token
     env[PARENT_ENV] = str(os.getpid())  # the UI exits when this process is gone, even after a SIGKILL
     child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, text=True)
-    lines = []  # its startup lines, up to the login link (with no auth: its address), so the server prints them in order
+    lines = (
+        []
+    )  # its startup lines, up to the login link (with no auth: its address), so the server prints them in order
     last = "  UI " if no_auth else "  Log in "
     for line in child.stdout:
         lines.append(line.rstrip())

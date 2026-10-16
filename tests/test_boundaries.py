@@ -1,14 +1,14 @@
 """The layers of the package may import only the layers they are allowed to: parse every module's imports with `ast`.
 
-    store/            the repo core: the only code that changes a repo folder; no HTTP, no remote, no configuration
-    api.py            Cairn's errors raised from the caller's call (a decorator over the store's error types)
-    client/http.py    HTTP and folder scanning; client/remote.py the repo interface over HTTP
-    client/sync.py    the sync engine: outbox -> remote -> the repo; pure mechanism (no configuration, no printing)
-    client/repo.py    the two compositions (without and with a remote) behind one interface
-    client/open.py    the source-of-truth policy: the only place that reads [remote] url / [repo] allow_network_fs and the
-                      filesystem type, and composes the layers below
-    term.py           how Cairn prints (one-line messages, hints, warnings, aligned blocks and tables): a leaf
-    the rest          the object API, publishing, drafts, runs, CLI, UI, reports: through what open.py composes
+store/            the repo core: the only code that changes a repo folder; no HTTP, no remote, no configuration
+api.py            Cairn's errors raised from the caller's call (a decorator over the store's error types)
+client/http.py    HTTP and folder scanning; client/remote.py the repo interface over HTTP
+client/sync.py    the sync engine: outbox -> remote -> the repo; pure mechanism (no configuration, no printing)
+client/repo.py    the two compositions (without and with a remote) behind one interface
+client/open.py    the source-of-truth policy: the only place that reads [remote] url / [repo] allow_network_fs and the
+                  filesystem type, and composes the layers below
+term.py           how Cairn prints (one-line messages, hints, warnings, aligned blocks and tables): a leaf
+the rest          the object API, publishing, drafts, runs, CLI, UI, reports: through what open.py composes
 """
 
 import ast
@@ -23,7 +23,16 @@ LEAVES = {"config", "ranges", "formats", "hosts", "term", "_version"}  # import 
 ALLOWED = {
     "store": {"store", "ranges", "formats"},  # the repo core: no configuration, no client
     "api": {"store"},  # the error boundary of the public calls
-    "client": {"client", "term", "store", "api", "config", "ranges", "formats", "_version"},  # formats: the run logger writes what it reads
+    "client": {
+        "client",
+        "term",
+        "store",
+        "api",
+        "config",
+        "ranges",
+        "formats",
+        "_version",
+    },  # formats: the run logger writes what it reads
     "server": {"server", "term", "store", "config", "ranges", "hosts", "_version"},
     "ui": {"ui", "term", "store", "client", "config", "ranges", "hosts", "_version"},
     "reports": {"reports", "term", "store", "client", "config", "ranges", "formats", "_version"},
@@ -46,8 +55,11 @@ def targets(path: Path) -> set[tuple[str, int]]:
     for node in ast.walk(ast.parse(path.read_text(), str(path))):
         names: list[str] = []
         if isinstance(node, ast.Import):
-            names = [alias.name.split(".")[1] if alias.name.startswith("cairn.") else "" for alias in node.names
-                     if alias.name == "cairn" or alias.name.startswith("cairn.")]
+            names = [
+                alias.name.split(".")[1] if alias.name.startswith("cairn.") else ""
+                for alias in node.names
+                if alias.name == "cairn" or alias.name.startswith("cairn.")
+            ]
             names = [name or "__init__" for name in names]
         elif isinstance(node, ast.ImportFrom):
             if node.level:
@@ -60,7 +72,9 @@ def targets(path: Path) -> set[tuple[str, int]]:
             if module:
                 names = [module[0]]
             else:  # `from . import x` / `from cairn import x`: x is a part or an attribute of the root package
-                names = [alias.name if alias.name in ALLOWED or alias.name in LEAVES else "__init__" for alias in node.names]
+                names = [
+                    alias.name if alias.name in ALLOWED or alias.name in LEAVES else "__init__" for alias in node.names
+                ]
         for name in names:
             found.add((name, node.lineno))
     return found
@@ -74,8 +88,11 @@ def test_every_module_belongs_to_a_known_part():
     assert not unknown
 
 
-@pytest.mark.parametrize("path", [path for path in MODULES if part_of(path) in ALLOWED and part_of(path) != "cli"],
-                         ids=lambda path: str(path.relative_to(PACKAGE)))
+@pytest.mark.parametrize(
+    "path",
+    [path for path in MODULES if part_of(path) in ALLOWED and part_of(path) != "cli"],
+    ids=lambda path: str(path.relative_to(PACKAGE)),
+)
 def test_imports_stay_inside_the_allowed_parts(path):
     part = part_of(path)
     bad = sorted((name, line) for name, line in targets(path) if name not in ALLOWED[part])
@@ -158,8 +175,13 @@ def _code(path: Path) -> str:
     tree = ast.parse(path.read_text())
     for node in ast.walk(tree):
         body = getattr(node, "body", None)
-        if isinstance(body, list) and body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant) \
-                and isinstance(body[0].value.value, str):
+        if (
+            isinstance(body, list)
+            and body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(getattr(body[0], "value", None), ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
             body[0] = ast.Pass()
     return ast.unparse(tree)
 
@@ -177,7 +199,9 @@ def test_only_the_policy_module_decides_on_the_remote_and_the_filesystem():
         if name not in NETWORK_FS:
             assert "network_filesystem" not in code, f"{name} looks at the filesystem type"
         if name not in POLICY:
-            assert not re.search(r"""repo(\.get\(|\[)\s*['"](remote|allow_network_fs)['"]""", code), f"{name} reads [repo] remote or allow_network_fs"
+            assert not re.search(
+                r"""repo(\.get\(|\[)\s*['"](remote|allow_network_fs)['"]""", code
+            ), f"{name} reads [repo] remote or allow_network_fs"
         if name not in POLICY | {"client/repo.py", "client/__init__.py"}:
             for word in ("SyncedRepo", "StandaloneRepo", "NoCopies"):
                 assert word not in code, f"{name} knows the composition {word} (only client/open.py picks it)"
@@ -185,7 +209,10 @@ def test_only_the_policy_module_decides_on_the_remote_and_the_filesystem():
 
 def _graph() -> dict[str, set[str]]:
     """Module-level imports between cairn modules (dotted names), as an adjacency map."""
-    names = {".".join(path.relative_to(PACKAGE.parent).with_suffix("").parts).removesuffix(".__init__"): path for path in MODULES}
+    names = {
+        ".".join(path.relative_to(PACKAGE.parent).with_suffix("").parts).removesuffix(".__init__"): path
+        for path in MODULES
+    }
     graph = {}
     for name, path in names.items():
         package = name if path.name == "__init__.py" else name.rsplit(".", 1)[0]
@@ -205,7 +232,9 @@ def _graph() -> dict[str, set[str]]:
                     edges.add(target)
             elif isinstance(node, ast.Import):
                 edges.update(alias.name for alias in node.names if alias.name in names)
-        graph[name] = {edge for edge in edges if edge != name and not package.startswith(edge)}  # a parent package is loaded first anyway
+        graph[name] = {
+            edge for edge in edges if edge != name and not package.startswith(edge)
+        }  # a parent package is loaded first anyway
     return graph
 
 
@@ -216,7 +245,7 @@ def test_no_import_cycles():
         state[node] = "open"
         for edge in sorted(graph.get(node, ())):
             if state.get(edge) == "open":
-                cycle.append(trail[trail.index(edge):] + [edge])
+                cycle.append(trail[trail.index(edge) :] + [edge])
             elif edge not in state:
                 visit(edge, trail + [edge])
         state[node] = "done"

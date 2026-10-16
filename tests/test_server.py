@@ -91,7 +91,16 @@ def test_auth_required(server):
 def test_the_server_has_no_pages_and_no_cookies(server, project):
     use_remote(project, server)
     store.publish("data", folder(project, "d", {"a.txt": "1"}))
-    for path in ("/", "/login", "/logout", "/p/study/", "/p/study/a/data", "/p/study/r/alpha/", "/p/study/r/site.json", "/favicon.ico"):
+    for path in (
+        "/",
+        "/login",
+        "/logout",
+        "/p/study/",
+        "/p/study/a/data",
+        "/p/study/r/alpha/",
+        "/p/study/r/site.json",
+        "/favicon.ico",
+    ):
         for token in ("owner", None):
             status, headers, body = call(server, "GET", path, token=token)
             assert status == 404 and "Set-Cookie" not in headers and b"<html" not in body, (path, status)
@@ -134,7 +143,9 @@ def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
 def seed(server):
     """Projects `alpha` and `beta`, each with an artifact `data` (one file), published with the owner token."""
     for project in ("alpha", "beta"):
-        store.connect(f"{server.url}/{project}").artifact("data").publish(folder(server.root.parent, f"seed-{project}", {"x.txt": project}))
+        store.connect(f"{server.url}/{project}").artifact("data").publish(
+            folder(server.root.parent, f"seed-{project}", {"x.txt": project})
+        )
 
 
 def test_one_token_reaches_every_project_and_nothing_else_does(server, env):
@@ -142,20 +153,23 @@ def test_one_token_reaches_every_project_and_nothing_else_does(server, env):
     assert [p["name"] for p in api(server, "GET", "/api/v2/projects")] == ["alpha", "beta"]
     assert not (server.root / "tokens.jsonl").exists()
     wrong = "x" * 43
-    for method, path, body in (("POST", "/api/v2/projects/alpha/artifacts/data/publish", {"entries": []}),
-                               ("POST", "/api/v2/blobs/missing", {"sha256": []}),
-                               ("PATCH", "/api/v2/projects/alpha", {"title": "t"}),
-                               ("POST", "/api/v2/projects", {"name": "new"}),
-                               ("GET", "/api/v2/projects", None),
-                               ("GET", "/api/v2/projects/beta/artifacts", None),
-                               ("GET", "/files/beta/data@v1//x.txt", None)):
+    for method, path, body in (
+        ("POST", "/api/v2/projects/alpha/artifacts/data/publish", {"entries": []}),
+        ("POST", "/api/v2/blobs/missing", {"sha256": []}),
+        ("PATCH", "/api/v2/projects/alpha", {"title": "t"}),
+        ("POST", "/api/v2/projects", {"name": "new"}),
+        ("GET", "/api/v2/projects", None),
+        ("GET", "/api/v2/projects/beta/artifacts", None),
+        ("GET", "/files/beta/data@v1//x.txt", None),
+    ):
         for token in (wrong, None):
             assert call(server, method, path, body, token=token)[0] == 401, (method, path, token)
     assert call(server, "PUT", "/api/v2/blobs/" + "a" * 64, body=b"x", token=wrong)[0] == 401
     assert call(server, "GET", "/files/alpha/data@v1//x.txt")[0] == 200
     # an input names a version of the same project: a reference with a project is refused
-    status, _, data = call(server, "POST", "/api/v2/projects/alpha/artifacts/data/publish",
-                           {"entries": [], "inputs": ["beta:data@v1"]})
+    status, _, data = call(
+        server, "POST", "/api/v2/projects/alpha/artifacts/data/publish", {"entries": [], "inputs": ["beta:data@v1"]}
+    )
     assert status == 400 and b"without a project" in data, data
 
 
@@ -165,11 +179,18 @@ def test_one_token_reaches_every_project_and_nothing_else_does(server, env):
 def test_bad_uploads_and_entries(server):
     api(server, "POST", "/api/v2/projects", {"name": "p"}, expect=201)
     api(server, "POST", "/api/v2/projects", {"name": "p"}, expect=200)  # idempotent
-    assert call(server, "PUT", "/api/v2/blobs/" + "a" * 64, body=b"not matching", headers={"Content-Length": "12"})[0] == 400
+    assert (
+        call(server, "PUT", "/api/v2/blobs/" + "a" * 64, body=b"not matching", headers={"Content-Length": "12"})[0]
+        == 400
+    )
     assert not [f for f in (server.root / "blobs").rglob("*") if f.is_file()]  # nothing was stored
     publish = "/api/v2/projects/p/artifacts/a/publish"
-    for entry in ({"path": "a/../../etc/passwd", "sha256": "a" * 64, "size": 1}, {"path": "/abs", "sha256": "a" * 64, "size": 1},
-                  {"path": "x", "link": "../../etc"}, {"path": "x"}):
+    for entry in (
+        {"path": "a/../../etc/passwd", "sha256": "a" * 64, "size": 1},
+        {"path": "/abs", "sha256": "a" * 64, "size": 1},
+        {"path": "x", "link": "../../etc"},
+        {"path": "x"},
+    ):
         assert call(server, "POST", publish, {"entries": [entry]})[0] == 400, entry
     status, _, data = call(server, "POST", publish, {"entries": [{"path": "x", "sha256": "b" * 64, "size": 1}]})
     assert status == 409 and json.loads(data)["missing"] == ["b" * 64]
@@ -221,9 +242,14 @@ def test_remote_store_round_trip(server, env):
     assert store.publish("datasets/crops", data, metadata={"n": 2}) == 2
     assert [v["version"] for v in store.versions("datasets/crops")] == [1, 2]
     assert r.resolve("datasets/crops@paper")[1]["version"] == 1
-    assert r.resolve("datasets/crops")[1]["version"] == 2 and r.resolve("datasets/crops@first")[1]["metadata"] == {"n": 2}
+    assert r.resolve("datasets/crops")[1]["version"] == 2 and r.resolve("datasets/crops@first")[1]["metadata"] == {
+        "n": 2
+    }
     second = r.resolve("datasets/crops")[1]
-    assert r.resolve(second["short_id"])[0] == "datasets/crops" and r.resolve(f"datasets/crops@{second['short_id'][:5]}")[1] == second
+    assert (
+        r.resolve(second["short_id"])[0] == "datasets/crops"
+        and r.resolve(f"datasets/crops@{second['short_id'][:5]}")[1] == second
+    )
     assert [item["uid"] for item in r.ids(second["short_id"])] == [second["uid"]]
     store.alias("datasets/crops@v2", "best")
     assert r.aliases("datasets/crops") == {"latest": 2, "paper": 1, "best": 2}
@@ -235,7 +261,11 @@ def test_remote_store_round_trip(server, env):
     # nothing is local: the data went through HTTP only
     assert not (env / ".store").exists()
     path = store.pull("datasets/crops@v1")
-    assert (path / "a.txt").read_text() == "one" and (path / "sub" / "b.txt").read_text() == "two" and (path / "latest").is_symlink()
+    assert (
+        (path / "a.txt").read_text() == "one"
+        and (path / "sub" / "b.txt").read_text() == "two"
+        and (path / "latest").is_symlink()
+    )
     assert not os.access(path / "a.txt", os.W_OK)
     assert store.pull("datasets/crops@v2//a.txt").read_text() == "changed"
 
@@ -265,7 +295,9 @@ def test_pull_records_inputs_like_the_local_store(server, env):
     store.publish("data", folder(env, "d", {"a.txt": "1"}))
     store.connect().pull("data@latest")  # the object API outside a run: recorded in the working directory
     assert (env / ".cairn-inputs.jsonl").read_text().count('"data@v1"') == 1
-    published = store.publish("fit", folder(env, "out", {"r.txt": "r", ".cairn-inputs.jsonl": (env / ".cairn-inputs.jsonl").read_text()}))
+    published = store.publish(
+        "fit", folder(env, "out", {"r.txt": "r", ".cairn-inputs.jsonl": (env / ".cairn-inputs.jsonl").read_text()})
+    )
     assert store.versions("fit")[published - 1]["inputs"] == ["data@v1"]
     assert store.lineage("data@v1") == {"inputs": [], "consumers": ["fit@v1"], "runs": []}
     assert store.lineage("fit@v1", through_runs=False) == {"inputs": ["data@v1"], "consumers": []}
@@ -296,8 +328,10 @@ def test_cli_pull_prints_the_path_and_copies_into_a_folder(server, env, capsys):
 def test_publish_watch_syncs_a_running_version_to_the_server(server, env, capsys):
     r = use_remote(env, server)
     out = env / "out"
-    script = ("import pathlib, sys, time; out = pathlib.Path(sys.argv[1]); out.mkdir(exist_ok=True); "
-              "(out / 'first.txt').write_text('1'); time.sleep(1.5); (out / 'second.txt').write_text('2'); time.sleep(0.5)")
+    script = (
+        "import pathlib, sys, time; out = pathlib.Path(sys.argv[1]); out.mkdir(exist_ok=True); "
+        "(out / 'first.txt').write_text('1'); time.sleep(1.5); (out / 'second.txt').write_text('2'); time.sleep(0.5)"
+    )
     seen = []
 
     def poll():  # while the command runs, the server sees a running version that grows
@@ -330,8 +364,20 @@ def test_publish_watch_failure_keeps_latest(server, env, capsys):
     r = use_remote(env, server)
     store.publish("sweep", folder(env, "earlier", {"ok.txt": "good"}))
     with pytest.raises(SystemExit) as exit:
-        main(["publish", str(env / "out2"), "sweep", "--interval", "0.5", "--", sys.executable, "-c",
-              "import pathlib, sys; p = pathlib.Path(sys.argv[1]); p.mkdir(); (p / 'x.txt').write_text('x'); sys.exit(3)", str(env / "out2")])
+        main(
+            [
+                "publish",
+                str(env / "out2"),
+                "sweep",
+                "--interval",
+                "0.5",
+                "--",
+                sys.executable,
+                "-c",
+                "import pathlib, sys; p = pathlib.Path(sys.argv[1]); p.mkdir(); (p / 'x.txt').write_text('x'); sys.exit(3)",
+                str(env / "out2"),
+            ]
+        )
     assert exit.value.code == 3 and "failed" in capsys.readouterr().err
     assert [v["status"] for v in store.versions("sweep")] == ["completed", "failed"]
     assert (store.pull("sweep@latest") / "ok.txt").read_text() == "good"
@@ -342,7 +388,12 @@ def test_publish_watch_failure_keeps_latest(server, env, capsys):
 
 def test_overview_summary_and_file_list_routes(server, env):
     r = use_remote(env, server)
-    store.publish("datasets/crops", folder(env, "d", {"a.txt": "1", "sub/b.txt": "22"}), metadata={"title": "Crops"}, aliases=["paper"])
+    store.publish(
+        "datasets/crops",
+        folder(env, "d", {"a.txt": "1", "sub/b.txt": "22"}),
+        metadata={"title": "Crops"},
+        aliases=["paper"],
+    )
     store.publish("other", folder(env, "o", {"x.txt": "x"}))
     [project] = api(server, "GET", "/api/v2/projects")
     assert project["name"] == "study" and project["artifacts"] == 2 and project["updated"] and "reports" not in project
@@ -350,7 +401,10 @@ def test_overview_summary_and_file_list_routes(server, env):
     assert summaries["datasets/crops"]["latest"] == 1 and summaries["datasets/crops"]["metadata"] == {"title": "Crops"}
     one = api(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops")
     assert one["aliases"] == {"latest": 1, "paper": 1} and one["versions"] == 1
-    assert one["latest_version"]["version"] == 1 and [f["path"] for f in one["latest_version"]["files"]] == ["a.txt", "sub/b.txt"]
+    assert one["latest_version"]["version"] == 1 and [f["path"] for f in one["latest_version"]["files"]] == [
+        "a.txt",
+        "sub/b.txt",
+    ]
     assert call(server, "GET", "/api/v2/projects/study/artifacts/nope")[0] == 404
     files = api(server, "GET", "/api/v2/projects/study/artifacts/datasets%2Fcrops/versions/1/files")["files"]
     assert [f["path"] for f in files] == ["a.txt", "sub/b.txt"] and files[1]["size"] == 2
@@ -401,14 +455,22 @@ def alive(pid: int) -> bool:
         os.kill(pid, 0)
     except OSError:
         return False
-    return not subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip().startswith("Z")
+    return (
+        not subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+        .stdout.strip()
+        .startswith("Z")
+    )
 
 
 def launch(tmp_path, *flags):
     """`cairn server` as its own process; returns it with its startup output (up to the last line)."""
     root, port = tmp_path / "launch-store", free_port()
-    process = subprocess.Popen([sys.executable, "-m", "cairn", "server", str(root), "--port", str(port), *flags],
-                               stdout=subprocess.PIPE, text=True, cwd=tmp_path)
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cairn", "server", str(root), "--port", str(port), *flags],
+        stdout=subprocess.PIPE,
+        text=True,
+        cwd=tmp_path,
+    )
     from cairn.server.app import READY
 
     lines = read_until(process, lambda line: line == READY)
@@ -427,7 +489,9 @@ def test_store_serve_starts_its_ui_as_a_child_with_the_token_in_its_environment_
         token = (root / "token").read_text().strip()
         text = "\n".join(lines)
         ui_port = port + 1
-        assert re.search(rf"\n  API +http://127.0.0.1:{port}/\n", text) and re.search(rf"\n  Token +{token} ", text), text
+        assert re.search(rf"\n  API +http://127.0.0.1:{port}/\n", text) and re.search(
+            rf"\n  Token +{token} ", text
+        ), text
         assert re.search(rf"\n  UI +http://127.0.0.1:{ui_port}/\n", text), text
     except Exception:
         stop_process(process)
@@ -438,8 +502,12 @@ def test_store_serve_starts_its_ui_as_a_child_with_the_token_in_its_environment_
         form = {"Content-Type": "application/json", "X-Cairn": "1"}
         ui = SimpleNamespace(port=ui_port, token="")
         assert call(ui, "GET", "/", token=None)[0] == 303  # the UI asks for a login
-        assert call(ui, "POST", "/ui-api/login", body=json.dumps({"token": "x" * 40}), token=None, headers=form)[0] == 401
-        status, headers, _ = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=form)
+        assert (
+            call(ui, "POST", "/ui-api/login", body=json.dumps({"token": "x" * 40}), token=None, headers=form)[0] == 401
+        )
+        status, headers, _ = call(
+            ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=form
+        )
         assert status == 200 and token not in headers["Set-Cookie"]
         cookie = {"Cookie": headers["Set-Cookie"].split(";")[0]}
         page = call(ui, "GET", "/", token=None, headers=cookie)
@@ -504,9 +572,11 @@ def test_the_server_keeps_running_when_its_ui_dies(tmp_path):
 def test_the_spawned_ui_exits_when_the_server_is_killed(tmp_path):
     import signal
     import time
+
     root = tmp_path / "killed-store"
-    server = subprocess.Popen([sys.executable, "-m", "cairn", "server", str(root), "--port", "0"],
-                              stdout=subprocess.PIPE, text=True)
+    server = subprocess.Popen(
+        [sys.executable, "-m", "cairn", "server", str(root), "--port", "0"], stdout=subprocess.PIPE, text=True
+    )
     try:
         lines = [server.stdout.readline() for _ in range(4)]
         ui = next(line for line in lines if line.startswith("  UI "))

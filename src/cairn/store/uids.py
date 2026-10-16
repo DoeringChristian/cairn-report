@@ -21,7 +21,9 @@ _last = [0, 0]  # the last millisecond and its 12-bit counter (rand_a)
 
 
 def _format(milliseconds: int, rand_a: int, rand_b: int) -> str:
-    value = (milliseconds & (2**48 - 1)) << 80 | 0x7 << 76 | (rand_a & 0xFFF) << 64 | 0b10 << 62 | (rand_b & (2**62 - 1))
+    value = (
+        (milliseconds & (2**48 - 1)) << 80 | 0x7 << 76 | (rand_a & 0xFFF) << 64 | 0b10 << 62 | (rand_b & (2**62 - 1))
+    )
     text = f"{value:032x}"
     return f"{text[:8]}-{text[8:12]}-{text[12:16]}-{text[16:20]}-{text[20:]}"
 

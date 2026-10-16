@@ -63,7 +63,15 @@ from ..store.project import LocalProject
 from ..store.prune import prune as prune_folders
 from ..store.refs import Ref
 from ..store.uids import UID, new_uid
-from ..store.verify import Report, check_blobs, verify_copies, verify_folders, verify_outbox, verify_store, verify_version
+from ..store.verify import (
+    Report,
+    check_blobs,
+    verify_copies,
+    verify_folders,
+    verify_outbox,
+    verify_store,
+    verify_version,
+)
 from ..store.local import FileRead, repo_uid
 from ..term import hint, note, reason, short_path
 from .http import budget, entries_for, scan, transferring
@@ -79,8 +87,10 @@ def _warn(line: str) -> None:
 
 def _alive(name: str, manifest: dict) -> dict:
     if manifest.get("status") == "deleted":
-        raise Deleted(f"{exact_ref(name, manifest)} was deleted ({(manifest.get('deleted_at') or '')[:19]})"
-                      + (f": {manifest['reason']}" if manifest.get("reason") else ""))
+        raise Deleted(
+            f"{exact_ref(name, manifest)} was deleted ({(manifest.get('deleted_at') or '')[:19]})"
+            + (f": {manifest['reason']}" if manifest.get("reason") else "")
+        )
     return manifest
 
 
@@ -93,7 +103,9 @@ class ProjectRepo:
     own = True  # the project's own repo (open.py): its pulls are inputs of the process's run
     where = ""  # where the repo's versions are looked for, for messages (" in the repo ...", " on the remote ...")
 
-    def stage(self, folder: Path, exclude, project_root: Path, link: bool = False) -> tuple[list[dict], dict[str, Path]]:
+    def stage(
+        self, folder: Path, exclude, project_root: Path, link: bool = False
+    ) -> tuple[list[dict], dict[str, Path]]:
         """Manifest entries for a folder (its inputs record excluded), each blob kept in the repo: a copy-on-write clone,
         else a copy (`link`: a hard link where no clone is possible, for a folder deleted right after: a published
         draft), hashed again there, so a file that changes after this returns does not change the version.
@@ -129,7 +141,11 @@ class ProjectRepo:
 
     def same_as(self, other) -> bool:
         """Whether `other` is the same repo (with the same remote)."""
-        return type(other) is type(self) and other.url == self.url and Path(other.root).resolve() == Path(self.root).resolve()
+        return (
+            type(other) is type(self)
+            and other.url == self.url
+            and Path(other.root).resolve() == Path(self.root).resolve()
+        )
 
     def local_folder(self, name: str, version: dict) -> Path:
         """The read-only folder of a resolved version in the repo (`versions/<uid>/files/`, made once)."""
@@ -184,23 +200,49 @@ class StandaloneRepo(ProjectRepo):
 
     # ------------------------------------------------------------------ writing
 
-    def publish_folder(self, name: str, folder: Path, *, exclude=(), project_root: Path, link: bool = False,
-                       label: str | None = None, metadata: dict | None = None, inputs=(), aliases=(), source: dict | None = None,
-                       uid: str | None = None) -> dict:
+    def publish_folder(
+        self,
+        name: str,
+        folder: Path,
+        *,
+        exclude=(),
+        project_root: Path,
+        link: bool = False,
+        label: str | None = None,
+        metadata: dict | None = None,
+        inputs=(),
+        aliases=(),
+        source: dict | None = None,
+        uid: str | None = None,
+    ) -> dict:
         """Stage the folder and publish it as the next version (none when nothing changed: the latest is returned)."""
         for attempt in range(3):
             entries, _ = self.stage(folder, exclude, project_root, link)
             try:
-                number = self.local.publish(name, entries, label=label, metadata=metadata, inputs=inputs,
-                                            aliases=aliases, source=source, uid=uid)
+                number = self.local.publish(
+                    name,
+                    entries,
+                    label=label,
+                    metadata=metadata,
+                    inputs=inputs,
+                    aliases=aliases,
+                    source=source,
+                    uid=uid,
+                )
                 break
             except MissingBlobs:  # garbage collection removed a blob since staging: stage it again
                 if attempt == 2:
                     raise
         return self.local.get_version(name, number)
 
-    def start_version(self, name: str, label: str | None = None, metadata: dict | None = None,
-                      source: dict | None = None, uid: str | None = None) -> dict:
+    def start_version(
+        self,
+        name: str,
+        label: str | None = None,
+        metadata: dict | None = None,
+        source: dict | None = None,
+        uid: str | None = None,
+    ) -> dict:
         uid = uid or new_uid()
         self.local.beat(uid)  # before the version exists: a crash right after still leaves one that can be failed
         number = self.local.start_version(name, label, metadata, source, uid=uid)
@@ -230,7 +272,16 @@ class StandaloneRepo(ProjectRepo):
     # ------------------------------------------------------------------ waiting for a remote: nothing
 
     def sync(self, report=None, refresh: bool = True, deadline: float | None = None) -> dict:
-        return {"remote": None, "sent": [], "rejected": [], "waiting": [], "failed": [], "adopted": 0, "refreshed": 0, "lines": []}
+        return {
+            "remote": None,
+            "sent": [],
+            "rejected": [],
+            "waiting": [],
+            "failed": [],
+            "adopted": 0,
+            "refreshed": 0,
+            "lines": [],
+        }
 
     def pending(self) -> list[dict]:
         return []
@@ -251,9 +302,28 @@ class StandaloneRepo(ProjectRepo):
         return prune_folders(self.root, older_than, max_size, dry_run, keep=None)
 
 
-for _name in ("record", "summaries", "summaries_stamped", "summary", "artifacts", "versions", "get_version", "aliases", "ids",
-              "lineage", "read_file", "blob_file", "blob_path", "set_alias", "delete_version", "delete_artifact", "retention",
-              "set_retention", "gc", "export_metadata"):
+for _name in (
+    "record",
+    "summaries",
+    "summaries_stamped",
+    "summary",
+    "artifacts",
+    "versions",
+    "get_version",
+    "aliases",
+    "ids",
+    "lineage",
+    "read_file",
+    "blob_file",
+    "blob_path",
+    "set_alias",
+    "delete_version",
+    "delete_artifact",
+    "retention",
+    "set_retention",
+    "gc",
+    "export_metadata",
+):
     setattr(StandaloneRepo, _name, _forward(_name))
 del _name
 
@@ -268,8 +338,10 @@ class NoCopies:
     reaped: list = []
 
     def _none(self, *args, **kwargs):
-        raise Unreachable("this repo keeps no copies of the remote's versions (it has no database: it is on a network "
-                          "filesystem), so only the remote can answer")
+        raise Unreachable(
+            "this repo keeps no copies of the remote's versions (it has no database: it is on a network "
+            "filesystem), so only the remote can answer"
+        )
 
     record = summaries = summary = versions = get_version = aliases = resolve = find = ids = lineage = _none
 
@@ -399,8 +471,12 @@ class SyncedRepo(ProjectRepo):
 
     def _pending_match(self, name: str, selector: str) -> dict | None:
         """The newest usable pending version that `name@selector` (an alias, a label, `latest`) names."""
-        found = [record for record in self._pending_of(name) if usable(record)
-                 and (selector == "latest" or selector in record.get("aliases", []) or record.get("label") == selector)]
+        found = [
+            record
+            for record in self._pending_of(name)
+            if usable(record)
+            and (selector == "latest" or selector in record.get("aliases", []) or record.get("label") == selector)
+        ]
         return found[-1] if found else None
 
     def _entry(self, name: str, uid: str) -> dict | None:
@@ -419,19 +495,33 @@ class SyncedRepo(ProjectRepo):
     def record(self) -> dict:
         """The project's record (the remote's; the repo's while the remote does not answer, or before it has the
         project)."""
+
         def made() -> dict:
-            return {"name": self.remote.project, "title": self.remote.project, "description": "",
-                    "created": min((record["created"] for record in self.records()), default=now())}
+            return {
+                "name": self.remote.project,
+                "title": self.remote.project,
+                "description": "",
+                "created": min((record["created"] for record in self.records()), default=now()),
+            }
 
         try:
-            return {**self._fallback(self.ask.record, lambda: {**self.copies.record(), "name": self.remote.project}),
-                    "name": self.remote.project}
+            return {
+                **self._fallback(self.ask.record, lambda: {**self.copies.record(), "name": self.remote.project}),
+                "name": self.remote.project,
+            }
         except (NotFound, Unreachable):
             return made()
 
     def _waiting_summary(self, name: str, records: list[dict]) -> dict:
-        return {"name": name, "latest": None, "versions": len(records), "aliases": {}, "updated": records[-1]["created"],
-                "metadata": records[-1].get("metadata") or {}, "pending": len(records)}
+        return {
+            "name": name,
+            "latest": None,
+            "versions": len(records),
+            "aliases": {},
+            "updated": records[-1]["created"],
+            "metadata": records[-1].get("metadata") or {},
+            "pending": len(records),
+        }
 
     def summaries(self) -> list[dict]:
         def local():
@@ -477,8 +567,10 @@ class SyncedRepo(ProjectRepo):
             found = []
         except Unreachable:
             try:
-                found = sorted((masked(state) for state in self.copies.versions(name)),
-                               key=lambda state: (state["version"] is None, state["version"] or 0, state["uid"]))
+                found = sorted(
+                    (masked(state) for state in self.copies.versions(name)),
+                    key=lambda state: (state["version"] is None, state["version"] or 0, state["uid"]),
+                )
             except NotFound:
                 found = []
             except Unreachable as error:
@@ -530,8 +622,11 @@ class SyncedRepo(ProjectRepo):
     def ids(self, text: str, name: str | None = None, offline: bool = False) -> list[dict]:
         """The versions a short id (or uid) may name: this repo's pending ones and the remote's (the repo's copies
         while the remote does not answer, or `offline`)."""
-        found = {record["uid"]: refs.candidate(record["name"], manifest_of(record)) for record in self.records()
-                 if (name is None or record["name"] == name) and refs.matches(text, record["uid"])}
+        found = {
+            record["uid"]: refs.candidate(record["name"], manifest_of(record))
+            for record in self.records()
+            if (name is None or record["name"] == name) and refs.matches(text, record["uid"])
+        }
 
         def local() -> list[dict]:
             try:
@@ -646,7 +741,9 @@ class SyncedRepo(ProjectRepo):
                 name, version = self.ask.resolve(Ref(name, ref.selector))
             except Unreachable:
                 if ref.exact:
-                    raise Unreachable(f"{self.url} not reachable, and the repo {short_path(self.root)} does not have {key}") from None
+                    raise Unreachable(
+                        f"{self.url} not reachable, and the repo {short_path(self.root)} does not have {key}"
+                    ) from None
                 reason = f"{self.url} not reachable"
             except NotFound:
                 if pending is None:
@@ -775,13 +872,16 @@ class SyncedRepo(ProjectRepo):
             self.mirror(name)
 
     def delete_version(self, name: str, version: int | str, *, reason: str | None = None, force: bool = False) -> dict:
-        result = self._changes(lambda: self.remote.delete_version(name, version, reason=reason, force=force),
-                               f"deleting {name}@{version}")
+        result = self._changes(
+            lambda: self.remote.delete_version(name, version, reason=reason, force=force), f"deleting {name}@{version}"
+        )
         self._mirror_versions([name])
         return result
 
     def delete_artifact(self, name: str, *, reason: str | None = None, force: bool = False) -> dict:
-        result = self._changes(lambda: self.remote.delete_artifact(name, reason=reason, force=force), f"deleting {name}")
+        result = self._changes(
+            lambda: self.remote.delete_artifact(name, reason=reason, force=force), f"deleting {name}"
+        )
         self._mirror_versions([name])
         return result
 
@@ -813,23 +913,51 @@ class SyncedRepo(ProjectRepo):
                     state = None
                 if state is not None and not state.get("origin"):
                     text = str(Ref(ref.name, state["uid"]))
-                elif state is not None and ref.uid and isinstance(state.get("version"), int):  # a copy: the remote's number
+                elif (
+                    state is not None and ref.uid and isinstance(state.get("version"), int)
+                ):  # a copy: the remote's number
                     text = refs.exact(ref.name, state["version"])
             if text not in found:
                 found.append(text)
         return found
 
-    def _new_entry(self, kind: str, name: str, *, files=(), label=None, metadata=None, inputs=(), aliases=(),
-                   source=None, uid: str | None = None) -> dict:
+    def _new_entry(
+        self,
+        kind: str,
+        name: str,
+        *,
+        files=(),
+        label=None,
+        metadata=None,
+        inputs=(),
+        aliases=(),
+        source=None,
+        uid: str | None = None,
+    ) -> dict:
         """Commit a new outbox entry (durably, before anything is sent)."""
         import os
 
         running = kind == "running"
-        record = {"uid": uid or new_uid(), "kind": kind, "sync": "running" if running else "pending",
-                  "status": "running" if running else "completed", "url": self.url, "store": self.engine.known_uid,
-                  "name": name, "label": label, "metadata": metadata or {}, "inputs": self._uid_inputs(inputs),
-                  "aliases": list(aliases), "source": source, "files": list(files), "created": now(),
-                  "owner": {"host": hostname(), "pid": os.getpid()}, "number": None, "pushed": {}, "error": None}
+        record = {
+            "uid": uid or new_uid(),
+            "kind": kind,
+            "sync": "running" if running else "pending",
+            "status": "running" if running else "completed",
+            "url": self.url,
+            "store": self.engine.known_uid,
+            "name": name,
+            "label": label,
+            "metadata": metadata or {},
+            "inputs": self._uid_inputs(inputs),
+            "aliases": list(aliases),
+            "source": source,
+            "files": list(files),
+            "created": now(),
+            "owner": {"host": hostname(), "pid": os.getpid()},
+            "number": None,
+            "pushed": {},
+            "error": None,
+        }
         if not running:
             record["digest"] = manifest_digest(record["files"])  # known before anything is uploaded
             record["completed"] = record["created"]
@@ -918,9 +1046,13 @@ class SyncedRepo(ProjectRepo):
             self.reach()
             self.quick.engine.send(record)
         except Waiting as error:
-            if isinstance(error.__cause__, (Unauthorized, Forbidden)):  # the caller should know at once; it stays pending
-                raise type(error.__cause__)(f"{error.__cause__}; {record['name']} ({refs.default_short_id(record['uid'])}) "
-                                            "stays pending until a token that may write sends it") from None
+            if isinstance(
+                error.__cause__, (Unauthorized, Forbidden)
+            ):  # the caller should know at once; it stays pending
+                raise type(error.__cause__)(
+                    f"{error.__cause__}; {record['name']} ({refs.default_short_id(record['uid'])}) "
+                    "stays pending until a token that may write sends it"
+                ) from None
             self.pending_reasons[record["uid"]] = reason(error)
             if not self.quiet_pending:
                 _warn(f"pending {record['name']} ({refs.default_short_id(record['uid'])}): {reason(error)}")
@@ -931,22 +1063,45 @@ class SyncedRepo(ProjectRepo):
             what = "failed" if record["status"] == "failed" else "pending"
             self.pending_reasons[record["uid"]] = reason(error)
             if not self.quiet_pending:
-                _warn(f"{what} {record['name']} ({refs.default_short_id(record['uid'])}): {reason(error)}\n"
-                      + hint("run `cairn sync` to send it now", sys.stderr))
+                _warn(
+                    f"{what} {record['name']} ({refs.default_short_id(record['uid'])}): {reason(error)}\n"
+                    + hint("run `cairn sync` to send it now", sys.stderr)
+                )
             start_uploader(self)
         return self._settled(record)
 
-    def publish_folder(self, name: str, folder: Path, *, exclude=(), project_root: Path, link: bool = False,
-                       label: str | None = None, metadata: dict | None = None, inputs=(), aliases=(), source: dict | None = None,
-                       uid: str | None = None) -> dict:
+    def publish_folder(
+        self,
+        name: str,
+        folder: Path,
+        *,
+        exclude=(),
+        project_root: Path,
+        link: bool = False,
+        label: str | None = None,
+        metadata: dict | None = None,
+        inputs=(),
+        aliases=(),
+        source: dict | None = None,
+        uid: str | None = None,
+    ) -> dict:
         """Stage the folder, commit it to the outbox, and send it now if the remote answers (else it is pending)."""
         entries, sources = self.stage(folder, exclude, project_root, link)
         with self._waiting():
             same = None if aliases else self._unchanged(name, entries, metadata, inputs)
             if same is not None:  # like a repo without a remote: nothing changed since the latest, so no new version
                 return same
-            record = self._new_entry("publish", name, files=entries, label=label, metadata=metadata, inputs=inputs,
-                                     aliases=aliases, source=source, uid=uid)
+            record = self._new_entry(
+                "publish",
+                name,
+                files=entries,
+                label=label,
+                metadata=metadata,
+                inputs=inputs,
+                aliases=aliases,
+                source=source,
+                uid=uid,
+            )
             self.restage(entries, sources)
             return self._send(record)
 
@@ -956,8 +1111,11 @@ class SyncedRepo(ProjectRepo):
             latest = self._resolve(Ref(name, None), warn=lambda line: None)[1]
         except StoreError:
             return None
-        same = (latest.get("digest") or manifest_digest(latest.get("files") or [])) == manifest_digest(entries) and \
-            (latest.get("metadata") or {}) == (metadata or {}) and sorted(latest.get("inputs") or []) == sorted(self._uid_inputs(inputs))
+        same = (
+            (latest.get("digest") or manifest_digest(latest.get("files") or [])) == manifest_digest(entries)
+            and (latest.get("metadata") or {}) == (metadata or {})
+            and sorted(latest.get("inputs") or []) == sorted(self._uid_inputs(inputs))
+        )
         return latest if same else None
 
     def _running(self, name: str, uid: str) -> dict:
@@ -980,8 +1138,14 @@ class SyncedRepo(ProjectRepo):
             except Unreachable:  # also NotRecorded: the next attempt records it
                 pass
 
-    def start_version(self, name: str, label: str | None = None, metadata: dict | None = None,
-                      source: dict | None = None, uid: str | None = None) -> dict:
+    def start_version(
+        self,
+        name: str,
+        label: str | None = None,
+        metadata: dict | None = None,
+        source: dict | None = None,
+        uid: str | None = None,
+    ) -> dict:
         record = self._new_entry("running", name, label=label, metadata=metadata, source=source, uid=uid)
         self._try(record)
         return manifest_of(self.outbox.load(record["uid"]) or record)
@@ -1003,8 +1167,14 @@ class SyncedRepo(ProjectRepo):
 
     def complete_version(self, name: str, uid: str, inputs=(), aliases=()) -> dict:
         record = self._running(name, uid)
-        record.update(sync="pending", status="completed", inputs=self._uid_inputs(inputs), aliases=list(aliases),
-                      digest=manifest_digest(record["files"]), completed=now())
+        record.update(
+            sync="pending",
+            status="completed",
+            inputs=self._uid_inputs(inputs),
+            aliases=list(aliases),
+            digest=manifest_digest(record["files"]),
+            completed=now(),
+        )
         self.outbox.save(record)
         return self._send_now(record)
 
@@ -1050,14 +1220,23 @@ class SyncedRepo(ProjectRepo):
         return self.records()
 
     def status(self) -> dict:
-        entries = [{**record, "heartbeat": self.outbox.last_beat(record)} if record["sync"] == "running" else record
-                   for record in self.records()]
+        entries = [
+            {**record, "heartbeat": self.outbox.last_beat(record)} if record["sync"] == "running" else record
+            for record in self.records()
+        ]
         sent = {record["uid"] for record in entries}
         for name, state in self.copies.local_versions():  # numbered here before the repo had a remote: not sent yet
             if state["uid"] not in sent and state["status"] != "deleted":
-                entries.append({**state, "name": name, "number": None, "owner": {},
-                                "sync": "running" if state["status"] == "running" else "pending",
-                                "error": None if state["status"] != "failed" else state.get("error")})
+                entries.append(
+                    {
+                        **state,
+                        "name": name,
+                        "number": None,
+                        "owner": {},
+                        "sync": "running" if state["status"] == "running" else "pending",
+                        "error": None if state["status"] != "failed" else state.get("error"),
+                    }
+                )
         return {"remote": self.url, "entries": entries, "reaped": list(getattr(self.copies, "reaped", []))}
 
     # ------------------------------------------------------------------ maintenance
@@ -1065,13 +1244,20 @@ class SyncedRepo(ProjectRepo):
     def _keep(self) -> set[str]:
         """The blobs only this repo has: the outbox's and those of versions it numbered itself."""
         keep = self.outbox.needed()
-        keep |= {entry["sha256"] for _, state in self.copies.local_versions() for entry in state.get("files") or [] if "sha256" in entry}
+        keep |= {
+            entry["sha256"]
+            for _, state in self.copies.local_versions()
+            for entry in state.get("files") or []
+            if "sha256" in entry
+        }
         return keep
 
     def verify(self, ref: str | None = None, repair: bool = False) -> Report:
         if ref:
             name, version = self.find(ref)
-            return verify_version(self.root, exact_ref(name, version), version, own=bool(version.get("pending")), repair=repair)
+            return verify_version(
+                self.root, exact_ref(name, version), version, own=bool(version.get("pending")), repair=repair
+            )
         report = Report()
         check_blobs(self.root / "blobs", report, repair=repair, keep=self._keep())
         report.merge(verify_copies(self.copies.copies()))
@@ -1158,7 +1344,9 @@ def start_uploader(repo: SyncedRepo, first_delay: float = 1.0, max_delay: float 
                 time.sleep(delay)
                 try:
                     result = repo.sync(report=note, refresh=False)
-                    left = [record for record in result["waiting"] if record["sync"] != "running"]  # running: its process sends it
+                    left = [
+                        record for record in result["waiting"] if record["sync"] != "running"
+                    ]  # running: its process sends it
                 except Exception:  # noqa: BLE001 - never let the uploader die noisily; the next sync retries
                     left = [True]
                 if not left:

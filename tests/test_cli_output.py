@@ -11,8 +11,15 @@ import sys
 def cairn(folder, *args):
     env = {key: value for key, value in os.environ.items() if not key.startswith("CAIRN_")}
     env.update(COLUMNS="80", NO_COLOR="1", HOME=str(folder.parent))
-    return subprocess.run([sys.executable, "-m", "cairn", *args], cwd=folder, capture_output=True, text=True, timeout=120,
-                          env=env, stdin=subprocess.DEVNULL)
+    return subprocess.run(
+        [sys.executable, "-m", "cairn", *args],
+        cwd=folder,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
 
 
 def free_port() -> int:
@@ -35,9 +42,19 @@ def test_commands_print_short_lines(tmp_path):
     (folder / "data").mkdir(parents=True)
     (folder / "data" / "x.json").write_text('{"a": 1}')
     outputs = []
-    for args in (("init",), ("publish", "data", "datasets/x"), ("show", "datasets/x"), ("status",), ("versions", "datasets/x"),
-                 ("artifacts",), ("show", "nope"), ("remote", "set", f"http://127.0.0.1:{free_port()}/project"),
-                 ("publish", "data", "datasets/y"), ("status",), ("sync",)):
+    for args in (
+        ("init",),
+        ("publish", "data", "datasets/x"),
+        ("show", "datasets/x"),
+        ("status",),
+        ("versions", "datasets/x"),
+        ("artifacts",),
+        ("show", "nope"),
+        ("remote", "set", f"http://127.0.0.1:{free_port()}/project"),
+        ("publish", "data", "datasets/y"),
+        ("status",),
+        ("sync",),
+    ):
         result = cairn(folder, *args)
         outputs.append((args, result.stdout + result.stderr))
     text = "\n".join(f"$ cairn {' '.join(args)}\n{out}" for args, out in outputs)

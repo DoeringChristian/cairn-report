@@ -19,11 +19,51 @@ import sys
 from pathlib import Path
 
 NETWORK_FILESYSTEMS = {
-    "nfs", "nfs4", "nfsd", "lustre", "gpfs", "mmfs", "smbfs", "smb", "smb2", "smb3", "cifs", "beegfs", "ceph", "afs", "openafs",
-    "glusterfs", "panfs", "wekafs", "pvfs2", "orangefs", "afpfs", "webdav", "davfs", "9p", "virtiofs", "quobyte", "cvfs",
+    "nfs",
+    "nfs4",
+    "nfsd",
+    "lustre",
+    "gpfs",
+    "mmfs",
+    "smbfs",
+    "smb",
+    "smb2",
+    "smb3",
+    "cifs",
+    "beegfs",
+    "ceph",
+    "afs",
+    "openafs",
+    "glusterfs",
+    "panfs",
+    "wekafs",
+    "pvfs2",
+    "orangefs",
+    "afpfs",
+    "webdav",
+    "davfs",
+    "9p",
+    "virtiofs",
+    "quobyte",
+    "cvfs",
 }
-NETWORK_FUSE = {"ceph-fuse", "ceph", "sshfs", "glusterfs", "s3fs", "rclone", "gcsfuse", "juicefs", "beegfs", "lustre", "goofys",
-                "mountpoint-s3", "davfs", "curlftpfs", "cvmfs"}
+NETWORK_FUSE = {
+    "ceph-fuse",
+    "ceph",
+    "sshfs",
+    "glusterfs",
+    "s3fs",
+    "rclone",
+    "gcsfuse",
+    "juicefs",
+    "beegfs",
+    "lustre",
+    "goofys",
+    "mountpoint-s3",
+    "davfs",
+    "curlftpfs",
+    "cvmfs",
+}
 
 
 def is_network_type(fstype: str) -> bool:
@@ -40,8 +80,8 @@ def _unescape(field: str) -> str:
     """/proc/mounts writes spaces, tabs, newlines and backslashes in paths as octal escapes (`\\040`)."""
     out, index = [], 0
     while index < len(field):
-        if field[index] == "\\" and field[index + 1:index + 4].isdigit():
-            out.append(chr(int(field[index + 1:index + 4], 8)))
+        if field[index] == "\\" and field[index + 1 : index + 4].isdigit():
+            out.append(chr(int(field[index + 1 : index + 4], 8)))
             index += 4
         else:
             out.append(field[index])
@@ -68,18 +108,33 @@ def type_from_mounts(path: str | Path, mounts: str) -> str | None:
 
 
 class _StatFS(ctypes.Structure):  # struct statfs on macOS (64-bit inodes) and the BSDs that share its layout
-    _fields_ = [("f_bsize", ctypes.c_uint32), ("f_iosize", ctypes.c_int32), ("f_blocks", ctypes.c_uint64),
-                ("f_bfree", ctypes.c_uint64), ("f_bavail", ctypes.c_uint64), ("f_files", ctypes.c_uint64),
-                ("f_ffree", ctypes.c_uint64), ("f_fsid", ctypes.c_int32 * 2), ("f_owner", ctypes.c_uint32),
-                ("f_type", ctypes.c_uint32), ("f_flags", ctypes.c_uint32), ("f_fssubtype", ctypes.c_uint32),
-                ("f_fstypename", ctypes.c_char * 16), ("f_mntonname", ctypes.c_char * 1024),
-                ("f_mntfromname", ctypes.c_char * 1024), ("f_flags_ext", ctypes.c_uint32), ("f_reserved", ctypes.c_uint32 * 7)]
+    _fields_ = [
+        ("f_bsize", ctypes.c_uint32),
+        ("f_iosize", ctypes.c_int32),
+        ("f_blocks", ctypes.c_uint64),
+        ("f_bfree", ctypes.c_uint64),
+        ("f_bavail", ctypes.c_uint64),
+        ("f_files", ctypes.c_uint64),
+        ("f_ffree", ctypes.c_uint64),
+        ("f_fsid", ctypes.c_int32 * 2),
+        ("f_owner", ctypes.c_uint32),
+        ("f_type", ctypes.c_uint32),
+        ("f_flags", ctypes.c_uint32),
+        ("f_fssubtype", ctypes.c_uint32),
+        ("f_fstypename", ctypes.c_char * 16),
+        ("f_mntonname", ctypes.c_char * 1024),
+        ("f_mntfromname", ctypes.c_char * 1024),
+        ("f_flags_ext", ctypes.c_uint32),
+        ("f_reserved", ctypes.c_uint32 * 7),
+    ]
 
 
 def _darwin_type(path: str) -> str | None:
     try:
         libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-        function = getattr(libc, "statfs$INODE64", None) if sys.maxsize > 2**32 and os.uname().machine == "x86_64" else None
+        function = (
+            getattr(libc, "statfs$INODE64", None) if sys.maxsize > 2**32 and os.uname().machine == "x86_64" else None
+        )
         function = function or libc.statfs
         function.argtypes, function.restype = [ctypes.c_char_p, ctypes.POINTER(_StatFS)], ctypes.c_int
         result = _StatFS()
@@ -162,8 +217,10 @@ def clone_or_copy(source: Path | str, target: Path | str) -> bool:
 
 def network_fs_message(root, fstype: str) -> str:
     """Why a repo on a network filesystem has no database, and what to do on a cluster."""
-    return (f"the repo {root} is on a network filesystem ({fstype}), where SQLite and file locks are unreliable across the "
-            "nodes of a cluster, so it cannot hold the repo's database. On a cluster, run `cairn server` on a machine "
-            "with a local disk and `cairn remote set https://<server>/<project>` here: jobs then keep each version in its "
-            "own outbox folder here and send it to the remote themselves, or `cairn sync` (on the login node) sends "
-            "what they left. If one process on one host is the repo's only writer, set [repo] allow_network_fs = true.")
+    return (
+        f"the repo {root} is on a network filesystem ({fstype}), where SQLite and file locks are unreliable across the "
+        "nodes of a cluster, so it cannot hold the repo's database. On a cluster, run `cairn server` on a machine "
+        "with a local disk and `cairn remote set https://<server>/<project>` here: jobs then keep each version in its "
+        "own outbox folder here and send it to the remote themselves, or `cairn sync` (on the login node) sends "
+        "what they left. If one process on one host is the repo's only writer, set [repo] allow_network_fs = true."
+    )

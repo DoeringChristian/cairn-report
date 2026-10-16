@@ -94,9 +94,12 @@ def tooling_info() -> dict:
                 info["commit"] = url["vcs_info"].get("commit_id")
     except metadata.PackageNotFoundError:
         pass
-    info["page_files"] = {name: str(page_file(name)) for name in PAGE_FILES if page_file(name).parent != PACKAGE_TEMPLATE}
+    info["page_files"] = {
+        name: str(page_file(name)) for name in PAGE_FILES if page_file(name).parent != PACKAGE_TEMPLATE
+    }
     info["extra_css"] = [str(path.relative_to(PROJECT)) for path in (CONFIG.extra_css if CONFIG else ())]
     return info
+
 
 GRAPHVIZ_ENGINES = ("dot", "neato", "fdp", "sfdp", "circo", "twopi")
 UNSAFE_HTML = re.compile(
@@ -147,11 +150,7 @@ def unstretch_delimiters(mathml: str) -> str:
 
     def fix(match):
         char = chr(int(match.group(2), 16)) if match.group(2) else match.group(1)
-        return (
-            f'<mo stretchy="false">{match.group(1)}</mo>'
-            if char in DELIMITERS
-            else match.group(0)
-        )
+        return f'<mo stretchy="false">{match.group(1)}</mo>' if char in DELIMITERS else match.group(0)
 
     return BARE_MO.sub(fix, mathml)
 
@@ -280,11 +279,15 @@ def discover_reports() -> dict[str, Path]:
         if SEGMENT.fullmatch(child.name):
             found[child.name] = child
         else:
-            warn(f"skipped {child.relative_to(REPORTS_ROOT.parent)}: a report folder name is lower-case letters, digits, - and _")
+            warn(
+                f"skipped {child.relative_to(REPORTS_ROOT.parent)}: a report folder name is lower-case letters, digits, - and _"
+            )
     if misplaced:
         shown = ", ".join(file.relative_to(REPORTS_ROOT.parent).as_posix() for file in misplaced)
-        raise BuildError(f"{shown}: reports are single pages: move it to {REPORTS_ROOT.name}/<slug>/report.md "
-                         f"(one folder per report, no nesting and no root report)")
+        raise BuildError(
+            f"{shown}: reports are single pages: move it to {REPORTS_ROOT.name}/<slug>/report.md "
+            f"(one folder per report, no nesting and no root report)"
+        )
     return found
 
 
@@ -383,8 +386,10 @@ class Guard:
                 return  # importing code is not reading data
             frame = frame.f_back
         line = source_line(self.build.markdown, self.line)
-        message = (f"{self.build.markdown}:{line}: the code reads {os.fsdecode(file)}, which is not part of this report's data; "
-                   f"declare it under inputs: in the front matter (or keep it in the report folder)")
+        message = (
+            f"{self.build.markdown}:{line}: the code reads {os.fsdecode(file)}, which is not part of this report's data; "
+            f"declare it under inputs: in the front matter (or keep it in the report folder)"
+        )
         self.violations.append(message)
         raise BuildError(message)
 
@@ -467,7 +472,9 @@ class Build:
         self.content_root = folder
         self.generated = output_dir(key)
         self.meta: dict = {}
-        self.inputs: dict[str, dict] = {}  # local name -> requested, resolved (exact ref), files, path (read-only folder)
+        self.inputs: dict[str, dict] = (
+            {}
+        )  # local name -> requested, resolved (exact ref), files, path (read-only folder)
         self.store_root: Path | None = None
         self.line = None  # the report line being evaluated, for messages
         self.links: list[dict] = []
@@ -489,7 +496,9 @@ class Build:
         """Pin each declared input to an exact version and materialize it (not recorded in .cairn-inputs.jsonl)."""
         declared = self.meta.get("inputs") or {}
         if not isinstance(declared, dict):
-            raise BuildError(f"{self.markdown}: inputs: must map local names to artifact references, e.g. descent: descent@latest")
+            raise BuildError(
+                f"{self.markdown}: inputs: must map local names to artifact references, e.g. descent: descent@latest"
+            )
         if not declared:
             return
         store = open_repo(CONFIG)
@@ -503,15 +512,22 @@ class Build:
             except ValueError as error:
                 raise BuildError(f"{where}: {error}") from error
             if ref.path:
-                raise BuildError(f"{where}: {text!r} names a file; an input is a whole artifact version (use {name}/<file> in the report)")
+                raise BuildError(
+                    f"{where}: {text!r} names a file; an input is a whole artifact version (use {name}/<file> in the report)"
+                )
             try:  # through the repo: its pending versions; with the remote down, its copies
                 artifact, version = store.resolve(ref)
                 exact = exact_ref(artifact, version)
                 folder = store.local_folder(artifact, version)
             except StoreError as error:
                 raise BuildError(f"{where}: {error}") from error
-            self.inputs[name] = {"requested": str(text), "resolved": exact, "uid": version["uid"], "files": len(version["files"]),
-                                 "path": folder}
+            self.inputs[name] = {
+                "requested": str(text),
+                "resolved": exact,
+                "uid": version["uid"],
+                "files": len(version["files"]),
+                "path": folder,
+            }
 
     def allowed_roots(self) -> list[str]:
         """Where this report may read: its folder, its generated output, and its inputs."""
@@ -532,8 +548,10 @@ class Build:
         resolved = Path(real(path))
         key = self.source_key(resolved)
         if key is None:
-            raise BuildError(f"{self.markdown}:{source_line(self.markdown, self.line)}: {path} is outside this report's folder and "
-                             f"its declared inputs; declare it under inputs: in the front matter")
+            raise BuildError(
+                f"{self.markdown}:{source_line(self.markdown, self.line)}: {path} is outside this report's folder and "
+                f"its declared inputs; declare it under inputs: in the front matter"
+            )
         resolved = Path(path).resolve(strict=True)
         self.sources[key] = digest(resolved)
         return resolved
@@ -547,18 +565,22 @@ class Build:
         if match:
             name, inside_input = match.groups()
             if name not in self.inputs:
-                raise BuildError(f"{where}: figure {src!r} uses input {name!r}, which is not declared under inputs: in the front matter")
+                raise BuildError(
+                    f"{where}: figure {src!r} uses input {name!r}, which is not declared under inputs: in the front matter"
+                )
             file = self.inputs[name]["path"] / inside_input
         elif re.match(r"^[a-z]+:", src) or src.startswith("//"):
             raise ValueError(f"{where}: figures must be local files, or input:<name>/<file>; got {src!r}")
         else:
             file = self.content_root / src
         if not file.exists():
-            raise ValueError(f"{where}: missing figure {src!r} (paths are relative to the report, or input:<name>/<file>)")
+            raise ValueError(
+                f"{where}: missing figure {src!r} (paths are relative to the report, or input:<name>/<file>)"
+            )
         self.line = line
         resolved = self.track(file)
         key = self.source_key(resolved)
-        relative = "inputs/" + key[len("input:"):] if key.startswith("input:") else key
+        relative = "inputs/" + key[len("input:") :] if key.startswith("input:") else key
         target = self.generated / ASSETS / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(resolved, target)
@@ -592,9 +614,9 @@ def _boxes(data: bytes, start: int = 0, end: int | None = None):
     """The (type, payload start, payload end) of each ISO-BMFF box in data[start:end]."""
     end = len(data) if end is None else end
     while start + 8 <= end:
-        size, kind, header = int.from_bytes(data[start:start + 4], "big"), data[start + 4:start + 8], 8
+        size, kind, header = int.from_bytes(data[start : start + 4], "big"), data[start + 4 : start + 8], 8
         if size == 1:
-            size, header = int.from_bytes(data[start + 8:start + 16], "big"), 16
+            size, header = int.from_bytes(data[start + 8 : start + 16], "big"), 16
         elif size == 0:
             size = end - start
         if size < header:
@@ -635,13 +657,13 @@ def mp4_info(path: Path) -> dict | None:
                 if inner in (b"mdia", b"minf", b"stbl"):
                     stack.append((body, finish))
                 elif inner == b"tkhd":
-                    info["width"] = int.from_bytes(moov[finish - 8:finish - 4], "big") >> 16
-                    info["height"] = int.from_bytes(moov[finish - 4:finish], "big") >> 16
+                    info["width"] = int.from_bytes(moov[finish - 8 : finish - 4], "big") >> 16
+                    info["height"] = int.from_bytes(moov[finish - 4 : finish], "big") >> 16
                 elif inner == b"mdhd":
                     offset = body + (20 if moov[body] == 1 else 12)
-                    info["timescale"] = int.from_bytes(moov[offset:offset + 4], "big")
-                elif inner == b"stts" and int.from_bytes(moov[body + 4:body + 8], "big"):
-                    info["delta"] = int.from_bytes(moov[body + 12:body + 16], "big")  # first entry's sample duration
+                    info["timescale"] = int.from_bytes(moov[offset : offset + 4], "big")
+                elif inner == b"stts" and int.from_bytes(moov[body + 4 : body + 8], "big"):
+                    info["delta"] = int.from_bytes(moov[body + 12 : body + 16], "big")  # first entry's sample duration
         if info.get("width") and info.get("height"):  # a video track (audio has no size)
             fps = info["timescale"] / info["delta"] if info.get("timescale") and info.get("delta") else None
             return {"size": (info["width"], info["height"]), "fps": round(fps, 3) if fps else None}
@@ -672,9 +694,11 @@ def image_size(path: Path) -> tuple[int, int] | None:
             if head[index] != 0xFF:
                 index += 1
                 continue
-            marker, length = head[index + 1], int.from_bytes(head[index + 2:index + 4], "big")
+            marker, length = head[index + 1], int.from_bytes(head[index + 2 : index + 4], "big")
             if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
-                return int.from_bytes(head[index + 7:index + 9], "big"), int.from_bytes(head[index + 5:index + 7], "big")
+                return int.from_bytes(head[index + 7 : index + 9], "big"), int.from_bytes(
+                    head[index + 5 : index + 7], "big"
+                )
             index += 2 + length
         return None
     text = head.decode("utf-8", errors="ignore")
@@ -727,8 +751,10 @@ def figure_card(
         media = '<div class="plotly-preview"></div>'
     elif kind == "video":  # loaded near the viewport; plays muted while on screen
         rate = f' data-fps="{fps:g}"' if fps else ""
-        media = (f'<video data-src="{esc(src)}" aria-label="{esc(title)}"{dims}{rate} muted loop playsinline '
-                 f'preload="none" disablepictureinpicture></video>')
+        media = (
+            f'<video data-src="{esc(src)}" aria-label="{esc(title)}"{dims}{rate} muted loop playsinline '
+            f'preload="none" disablepictureinpicture></video>'
+        )
     else:
         media = f'<img data-src="{esc(src)}" alt="{esc(title)}"{dims} decoding="async">'  # loaded near the viewport
     copy = f"<h3>{esc(title)}</h3>"
@@ -792,7 +818,9 @@ def render(build: Build) -> str:
 
     def render_math(content, options):
         if "{{" in content:
-            raise ValueError(f"{path}: {{{{ }}}} values are not evaluated inside $...$ formulas; write the value next to the formula: ${content.strip()[:60]}$")
+            raise ValueError(
+                f"{path}: {{{{ }}}} values are not evaluated inside $...$ formulas; write the value next to the formula: ${content.strip()[:60]}$"
+            )
         display = "block" if options.get("display_mode") else "inline"
         mathml = unstretch_delimiters(latex_to_mathml(content, display=display))
         return f'<span class="math-tex" data-latex="{esc(content.strip())}">{mathml}</span>'
@@ -832,12 +860,8 @@ def render(build: Build) -> str:
             with guarded(build, line):
                 shown = evaluate_value(expression, namespace, f"{path}:value")
         except Exception as error:
-            raise ValueError(
-                f"{path}:{line}: cannot evaluate {{{{ {expression} }}}}: {error}"
-            ) from error
-        return (
-            f'<span class="report-value" title="{esc(expression)}">{esc(shown)}</span>'
-        )
+            raise ValueError(f"{path}:{line}: cannot evaluate {{{{ {expression} }}}}: {error}") from error
+        return f'<span class="report-value" title="{esc(expression)}">{esc(shown)}</span>'
 
     md.renderer.rules["report_value"] = render_value
 
@@ -872,10 +896,7 @@ def render(build: Build) -> str:
                 visible = [
                     c
                     for c in children
-                    if not (
-                        c.type in ("softbreak", "hardbreak")
-                        or (c.type == "text" and not c.content.strip())
-                    )
+                    if not (c.type in ("softbreak", "hardbreak") or (c.type == "text" and not c.content.strip()))
                 ]
                 if visible and all(c.type == "image" for c in visible):
                     token.tag = tokens[index + 2].tag = "div"
@@ -892,16 +913,19 @@ def render(build: Build) -> str:
         src, source, trace = build.asset(token.attrGet("src"), line)
         if not token.meta.get("card"):
             if source.lower().endswith(VIDEO_SUFFIXES):  # a video inside prose: the browser's own player
-                return (f'<video src="{esc(src)}" aria-label="{esc(token.content)}" controls muted loop playsinline '
-                        f'preload="metadata"></video>')
+                return (
+                    f'<video src="{esc(src)}" aria-label="{esc(token.content)}" controls muted loop playsinline '
+                    f'preload="metadata"></video>'
+                )
             token.attrSet("src", src)
             return default_image(tokens, idx, options, env)
         title = token.content or Path(source).stem
-        kind = ("plotly" if source.endswith(".plotly.json")
-                else "video" if source.lower().endswith(VIDEO_SUFFIXES) else "image")
-        fid = build.unique(
-            token.attrGet("id") or f"fig-{slug(Path(source).name.split('.')[0])}", line
+        kind = (
+            "plotly"
+            if source.endswith(".plotly.json")
+            else "video" if source.lower().endswith(VIDEO_SUFFIXES) else "image"
         )
+        fid = build.unique(token.attrGet("id") or f"fig-{slug(Path(source).name.split('.')[0])}", line)
         return figure_card(
             build,
             fid=fid,
@@ -932,13 +956,11 @@ def render(build: Build) -> str:
         if info and info[0] in GRAPHVIZ_ENGINES:
             return graphviz(token, line)
         if info[:1] == ["reports"]:
-            raise BuildError(f"{path}:{line}: the reports fence was removed: reports are single pages; "
-                             f"link another report with [text](report:<slug>)")
-        return (
-            f'<div data-source-line="{line}">'
-            + default_fence(tokens, idx, options, env)
-            + "</div>"
-        )
+            raise BuildError(
+                f"{path}:{line}: the reports fence was removed: reports are single pages; "
+                f"link another report with [text](report:<slug>)"
+            )
+        return f'<div data-source-line="{line}">' + default_fence(tokens, idx, options, env) + "</div>"
 
     def python_exec(token, flags, line):
         stdout = io.StringIO()
@@ -957,9 +979,7 @@ def render(build: Build) -> str:
         if metrics:
             result += f'<section class="metric-grid" aria-label="Summary metrics">{"".join(metrics)}</section>'
         if emitted:
-            markup = "".join(
-                check_html(item, f"{path}:{line} report_html") for item in emitted
-            )
+            markup = "".join(check_html(item, f"{path}:{line} report_html") for item in emitted)
             result += f'<div class="raw-html">{markup}</div>'
         cards = list(graphs)  # graph(...) diagrams first, in call order, then Matplotlib figures
         for position, number in enumerate(plt.get_fignums()):
@@ -970,9 +990,7 @@ def render(build: Build) -> str:
             suptitle = figure._suptitle.get_text() if figure._suptitle else ""
             axes_title = figure.axes[0].get_title() if figure.axes else ""
             title = suptitle or axes_title or label or f"Figure from line {line}"
-            fid = build.unique(
-                f"fig-{slug(label)}" if label else f"fig-line-{line}-{position}", line
-            )
+            fid = build.unique(f"fig-{slug(label)}" if label else f"fig-line-{line}-{position}", line)
             read = sorted(source for source in set(build.sources) - read_before)
             cards.append(
                 figure_card(
@@ -1002,9 +1020,7 @@ def render(build: Build) -> str:
     def include_html(token, line):
         names = token.content.split()
         if len(names) != 1:
-            raise ValueError(
-                f"{path}:{line}: html include takes exactly one fragment path"
-            )
+            raise ValueError(f"{path}:{line}: html include takes exactly one fragment path")
         fragment = (build.content_root / names[0]).resolve()
         if build.content_root.resolve() not in fragment.parents:
             raise ValueError(f"{path}:{line}: included HTML must live inside the report's folder")
@@ -1018,32 +1034,28 @@ def render(build: Build) -> str:
     def graphviz(token, line):
         """Lay out a Graphviz diagram at build time; the page receives a static SVG."""
         words = shlex.split(token.info)
-        engine, options_ = words[0], dict(
-            word.split("=", 1) for word in words[1:] if "=" in word
+        engine, options_ = words[0], dict(word.split("=", 1) for word in words[1:] if "=" in word)
+        card = render_graph(
+            token.content,
+            engine,
+            options_.get("title", "Diagram"),
+            options_.get("caption", ""),
+            options_.get("id"),
+            line,
         )
-        card = render_graph(token.content, engine, options_.get("title", "Diagram"),
-                            options_.get("caption", ""), options_.get("id"), line)
-        return (
-            f'<div class="figure-grid diagram" data-source-line="{line}">{card}</div>'
-        )
+        return f'<div class="figure-grid diagram" data-source-line="{line}">{card}</div>'
 
     def render_graph(source, engine, title, caption, fid, line):
         """A Graphviz figure card: from a `dot` fence, or from graph(...) in a python exec block."""
         if engine not in ("dot", "neato", "fdp", "sfdp", "circo", "twopi"):
             raise ValueError(f"{path}:{line}: unknown Graphviz engine {engine!r}")
         if not shutil.which(engine):
-            raise ValueError(
-                f"{path}:{line}: Graphviz `{engine}` not found; add graphviz to pixi [dependencies]"
-            )
+            raise ValueError(f"{path}:{line}: Graphviz `{engine}` not found; add graphviz to pixi [dependencies]")
         brace = source.find("{")
         if brace < 0:
-            raise ValueError(
-                f"{path}:{line}: Graphviz source needs a graph body {{ … }}"
-            )
+            raise ValueError(f"{path}:{line}: Graphviz source needs a graph body {{ … }}")
         source = source[: brace + 1] + " " + GRAPHVIZ_DEFAULTS + source[brace + 1 :]
-        result = subprocess.run(
-            [engine, "-Tsvg"], input=source, capture_output=True, text=True, timeout=30
-        )
+        result = subprocess.run([engine, "-Tsvg"], input=source, capture_output=True, text=True, timeout=30)
         if result.returncode != 0 and "No formats found" in result.stderr:
             # conda-forge Graphviz registers its plugins in a post-link step that pixi skips;
             # `dot -c` writes the plugin index into the environment once.
@@ -1077,9 +1089,7 @@ def render(build: Build) -> str:
             rule = md.renderer.rules[name]
             md.renderer.rules[name] = (
                 lambda rule: lambda tokens, idx, options, env: (
-                    f'<div data-source-line="{line_of(tokens[idx])}">'
-                    + rule(tokens, idx, options, env)
-                    + "</div>"
+                    f'<div data-source-line="{line_of(tokens[idx])}">' + rule(tokens, idx, options, env) + "</div>"
                 )
             )(rule)
 
@@ -1094,11 +1104,7 @@ def render(build: Build) -> str:
     def admonition_open(tokens, idx, options, env):
         opened = default_admonition(tokens, idx, options, env)
         state_name = tokens[idx + 1].attrGet("data-state")
-        return opened + (
-            f'<span class="finding-state">{esc(state_name)}</span>'
-            if state_name
-            else ""
-        )
+        return opened + (f'<span class="finding-state">{esc(state_name)}</span>' if state_name else "")
 
     md.renderer.rules["admonition_open"] = admonition_open
 
@@ -1128,12 +1134,16 @@ def render(build: Build) -> str:
     # The summary may quote results as {{ }} values; they are evaluated after every block ran.
     summary = str(build.meta.get("summary", "")).strip()
     if summary:
+
         def summary_value(match):
             try:
                 with guarded(build, 1):
                     return str(evaluate_value(match.group(1).strip(), namespace, f"{path}:summary"))
             except Exception as error:
-                raise ValueError(f"{path}: cannot evaluate summary value {{{{ {match.group(1).strip()} }}}}: {error}") from error
+                raise ValueError(
+                    f"{path}: cannot evaluate summary value {{{{ {match.group(1).strip()} }}}}: {error}"
+                ) from error
+
         build.meta["summary"] = VALUE.sub(summary_value, summary)
     return rendered
 
@@ -1190,12 +1200,19 @@ def page_html(key: str, names: dict[str, str], versions: dict[str, str]) -> str:
         lambda match: f'{match.group(1)}="{prefix}{names[match.group(2)]}"',
         page,
     )
-    page = page.replace(f'<script src="{prefix}{names["report.js"]}"',
-                        f'<script src="{prefix}{names["report.js"]}" data-plotly="{prefix}{names["plotly.min.js"]}" '
-                        f'data-root="{root}" data-report="{esc(key)}" '
-                        f'data-narrative="narrative.html?v={versions["narrative.html"]}" '
-                        f'data-report-data="report-data.json?v={versions["report-data.json"]}"', 1)
-    extra = [f'  <link rel="stylesheet" href="{prefix}{hashed}">' for name, hashed in names.items() if name.startswith("custom-")]
+    page = page.replace(
+        f'<script src="{prefix}{names["report.js"]}"',
+        f'<script src="{prefix}{names["report.js"]}" data-plotly="{prefix}{names["plotly.min.js"]}" '
+        f'data-root="{root}" data-report="{esc(key)}" '
+        f'data-narrative="narrative.html?v={versions["narrative.html"]}" '
+        f'data-report-data="report-data.json?v={versions["report-data.json"]}"',
+        1,
+    )
+    extra = [
+        f'  <link rel="stylesheet" href="{prefix}{hashed}">'
+        for name, hashed in names.items()
+        if name.startswith("custom-")
+    ]
     if extra:  # project styles load after the default ones, so they override them
         page = page.replace("</head>", "\n".join(extra) + "\n</head>", 1)
     return page
@@ -1206,7 +1223,10 @@ OWN_FILES = ("index.html", "narrative.html", "report-data.json", "manifest.json"
 
 def input_record(build: Build) -> dict:
     """The declared inputs as the manifest and report-data.json record them."""
-    return {name: {field: item[field] for field in ("requested", "resolved", "uid", "files")} for name, item in build.inputs.items()}
+    return {
+        name: {field: item[field] for field in ("requested", "resolved", "uid", "files")}
+        for name, item in build.inputs.items()
+    }
 
 
 def build_report(key: str, folder: Path) -> Build:
@@ -1239,7 +1259,11 @@ def build_report(key: str, folder: Path) -> Build:
     (build.generated / "report-data.json").write_text(json.dumps(data, indent=2) + "\n")
     versions = {name: digest(build.generated / name)[:12] for name in ("narrative.html", "report-data.json")}
     (build.generated / "index.html").write_text(page_html(key, names, versions))  # the one file browsers revalidate
-    builder = [Path(__file__).resolve(), *(page_file(name) for name in PAGE_FILES), *(CONFIG.extra_css if CONFIG else ())]
+    builder = [
+        Path(__file__).resolve(),
+        *(page_file(name) for name in PAGE_FILES),
+        *(CONFIG.extra_css if CONFIG else ()),
+    ]
     manifest = {
         "built_at": datetime.now(timezone.utc).isoformat(),
         "report": key,
@@ -1251,14 +1275,22 @@ def build_report(key: str, folder: Path) -> Build:
         "typed_numbers": build.typed,
         "sources": dict(sorted(build.sources.items())),
         "builder": {
-            (str(file.relative_to(PROJECT)) if PROJECT in file.parents else f"cairn/{file.relative_to(PACKAGE_TEMPLATE.parent)}"): digest(file)
-            for file in builder if file.is_file()
+            (
+                str(file.relative_to(PROJECT))
+                if PROJECT in file.parents
+                else f"cairn/{file.relative_to(PACKAGE_TEMPLATE.parent)}"
+            ): digest(file)
+            for file in builder
+            if file.is_file()
         },
         "tooling": tooling_info(),
         "runtime": {
             "python": sys.version.split()[0],
             "packages": {name: package_version(name) for name in RENDER_PACKAGES},
-            "plotly.js": {"version": get_plotlyjs_version(), "sha256": digest(OUTPUT_ROOT / STATIC / names["plotly.min.js"])},
+            "plotly.js": {
+                "version": get_plotlyjs_version(),
+                "sha256": digest(OUTPUT_ROOT / STATIC / names["plotly.min.js"]),
+            },
             "graphviz": graphviz_version(),
         },
     }
@@ -1280,24 +1312,47 @@ def site_entries(reports: dict[str, Path]) -> list[dict]:
         else:
             meta = front_matter(folder)
             declared = meta.get("inputs") if isinstance(meta.get("inputs"), dict) else {}
-            data = {"key": key, "title": str(meta.get("title") or folder.name), "subtitle": meta.get("subtitle", ""),
-                    "status": meta.get("status", ""), "summary": str(meta.get("summary", "")).strip(), "href": report_href(key),
-                    "inputs": {name: {"requested": str(ref)} for name, ref in declared.items()}}
-        entries.append({field: data.get(field) for field in ("key", "title", "subtitle", "status", "summary", "href", "updated", "inputs")})
+            data = {
+                "key": key,
+                "title": str(meta.get("title") or folder.name),
+                "subtitle": meta.get("subtitle", ""),
+                "status": meta.get("status", ""),
+                "summary": str(meta.get("summary", "")).strip(),
+                "href": report_href(key),
+                "inputs": {name: {"requested": str(ref)} for name, ref in declared.items()},
+            }
+        entries.append(
+            {
+                field: data.get(field)
+                for field in ("key", "title", "subtitle", "status", "summary", "href", "updated", "inputs")
+            }
+        )
     return sorted(entries, key=lambda entry: (entry["title"].lower(), entry["key"]))
 
 
 def index_html(entries: list[dict], names: dict[str, str]) -> str:
     """The project index page: a card per report, in the report styles, without scripts."""
-    sheets = [names["report.css"], names["report-extra.css"], *(hashed for name, hashed in names.items() if name.startswith("custom-"))]
+    sheets = [
+        names["report.css"],
+        names["report-extra.css"],
+        *(hashed for name, hashed in names.items() if name.startswith("custom-")),
+    ]
     cards = []
     for entry in entries:
         count = len(entry["inputs"] or {})
-        details = " · ".join(part for part in (f"updated {entry['updated']}" if entry["updated"] else "not built yet",
-                                               f"{count} input{'' if count == 1 else 's'}") if part)
+        details = " · ".join(
+            part
+            for part in (
+                f"updated {entry['updated']}" if entry["updated"] else "not built yet",
+                f"{count} input{'' if count == 1 else 's'}",
+            )
+            if part
+        )
         status = f'<span class="direction-status">{esc(entry["status"])}</span>' if entry["status"] else ""
-        cards.append(f'<article class="direction-card">{status}<h3><a href="{esc(entry["href"])}">{esc(entry["title"])}</a></h3>'
-                     f'<p>{esc(entry["summary"] or entry["subtitle"] or "")}</p><small>{esc(details)}</small></article>')
+        cards.append(
+            f'<article class="direction-card">{status}<h3><a href="{esc(entry["href"])}">{esc(entry["title"])}</a></h3>'
+            f'<p>{esc(entry["summary"] or entry["subtitle"] or "")}</p><small>{esc(details)}</small></article>'
+        )
     body = "".join(cards) or '<p class="subtitle">No reports yet.</p>'
     return (
         '<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="utf-8">\n'
@@ -1359,6 +1414,8 @@ def build_all(config: Config | None = None, report: str | None = None) -> list[B
     write_site(reports, STATIC_NAMES)
     check_links(builds, reports)
     for build in builds:
-        print(f"built {build.key}: {short_path(build.generated / 'index.html')} "
-              f"({build.figures} figures, {len(build.findings)} findings, {len(build.typed)} numbers)")
+        print(
+            f"built {build.key}: {short_path(build.generated / 'index.html')} "
+            f"({build.figures} figures, {len(build.findings)} findings, {len(build.typed)} numbers)"
+        )
     return builds

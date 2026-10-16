@@ -61,8 +61,14 @@ def project_at(base: Path, name: str, remote: str | None = None, extra: str = ""
 
 
 def cli(project: Path, *args, env=None, timeout=300) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-m", "cairn", *args], cwd=project, capture_output=True, text=True,
-                          timeout=timeout, env=env or base_env())
+    return subprocess.run(
+        [sys.executable, "-m", "cairn", *args],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env or base_env(),
+    )
 
 
 def script(project: Path, name: str, code: str) -> Path:
@@ -81,8 +87,15 @@ def spawn(project: Path, *argv, env=None, **kwargs) -> subprocess.Popen:
     logs.mkdir(exist_ok=True)
     out, err = logs / f"{number}.out", logs / f"{number}.err"
     with out.open("w") as stdout, err.open("w") as stderr:
-        process = subprocess.Popen([sys.executable, *map(str, argv)], cwd=project, env=env or base_env(), stdout=stdout,
-                                   stderr=stderr, text=True, **kwargs)
+        process = subprocess.Popen(
+            [sys.executable, *map(str, argv)],
+            cwd=project,
+            env=env or base_env(),
+            stdout=stdout,
+            stderr=stderr,
+            text=True,
+            **kwargs,
+        )
     process.logs = (out, err)
     return process
 
@@ -134,7 +147,9 @@ def check_numbers(repo: LocalRepo, project: str = "study") -> dict[str, list[dic
 
 def _deleted_only(repo: LocalRepo, project: str) -> list[str]:
     with repo._db.read() as connection:
-        rows = connection.execute("SELECT name FROM artifacts WHERE project = ? AND versions = 0", (project,)).fetchall()
+        rows = connection.execute(
+            "SELECT name FROM artifacts WHERE project = ? AND versions = 0", (project,)
+        ).fetchall()
     return [row[0] for row in rows]
 
 
@@ -151,8 +166,10 @@ def percentile(values: list[float], fraction: float) -> float:
 def latency_table(samples: dict[str, list[float]]) -> str:
     lines = []
     for endpoint, values in sorted(samples.items()):
-        lines.append(f"  {endpoint:<12} n={len(values):5d} p50={1000 * percentile(values, .5):7.1f} ms "
-                     f"p95={1000 * percentile(values, .95):7.1f} ms max={1000 * max(values, default=0):7.1f} ms")
+        lines.append(
+            f"  {endpoint:<12} n={len(values):5d} p50={1000 * percentile(values, .5):7.1f} ms "
+            f"p95={1000 * percentile(values, .95):7.1f} ms max={1000 * max(values, default=0):7.1f} ms"
+        )
     return "\n".join(lines)
 
 
@@ -302,7 +319,9 @@ def wait_port(port: int, process: subprocess.Popen | None = None, seconds: float
 
 def hammer(project: Path, port: int, seconds: float, out: str, server: "RealServer | None" = None) -> dict:
     script(project, "hammer.py", HAMMER)
-    process = spawn(project, "hammer.py", port, seconds, out, project.name, *((server.port, server.token) if server else ()))
+    process = spawn(
+        project, "hammer.py", port, seconds, out, project.name, *((server.port, server.token) if server else ())
+    )
     _, err = finish(process)
     assert process.returncode == 0, err
     return json.loads((project / out).read_text())
@@ -350,7 +369,9 @@ def test_contention_on_one_repo(tmp_path):
     try:
         idle = hammer(project, port, 5, "idle.json", server)
         with WalWatch(project / ".cairn") as wal:
-            processes = [spawn(project, "publisher.py", worker, SECONDS, "big" if worker < 2 else "small") for worker in range(4)]
+            processes = [
+                spawn(project, "publisher.py", worker, SECONDS, "big" if worker < 2 else "small") for worker in range(4)
+            ]
             processes += [spawn(project, "live.py", index, SECONDS) for index in range(2)]
             processes += [spawn(project, "maintenance.py", SECONDS)]
             loaded = hammer(project, port, SECONDS, "load.json", server)
@@ -380,10 +401,16 @@ def test_contention_on_one_repo(tmp_path):
     repo = LocalRepo(project / ".cairn")
     everything = check_numbers(repo, OWN)
     by_uid = {version["uid"]: (name, version) for name, versions in everything.items() for version in versions}
-    published = [json.loads(line) for worker in range(4) for line in (project / f"published-{worker}.jsonl").read_text().splitlines()]
+    published = [
+        json.loads(line)
+        for worker in range(4)
+        for line in (project / f"published-{worker}.jsonl").read_text().splitlines()
+    ]
     timings = [row["seconds"] for row in published]
-    print(f"publishes: {len(published)}, p50 {percentile(timings, .5):.2f} s, p95 {percentile(timings, .95):.2f} s, "
-          f"max {max(timings):.2f} s; versions in the repo: {len(by_uid)}")
+    print(
+        f"publishes: {len(published)}, p50 {percentile(timings, .5):.2f} s, p95 {percentile(timings, .95):.2f} s, "
+        f"max {max(timings):.2f} s; versions in the repo: {len(by_uid)}"
+    )
     assert len({row["uid"] for row in published}) == len(published)
     for row in published:
         name, version = by_uid[row["uid"]]  # never lost
@@ -406,7 +433,11 @@ def test_contention_on_one_repo(tmp_path):
     status = cli(project, "status")
     assert status.returncode == 0 and "no remote" in status.stdout
     assert not stray_repos(tmp_path, {project / ".cairn"})
-    assert not list((project / ".cairn" / "heartbeats").glob("*")) if (project / ".cairn" / "heartbeats").is_dir() else True
+    assert (
+        not list((project / ".cairn" / "heartbeats").glob("*"))
+        if (project / ".cairn" / "heartbeats").is_dir()
+        else True
+    )
     # the WAL is checkpointed: it never holds more than a few MB of pages (SQLite's autocheckpoint is 1000 pages)
     assert max(wal.sizes) < 64e6, max(wal.sizes)
 
@@ -460,10 +491,13 @@ def listing_times(project: Path, label: str, names: list[str], env=None, shown: 
         assert status == 200
         warm = [timed_get(port, f"/ui-api/projects/{project}")[0] for _ in range(5)]
         times["ui project warm"] = statistics.median(warm)
-        times["ui artifact cold"], status = timed_get(port, f"/ui-api/projects/{project}/artifacts/{quote(names[0], safe='')}")
+        times["ui artifact cold"], status = timed_get(
+            port, f"/ui-api/projects/{project}/artifacts/{quote(names[0], safe='')}"
+        )
         assert status == 200
         times["ui artifact warm"] = statistics.median(
-            timed_get(port, f"/ui-api/projects/{project}/artifacts/{quote(name, safe='')}")[0] for name in names[1:6])
+            timed_get(port, f"/ui-api/projects/{project}/artifacts/{quote(name, safe='')}")[0] for name in names[1:6]
+        )
         times["ui projects warm"] = statistics.median(timed_get(port, "/ui-api/projects")[0] for _ in range(5))
     finally:
         ui.terminate()
@@ -476,8 +510,18 @@ def test_listings_with_3000_versions_and_500_pending_entries(tmp_path):
     project = project_at(tmp_path, "big")
     script(project, "fill.py", FILL)
     began = time.perf_counter()
-    filled = cli(project, "fill.py", timeout=1800) if False else subprocess.run(
-        [sys.executable, "fill.py", "300", "10"], cwd=project, capture_output=True, text=True, timeout=1800, env=base_env())
+    filled = (
+        cli(project, "fill.py", timeout=1800)
+        if False
+        else subprocess.run(
+            [sys.executable, "fill.py", "300", "10"],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            env=base_env(),
+        )
+    )
     assert filled.returncode == 0, filled.stderr
     print(f"\n3000 publishes in one process: {time.perf_counter() - began:.1f} s")
     names = [f"group{index % 10}/a{index:03d}" for index in range(6)]
@@ -490,12 +534,16 @@ def test_listings_with_3000_versions_and_500_pending_entries(tmp_path):
     env = base_env(CAIRN_TOKEN="not-a-real-token")
     script(offline, "fill.py", FILL)
     began = time.perf_counter()
-    filled = subprocess.run([sys.executable, "fill.py", "50", "10"], cwd=offline, capture_output=True, text=True, timeout=1800, env=env)
+    filled = subprocess.run(
+        [sys.executable, "fill.py", "50", "10"], cwd=offline, capture_output=True, text=True, timeout=1800, env=env
+    )
     assert filled.returncode == 0, filled.stderr
     print(f"500 offline publishes in one process: {time.perf_counter() - began:.1f} s")
     assert len(list((offline / ".cairn" / "outbox").iterdir())) == 500
     pending = listing_times(offline, "500 pending outbox entries, remote refuses", names, env, shown="study")
-    assert pending["ui project warm"] < 0.03 and pending["ui artifact warm"] < 0.03 and pending["ui projects warm"] < 0.03
+    assert (
+        pending["ui project warm"] < 0.03 and pending["ui artifact warm"] < 0.03 and pending["ui projects warm"] < 0.03
+    )
 
 
 # ====================================================================== remotes: a real `cairn server`, and a faulty one
@@ -581,7 +629,9 @@ class FaultProxy:
             try:
                 client.settimeout(5)
                 client.recv(65536)
-                client.sendall(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                client.sendall(
+                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+                )
             except OSError:
                 pass
             client.close()
@@ -598,7 +648,10 @@ class FaultProxy:
         client.settimeout(None)
 
         def pipe(source, target, requests=False):
-            paced = [None, 0]  # when throttling began, bytes sent since (sleeps are coarse in the background: keep the average)
+            paced = [
+                None,
+                0,
+            ]  # when throttling began, bytes sent since (sleeps are coarse in the background: keep the average)
             try:
                 while data := source.recv(1 << 16):
                     if requests and data.split(b" ", 1)[0] in METHODS:  # a new request on a kept-alive connection
@@ -610,7 +663,9 @@ class FaultProxy:
                         if mode == "refuse":
                             return
                         if mode == "error":
-                            source.sendall(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                            source.sendall(
+                                b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+                            )
                             return
                         if mode == "slow-request":
                             time.sleep(self.delay)
@@ -744,21 +799,31 @@ def test_remote_outages_do_not_slow_runs_and_everything_is_sent_once(tmp_path):
         assert synced.returncode == 0, synced.stdout + synced.stderr
     finally:
         proxy.close()
-    lines = [f"  {'baseline':<8} init {base_runs[-1]['init']:6.2f} s  draft {base_runs[-1]['draft']:6.2f} s  finish "
-             f"{base_runs[-1]['finish']:6.2f} s  process {base_runs[-1]['process']:6.2f} s  cli publish {base_publish[-1]:6.2f} s"]
+    lines = [
+        f"  {'baseline':<8} init {base_runs[-1]['init']:6.2f} s  draft {base_runs[-1]['draft']:6.2f} s  finish "
+        f"{base_runs[-1]['finish']:6.2f} s  process {base_runs[-1]['process']:6.2f} s  cli publish {base_publish[-1]:6.2f} s"
+    ]
     for mode, row, published in report:
-        lines.append(f"  {mode:<8} init {row['init']:6.2f} s  draft {row['draft']:6.2f} s  finish {row['finish']:6.2f} s  "
-                     f"process {row['process']:6.2f} s  cli publish {published:6.2f} s")
-    lines.append(f"  hangs while running: draft {hung['draft']:.2f} s, finish {hung['finish']:.2f} s, the rest of the process {ended:.2f} s")
+        lines.append(
+            f"  {mode:<8} init {row['init']:6.2f} s  draft {row['draft']:6.2f} s  finish {row['finish']:6.2f} s  "
+            f"process {row['process']:6.2f} s  cli publish {published:6.2f} s"
+        )
+    lines.append(
+        f"  hangs while running: draft {hung['draft']:.2f} s, finish {hung['finish']:.2f} s, the rest of the process {ended:.2f} s"
+    )
     print("\nruns and publishes while the remote misbehaves:\n" + "\n".join(lines))
 
     # everything was sent exactly once, numbered contiguously by the remote, and the repo agrees
     remote = LocalRepo(server.root)
     check_numbers(remote)
-    on_remote = {version["uid"]: version for name in remote.artifacts("study") for version in remote.versions("study", name)}
+    on_remote = {
+        version["uid"]: version for name in remote.artifacts("study") for version in remote.versions("study", name)
+    }
     for uid in runs + results + [hung["out"]]:
         assert on_remote[uid]["status"] == "completed", on_remote[uid]
-    assert sorted(version["uid"] for version in remote.versions("study", "runs/timed")) == sorted(runs[:-1])  # numbered as they arrived
+    assert sorted(version["uid"] for version in remote.versions("study", "runs/timed")) == sorted(
+        runs[:-1]
+    )  # numbered as they arrived
     assert len(remote.versions("study", "data")) == 7
     assert not (project / ".cairn" / "outbox").exists() or not list((project / ".cairn" / "outbox").iterdir())
     status = cli(project, "status", env=env)
@@ -766,8 +831,9 @@ def test_remote_outages_do_not_slow_runs_and_everything_is_sent_once(tmp_path):
     verify_clean(project, env)
     local = LocalRepo(project / ".cairn")
     for name in ("runs/timed", "data", "result"):
-        assert [(v["version"], v["uid"]) for v in local.versions(OWN, name)] == \
-            [(v["version"], v["uid"]) for v in remote.versions("study", name)]
+        assert [(v["version"], v["uid"]) for v in local.versions(OWN, name)] == [
+            (v["version"], v["uid"]) for v in remote.versions("study", name)
+        ]
     server.stop()
     timings = {mode: (row, published) for mode, row, published in report}
     for mode in ("refuse", "hang", "error"):  # a remote that does not answer costs a run one short look at most
@@ -880,7 +946,7 @@ def test_a_remote_added_while_a_version_runs_takes_over_everything_once(tmp_path
 
 # ====================================================================== 2. SIGKILL at chosen and at random points
 
-KILL_HOOK = '''
+KILL_HOOK = """
 import os, signal
 point = os.environ.get("CAIRN_KILL_AT")
 if point:
@@ -938,7 +1004,7 @@ if point:
         after(remote.Remote, "start_version")
     elif point == "files-added":  # a running version's files were sent
         after(remote.Remote, "add_files")
-'''
+"""
 
 KILL_PUBLISH = """
 import pathlib, sys, cairn
@@ -970,14 +1036,18 @@ def kill_env(tmp_path: Path, **extra) -> dict:
 
 def outbox_of(project: Path) -> list[str]:
     folder = project / ".cairn" / "outbox"
-    return sorted(path.name for path in folder.iterdir() if ".tmp-" not in path.name) if folder.is_dir() else []  # scratch: prune's
+    return (
+        sorted(path.name for path in folder.iterdir() if ".tmp-" not in path.name) if folder.is_dir() else []
+    )  # scratch: prune's
 
 
-@pytest.mark.parametrize("point", ["outbox-written", "staged", "blobs-sent", "answered", "recorded", "removing", "started",
-                                   "files-added"])
+@pytest.mark.parametrize(
+    "point", ["outbox-written", "staged", "blobs-sent", "answered", "recorded", "removing", "started", "files-added"]
+)
 def test_sigkill_at_each_step_of_a_sync_loses_and_doubles_nothing(tmp_path, point):
     """A publish and a run (with a draft) are killed at one step of writing or sending; the next command recovers: the
-    remote has every version that got that far exactly once, failed runs are failed, the outbox is empty, verify is clean."""
+    remote has every version that got that far exactly once, failed runs are failed, the outbox is empty, verify is clean.
+    """
     server = RealServer(tmp_path / "remote").start()
     env = base_env(CAIRN_TOKEN=server.token)
     killing = kill_env(tmp_path, CAIRN_TOKEN=server.token, CAIRN_KILL_AT=point)
@@ -990,14 +1060,22 @@ def test_sigkill_at_each_step_of_a_sync_loses_and_doubles_nothing(tmp_path, poin
         data.mkdir()
         (data / "a.txt").write_text(f"version {index}")
         (data / "big.bin").write_bytes(os.urandom(3 << 20))
-        result = subprocess.run([sys.executable, "publish.py", str(data)], cwd=project, capture_output=True, text=True,
-                                env=killing, timeout=120)
+        result = subprocess.run(
+            [sys.executable, "publish.py", str(data)],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            env=killing,
+            timeout=120,
+        )
         if result.returncode == -signal.SIGKILL:
             killed += 1
         else:
             assert result.returncode == 0, result.stderr
             finished.append(result.stdout.split()[0])
-        run = subprocess.run([sys.executable, "run.py"], cwd=project, capture_output=True, text=True, env=killing, timeout=120)
+        run = subprocess.run(
+            [sys.executable, "run.py"], cwd=project, capture_output=True, text=True, env=killing, timeout=120
+        )
         if run.returncode == -signal.SIGKILL:
             killed += 1
         else:
@@ -1010,8 +1088,10 @@ def test_sigkill_at_each_step_of_a_sync_loses_and_doubles_nothing(tmp_path, poin
     assert synced.returncode == 0, synced.stdout + synced.stderr
     left = outbox_of(project)
     if left:  # only folders a crash kept from being removed after they were sent: prune removes them
-        assert point == "removing" and all(json.loads((project / ".cairn" / "outbox" / uid / "manifest.json").read_text())["sync"]
-                                           == "synced" for uid in left), (point, left)
+        assert point == "removing" and all(
+            json.loads((project / ".cairn" / "outbox" / uid / "manifest.json").read_text())["sync"] == "synced"
+            for uid in left
+        ), (point, left)
         assert cli(project, "prune", env=env).returncode == 0
     assert outbox_of(project) == [], (point, outbox_of(project), cli(project, "status", env=env).stdout)
     assert "nothing pending" in cli(project, "status", env=env).stdout
@@ -1024,7 +1104,9 @@ def test_sigkill_at_each_step_of_a_sync_loses_and_doubles_nothing(tmp_path, poin
     assert not [v for v in on_remote.values() if v["status"] == "running"], point  # killed runs are failed, not running
     assert len({version["uid"] for version in on_remote.values()}) == len(on_remote)
     data = everything.get("data", [])
-    assert len({tuple(sorted((f["path"], f["sha256"]) for f in v["files"])) for v in data}) == len(data)  # no double version
+    assert len({tuple(sorted((f["path"], f["sha256"]) for f in v["files"])) for v in data}) == len(
+        data
+    )  # no double version
     local = LocalRepo(project / ".cairn")
     for name, versions in everything.items():
         mine = {v["uid"]: v["version"] for v in local.versions(OWN, name)} if name in local.artifacts(OWN) else {}
@@ -1106,8 +1188,13 @@ def test_random_sigkills_of_concurrent_writers_gc_syncs_and_the_server(tmp_path,
                         finished += line.split()[1:]
             elif process.returncode != -signal.SIGKILL and kind in ("publish", "run"):
                 raise AssertionError(f"{kind} failed without being killed: {err[-3000:]}")
-    problems = [f"{kind}: {line}" for kind, code, out, err in outputs if code == 0 for line in bad_lines(err) if "Traceback" in line
-                or "locked" in line]
+    problems = [
+        f"{kind}: {line}"
+        for kind, code, out, err in outputs
+        if code == 0
+        for line in bad_lines(err)
+        if "Traceback" in line or "locked" in line
+    ]
     assert not problems, "\n".join(problems[:20])
     status = cli(project, "status", env=env)
     assert status.returncode == 0, status.stderr
@@ -1124,9 +1211,11 @@ def test_random_sigkills_of_concurrent_writers_gc_syncs_and_the_server(tmp_path,
         assert known[uid]["status"] == "completed", known.get(uid)
     running = [version for version in known.values() if version["status"] == "running"]
     assert not running, running
-    print(f"\n{KILLS} rounds ({'remote' if server else 'no remote'}): {len(finished)} finished, "
-          f"{sum(1 for _, code, _, _ in outputs if code == -signal.SIGKILL)} killed, {len(known)} versions in the source of truth, "
-          f"{sum(1 for v in known.values() if v['status'] == 'failed')} failed")
+    print(
+        f"\n{KILLS} rounds ({'remote' if server else 'no remote'}): {len(finished)} finished, "
+        f"{sum(1 for _, code, _, _ in outputs if code == -signal.SIGKILL)} killed, {len(known)} versions in the source of truth, "
+        f"{sum(1 for v in known.values() if v['status'] == 'failed')} failed"
+    )
     verify_clean(project, env)
     if server:
         assert cli(project, "verify", "--repo", str(server.root)).returncode == 0
@@ -1196,7 +1285,9 @@ def test_a_server_stopped_and_killed_mid_run_changes_nothing_for_runs(tmp_path):
         project = "study" if name == "remote-run" else OWN
         run = remote.get_version(project, f"runs/{name}", run_uid)
         assert run["status"] == "completed", (name, run.get("error"))
-        lines = b"".join(remote.read_file(project, f"runs/{name}", run_uid, "metrics.jsonl").chunks).decode().splitlines()
+        lines = (
+            b"".join(remote.read_file(project, f"runs/{name}", run_uid, "metrics.jsonl").chunks).decode().splitlines()
+        )
         assert len(lines) == steps, (name, len(lines), steps)
         assert remote.get_version(project, f"{name}-out", out_uid)["inputs"] == [f"runs/{name}@v{run['version']}"]
     assert outbox_of(client) == []
@@ -1260,16 +1351,25 @@ def test_many_senders_of_one_outbox_and_two_machines_number_everything_once(tmp_
     for project in (a, b):
         script(project, "work.py", OFFLINE_WORK)
         script(project, "consume.py", CONSUMER)
-    made_b = json.loads(subprocess.run([sys.executable, "work.py", "b", "6"], cwd=b, capture_output=True, text=True, env=env,
-                                       check=True).stdout)
+    made_b = json.loads(
+        subprocess.run(
+            [sys.executable, "work.py", "b", "6"], cwd=b, capture_output=True, text=True, env=env, check=True
+        ).stdout
+    )
     proxy.mode = "forward"  # A uses B's version while it reaches the remote, then works offline
-    used = subprocess.run([sys.executable, "consume.py", "a1", "b-own@latest"], cwd=a, capture_output=True, text=True, env=env)
+    used = subprocess.run(
+        [sys.executable, "consume.py", "a1", "b-own@latest"], cwd=a, capture_output=True, text=True, env=env
+    )
     assert used.returncode == 0, used.stderr
     proxy.mode = "refuse"
-    made_a = json.loads(subprocess.run([sys.executable, "work.py", "a", "30"], cwd=a, capture_output=True, text=True, env=env,
-                                       check=True).stdout)
-    offline_use = subprocess.run([sys.executable, "consume.py", "a2", f"a-own@{made_a[0]}"], cwd=a, capture_output=True,
-                                 text=True, env=env)
+    made_a = json.loads(
+        subprocess.run(
+            [sys.executable, "work.py", "a", "30"], cwd=a, capture_output=True, text=True, env=env, check=True
+        ).stdout
+    )
+    offline_use = subprocess.run(
+        [sys.executable, "consume.py", "a2", f"a-own@{made_a[0]}"], cwd=a, capture_output=True, text=True, env=env
+    )
     assert offline_use.returncode == 0, offline_use.stderr
     assert len(outbox_of(a)) == 32  # 30 publishes, the offline run and its output
     proxy.mode = "forward"  # now everyone sends the same outbox at once, while B keeps publishing to `shared`
@@ -1288,8 +1388,9 @@ def test_many_senders_of_one_outbox_and_two_machines_number_everything_once(tmp_
     watcher.send_signal(signal.SIGINT)
     finish(watcher, 60)
     assert outbox_of(a) == [], cli(a, "status", env=env).stdout
-    b_reads = subprocess.run([sys.executable, "consume.py", "b1", f"a-own@{made_a[2]}"], cwd=b, capture_output=True,
-                             text=True, env=env)
+    b_reads = subprocess.run(
+        [sys.executable, "consume.py", "b1", f"a-own@{made_a[2]}"], cwd=b, capture_output=True, text=True, env=env
+    )
     assert b_reads.returncode == 0, b_reads.stderr
     assert json.loads(b_reads.stdout)["used"] == made_a[2]
 
@@ -1307,7 +1408,9 @@ def test_many_senders_of_one_outbox_and_two_machines_number_everything_once(tmp_
         verify_clean(project, env)
     derived = remote.versions("study", "derived-a2")[0]
     [run_ref] = derived["inputs"]
-    assert remote.resolve("study", run_ref)[1]["inputs"] == [f"a-own@v{on_remote[made_a[0]]['version']}"]  # pending input renumbered
+    assert remote.resolve("study", run_ref)[1]["inputs"] == [
+        f"a-own@v{on_remote[made_a[0]]['version']}"
+    ]  # pending input renumbered
     proxy.close()
     server.stop()
 
@@ -1394,8 +1497,13 @@ def test_cluster_jobs_on_a_network_filesystem_with_a_login_node_and_a_flaky_remo
         finish(login, 60)
         stop.set()
     assert not seen_database and not database.exists()  # never a database on the network filesystem
-    assert outbox_of(project) == [], (left, {uid: sorted(path.name for path in (project / ".cairn" / "outbox" / uid).iterdir())
-                                             for uid in outbox_of(project)})
+    assert outbox_of(project) == [], (
+        left,
+        {
+            uid: sorted(path.name for path in (project / ".cairn" / "outbox" / uid).iterdir())
+            for uid in outbox_of(project)
+        },
+    )
     remote = LocalRepo(server.root)
     everything = check_numbers(remote)
     on_remote = {version["uid"]: version for versions in everything.values() for version in versions}
@@ -1403,8 +1511,10 @@ def test_cluster_jobs_on_a_network_filesystem_with_a_login_node_and_a_flaky_remo
         assert on_remote[uid]["status"] == "completed", on_remote.get(uid)
     assert not [v for v in on_remote.values() if v["status"] == "running"]
     runs = everything["runs/job"]
-    print(f"\ncluster: {len(finished) // 2} jobs finished, {killed} killed; the remote has {len(runs)} runs "
-          f"({sum(v['status'] == 'failed' for v in runs)} failed) and {len(everything.get('result', []))} results")
+    print(
+        f"\ncluster: {len(finished) // 2} jobs finished, {killed} killed; the remote has {len(runs)} runs "
+        f"({sum(v['status'] == 'failed' for v in runs)} failed) and {len(everything.get('result', []))} results"
+    )
     assert len(runs) >= len(finished) // 2 and sum(v["status"] == "failed" for v in runs) <= killed
     for result in everything.get("result", []):  # each result names its own run, by the remote's number
         [run_ref] = result["inputs"]
@@ -1434,6 +1544,7 @@ def test_late_writes_never_bring_a_sent_entry_back(tmp_path):
 
 
 # ====================================================================== 8. finding the repo
+
 
 def publish_here(where: Path, name: str, text: str, env=None) -> subprocess.CompletedProcess:
     data = where / f"data-{name}-{abs(hash(text)) % 10**8}"
@@ -1469,12 +1580,25 @@ def test_finding_the_repo_from_anywhere(tmp_path):
 
     hydra = outer / "outputs" / "2026-10-16" / "01-02-03"  # a Hydra job's fresh folder
     hydra.mkdir(parents=True)
-    run = subprocess.run([sys.executable, "-c", "import cairn; r = cairn.init(name='h', code=False, system=False); r.finish(); print(r.uid)"],
-                         cwd=hydra, capture_output=True, text=True, env=base_env())
+    run = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import cairn; r = cairn.init(name='h', code=False, system=False); r.finish(); print(r.uid)",
+        ],
+        cwd=hydra,
+        capture_output=True,
+        text=True,
+        env=base_env(),
+    )
     assert run.returncode == 0, run.stderr
     assert LocalRepo(outer / ".cairn").get_version(OWN, "runs/h", run.stdout.split()[-1])["status"] == "completed"
 
-    drafting = subprocess.run([sys.executable, "-c", textwrap.dedent("""
+    drafting = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent("""
         import os, subprocess, sys, cairn
         with cairn.draft("inside") as draft:
             os.chdir(draft.path)  # a job that works inside its draft folder
@@ -1482,7 +1606,13 @@ def test_finding_the_repo_from_anywhere(tmp_path):
             result = subprocess.run([sys.executable, "-m", "cairn", "versions", "shared"], capture_output=True, text=True)
             assert result.returncode == 0 and result.stdout.count("completed") == 6, result.stdout + result.stderr
         print(draft.version.ref)
-    """)], cwd=outer, capture_output=True, text=True, env=base_env())
+    """),
+        ],
+        cwd=outer,
+        capture_output=True,
+        text=True,
+        env=base_env(),
+    )
     assert drafting.returncode == 0, drafting.stderr
     assert drafting.stdout.strip().startswith("inside@v1")
 
@@ -1498,8 +1628,17 @@ def test_finding_the_repo_from_anywhere(tmp_path):
 
     nowhere = tmp_path / "nowhere"  # read-only commands outside any repo refuse, and make nothing
     nowhere.mkdir()
-    for argv in (["status"], ["verify"], ["artifacts"], ["versions", "x"], ["show", "x"], ["pull", "x"], ["drafts", "list"],
-                 ["prune"], ["sync"]):
+    for argv in (
+        ["status"],
+        ["verify"],
+        ["artifacts"],
+        ["versions", "x"],
+        ["show", "x"],
+        ["pull", "x"],
+        ["drafts", "list"],
+        ["prune"],
+        ["sync"],
+    ):
         result = cli(nowhere, *argv)
         assert result.returncode == 1 and "no repo here" in result.stderr, (argv, result.stderr)
     assert not (nowhere / ".cairn").exists()
@@ -1513,8 +1652,12 @@ def test_finding_the_repo_from_anywhere(tmp_path):
     uid = json.loads((racing / ".cairn" / "repo.json").read_text())["uid"]
     opened = [spawn(racing, "-c", "import cairn; print(cairn.connect().backend.uid)") for _ in range(8)]
     assert {finish(process, 60)[0].strip() for process in opened} == {uid}
-    assert sorted(path.name for path in (racing / ".cairn").iterdir() if path.name.startswith("repo.json")) == ["repo.json"]
-    assert not stray_repos(tmp_path, {outer / ".cairn", inner / ".cairn", named, racing / ".cairn", tmp_path / "remote"})
+    assert sorted(path.name for path in (racing / ".cairn").iterdir() if path.name.startswith("repo.json")) == [
+        "repo.json"
+    ]
+    assert not stray_repos(
+        tmp_path, {outer / ".cairn", inner / ".cairn", named, racing / ".cairn", tmp_path / "remote"}
+    )
 
 
 # ====================================================================== 9. odd input
@@ -1525,8 +1668,13 @@ def test_odd_names_empty_files_and_symlinks_publish_and_read_back_byte_identical
     data = tmp_path / "odd"
     (data / "empty-folder").mkdir(parents=True)
     (data / "sub").mkdir()
-    files = {"empty.txt": b"", "sub/ünïcødé ✓ 文件 (1).txt": "größe".encode(), "sub/" + "x" * 240 + ".bin": os.urandom(1000),
-             "sub/space name.txt": b"spaces", "sub/new​line.txt": b"zero width"}
+    files = {
+        "empty.txt": b"",
+        "sub/ünïcødé ✓ 文件 (1).txt": "größe".encode(),
+        "sub/" + "x" * 240 + ".bin": os.urandom(1000),
+        "sub/space name.txt": b"spaces",
+        "sub/new​line.txt": b"zero width",
+    }
     for path, content in files.items():
         (data / path).write_bytes(content)
     (data / "sub" / "inside").symlink_to("../empty.txt")
@@ -1578,7 +1726,10 @@ def test_files_that_change_while_published_and_files_that_cannot_be_read(tmp_pat
     for version in repo.versions(OWN, "changing"):  # each version has what was staged, consistently
         for entry in version["files"]:
             content = b"".join(repo.read_file(OWN, "changing", f"v{version['version']}", entry["path"]).chunks)
-            assert sha(content) == entry["sha256"] and len(content) == entry["size"], (version["version"], entry["path"])
+            assert sha(content) == entry["sha256"] and len(content) == entry["size"], (
+                version["version"],
+                entry["path"],
+            )
         numbers.append(version["version"])
     assert numbers == list(range(1, len(numbers) + 1))
     verify_clean(project)
@@ -1605,13 +1756,19 @@ def test_a_full_disk_fails_cleanly_and_the_repo_recovers(tmp_path):
     if sys.platform != "darwin" or not shutil.which("hdiutil"):
         pytest.skip("needs hdiutil (macOS) for a small filesystem")
     image, mount = tmp_path / "full.dmg", tmp_path / "mnt"
-    made = subprocess.run(["hdiutil", "create", "-size", "40m", "-fs", "APFS", "-volname", "cairnfull", str(image), "-quiet"],
-                          capture_output=True, text=True)
+    made = subprocess.run(
+        ["hdiutil", "create", "-size", "40m", "-fs", "APFS", "-volname", "cairnfull", str(image), "-quiet"],
+        capture_output=True,
+        text=True,
+    )
     if made.returncode != 0:
         pytest.skip(f"hdiutil create failed: {made.stderr}")
     mount.mkdir()
-    attached = subprocess.run(["hdiutil", "attach", str(image), "-mountpoint", str(mount), "-nobrowse", "-quiet"],
-                              capture_output=True, text=True)
+    attached = subprocess.run(
+        ["hdiutil", "attach", str(image), "-mountpoint", str(mount), "-nobrowse", "-quiet"],
+        capture_output=True,
+        text=True,
+    )
     if attached.returncode != 0:
         pytest.skip(f"hdiutil attach failed: {attached.stderr}")
     try:
@@ -1787,19 +1944,29 @@ def test_the_outbox_listing_cache_sees_changes_and_removals_at_once(tmp_path):
     from cairn.store.uids import new_uid
 
     outbox = Outbox(tmp_path)
-    records = [{"uid": new_uid(), "sync": "pending", "status": "completed", "label": "aaaa", "files": [], "created": "x"}
-               for _ in range(3)]
+    records = [
+        {"uid": new_uid(), "sync": "pending", "status": "completed", "label": "aaaa", "files": [], "created": "x"}
+        for _ in range(3)
+    ]
     for record in records:
         outbox.create(record, running=False)
     assert [record["label"] for record in outbox.records()] == ["aaaa"] * 3
-    changed = subprocess.run([sys.executable, "-c", textwrap.dedent(f"""
+    changed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(f"""
         from cairn.store.outbox import Outbox
         outbox = Outbox({str(tmp_path)!r})
         record = outbox.load({records[1]['uid']!r})
         record["label"] = "bbbb"  # the same size
         outbox.save(record)
         outbox.remove(outbox.load({records[2]['uid']!r}))
-    """)], capture_output=True, text=True)
+    """),
+        ],
+        capture_output=True,
+        text=True,
+    )
     assert changed.returncode == 0, changed.stderr
     listed = outbox.records()
     assert [record["label"] for record in listed] == ["aaaa", "bbbb"]
@@ -1859,7 +2026,9 @@ def test_a_run_ends_only_once_its_large_output_is_on_a_healthy_remote(tmp_path):
     assert process.returncode == 0, err
     row = json.loads(out.strip().splitlines()[-1])
     print(f"stalled partway: the process ended {ended:.1f} s after the stall; stderr: {err.strip()!r}")
-    assert len(outbox_of(project)) == 1 and remote.get_version("study", "runs/big", row["uid"])["status"] == "running"  # pending
+    assert (
+        len(outbox_of(project)) == 1 and remote.get_version("study", "runs/big", row["uid"])["status"] == "running"
+    )  # pending
     assert ended < 25, ended  # the stall timeout (10 s) and a little, not the whole budget of a transfer
     proxy.mode = "forward"
     synced = cli(project, "sync", env=env)

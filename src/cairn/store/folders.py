@@ -112,8 +112,10 @@ def update_record(root: Path | str, manifest: dict, repo: str | None = None) -> 
     if record is None or record.get("manifest") == manifest:
         return
     try:
-        write_json(folder / RECORD, {**record, "version": manifest.get("version"), "manifest": manifest,
-                                     **({"repo": repo} if repo else {})})
+        write_json(
+            folder / RECORD,
+            {**record, "version": manifest.get("version"), "manifest": manifest, **({"repo": repo} if repo else {})},
+        )
     except OSError:
         pass
 
@@ -182,12 +184,16 @@ def link_files(entries: list[dict], target: Path, blob, digest: str | None = Non
         place_file(source, path)
         sha, size = sha256_file(path)
         if sha != entry["sha256"] or size != entry["size"]:
-            raise StoreError(f"{label}: {entry['path']} does not match its manifest (expected sha256 {entry['sha256'][:16]}..., "
-                             f"{entry['size']} bytes; the stored copy {source} has {sha[:16]}..., {size} bytes): the stored copy is "
-                             "damaged; `cairn verify --repair` removes it so the next pull downloads it again")
+            raise StoreError(
+                f"{label}: {entry['path']} does not match its manifest (expected sha256 {entry['sha256'][:16]}..., "
+                f"{entry['size']} bytes; the stored copy {source} has {sha[:16]}..., {size} bytes): the stored copy is "
+                "damaged; `cairn verify --repair` removes it so the next pull downloads it again"
+            )
         placed.append({"path": entry["path"], "sha256": sha, "size": size})
     if digest is not None and manifest_digest(placed) != digest:
-        raise StoreError(f"{label}: the files pulled hash to {manifest_digest(placed)}, not the manifest digest {digest}")
+        raise StoreError(
+            f"{label}: the files pulled hash to {manifest_digest(placed)}, not the manifest digest {digest}"
+        )
 
 
 def install(build: Path, folder: Path) -> None:
@@ -227,11 +233,26 @@ def materialize_version(store, name: str, version: dict, root: Path | str) -> Pa
     try:
         build.mkdir()
         label = refs.exact(name, version["version"]) if version.get("version") is not None else f"{name}@{uid}"
-        link_files(version["files"], build / FILES, lambda entry: store.blob_file(name, version["version"], entry, root),
-                   version.get("digest"), label)
-        write_json(build / RECORD, {"uid": uid, "sync": "synced", "repo": getattr(store, "uid", None), "name": name,
-                                    "version": version["version"], "manifest": version, "accessed": now(),
-                                    "accessed_at": time.time()})
+        link_files(
+            version["files"],
+            build / FILES,
+            lambda entry: store.blob_file(name, version["version"], entry, root),
+            version.get("digest"),
+            label,
+        )
+        write_json(
+            build / RECORD,
+            {
+                "uid": uid,
+                "sync": "synced",
+                "repo": getattr(store, "uid", None),
+                "name": name,
+                "version": version["version"],
+                "manifest": version,
+                "accessed": now(),
+                "accessed_at": time.time(),
+            },
+        )
         install(build, folder)
     finally:
         if build.exists():

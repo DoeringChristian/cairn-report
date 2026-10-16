@@ -40,19 +40,31 @@ def _now() -> str:
 
 def info() -> dict:
     """The facts of this process and machine (see the module doc)."""
-    environ = {key: value for key, value in sorted(os.environ.items())
-               if key.startswith(ENV_PREFIXES) or key in ENV_NAMES}
-    slurm = {key: os.environ[name] for key, name in (("job_id", "SLURM_JOB_ID"), ("array_job_id", "SLURM_ARRAY_JOB_ID"),
-                                                       ("array_task_id", "SLURM_ARRAY_TASK_ID"), ("nodelist", "SLURM_JOB_NODELIST"),
-                                                       ("partition", "SLURM_JOB_PARTITION")) if os.environ.get(name)}
+    environ = {
+        key: value for key, value in sorted(os.environ.items()) if key.startswith(ENV_PREFIXES) or key in ENV_NAMES
+    }
+    slurm = {
+        key: os.environ[name]
+        for key, name in (
+            ("job_id", "SLURM_JOB_ID"),
+            ("array_job_id", "SLURM_ARRAY_JOB_ID"),
+            ("array_task_id", "SLURM_ARRAY_TASK_ID"),
+            ("nodelist", "SLURM_JOB_NODELIST"),
+            ("partition", "SLURM_JOB_PARTITION"),
+        )
+        if os.environ.get(name)
+    }
     found = {
         "host": socket.gethostname(),
         "platform": platform.platform(),
         "machine": platform.machine(),
         "processor": platform.processor(),
         "cpus": os.cpu_count(),
-        "python": {"version": sys.version.split()[0], "implementation": platform.python_implementation(),
-                   "executable": sys.executable},
+        "python": {
+            "version": sys.version.split()[0],
+            "implementation": platform.python_implementation(),
+            "executable": sys.executable,
+        },
         "command": [sys.executable, *sys.argv] if sys.argv and sys.argv[0] else [sys.executable],
         "argv": list(sys.argv),
         "cwd": os.getcwd(),
@@ -107,8 +119,11 @@ class _Fallback:
         except (OSError, AttributeError):
             pass
         try:
-            meminfo = {line.split(":")[0]: int(line.split()[1]) for line in Path("/proc/meminfo").read_text().splitlines()
-                       if len(line.split()) >= 2}
+            meminfo = {
+                line.split(":")[0]: int(line.split()[1])
+                for line in Path("/proc/meminfo").read_text().splitlines()
+                if len(line.split()) >= 2
+            }
             total, available = meminfo["MemTotal"], meminfo.get("MemAvailable", meminfo.get("MemFree", 0))
             found["memory_used_gb"] = round((total - available) / 2**20, 3)
             found["memory_percent"] = round(100.0 * (total - available) / total, 1)
@@ -175,13 +190,21 @@ def _gpu_names() -> list[str]:
         import pynvml
 
         pynvml.nvmlInit()
-        return [_text(pynvml.nvmlDeviceGetName(pynvml.nvmlDeviceGetHandleByIndex(i))) for i in range(pynvml.nvmlDeviceGetCount())]
+        return [
+            _text(pynvml.nvmlDeviceGetName(pynvml.nvmlDeviceGetHandleByIndex(i)))
+            for i in range(pynvml.nvmlDeviceGetCount())
+        ]
     except Exception:
         pass
     if shutil.which("nvidia-smi"):
         try:
-            out = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True,
-                                 timeout=10, check=True).stdout
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            ).stdout
             return [line.strip() for line in out.splitlines() if line.strip()]
         except (OSError, subprocess.SubprocessError):
             pass
@@ -218,7 +241,9 @@ class _Gpus:
                     memory = nvml.nvmlDeviceGetMemoryInfo(handle)
                     found[f"gpu{index}_util_percent"] = nvml.nvmlDeviceGetUtilizationRates(handle).gpu
                     found[f"gpu{index}_memory_used_gb"] = round(memory.used / 2**30, 3)
-                    found[f"gpu{index}_memory_percent"] = round(100.0 * memory.used / memory.total, 1) if memory.total else None
+                    found[f"gpu{index}_memory_percent"] = (
+                        round(100.0 * memory.used / memory.total, 1) if memory.total else None
+                    )
                     try:
                         found[f"gpu{index}_temperature_c"] = nvml.nvmlDeviceGetTemperature(handle, 0)
                         found[f"gpu{index}_power_w"] = round(nvml.nvmlDeviceGetPowerUsage(handle) / 1000.0, 1)
@@ -229,8 +254,13 @@ class _Gpus:
             return found
         if self.smi:
             try:
-                out = subprocess.run([self.smi, f"--query-gpu={self.QUERY}", "--format=csv,noheader,nounits"],
-                                     capture_output=True, text=True, timeout=10, check=True).stdout
+                out = subprocess.run(
+                    [self.smi, f"--query-gpu={self.QUERY}", "--format=csv,noheader,nounits"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=True,
+                ).stdout
             except (OSError, subprocess.SubprocessError):
                 self.smi = None
                 return found
@@ -241,7 +271,9 @@ class _Gpus:
                 util, used, total, temperature, power = values[:5]
                 found[f"gpu{index}_util_percent"] = util
                 found[f"gpu{index}_memory_used_gb"] = round(used / 1024, 3) if used is not None else None
-                found[f"gpu{index}_memory_percent"] = round(100.0 * used / total, 1) if used is not None and total else None
+                found[f"gpu{index}_memory_percent"] = (
+                    round(100.0 * used / total, 1) if used is not None and total else None
+                )
                 found[f"gpu{index}_temperature_c"] = temperature
                 found[f"gpu{index}_power_w"] = power
         return found
@@ -415,4 +447,3 @@ class Capture:
             self.file.close()
         except OSError:
             pass
-

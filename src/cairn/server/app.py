@@ -82,8 +82,20 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote
 
 from .._version import __version__
-from ..store import (OWN, Ambiguous, BadRange, Conflict, Deleted, LocalProject, LocalRepo, MissingBlobs, NotFound, Protected, StoreError,
-                     refs)
+from ..store import (
+    OWN,
+    Ambiguous,
+    BadRange,
+    Conflict,
+    Deleted,
+    LocalProject,
+    LocalRepo,
+    MissingBlobs,
+    NotFound,
+    Protected,
+    StoreError,
+    refs,
+)
 from ..store.gc import GRACE, describe_bytes, parse_duration
 from ..store.blobs import SHA256, clean_entries
 from ..store.db import ServerLock
@@ -114,7 +126,7 @@ METHODS = ("GET", "POST", "PATCH", "PUT", "DELETE")
 
 def _require_extra() -> None:
     if MISSING is not None:
-        raise SystemExit(f"cairn: `cairn server` needs the server extra: pip install \"cairn[server]\" ({MISSING})")
+        raise SystemExit(f'cairn: `cairn server` needs the server extra: pip install "cairn[server]" ({MISSING})')
 
 
 class Answer:
@@ -228,8 +240,16 @@ class StoreApp:
                 self.auth.require(request.headers.get("authorization"))
                 body = await self._body(request, MAX_JSON)
             loop = asyncio.get_running_loop()
-            answer = await loop.run_in_executor(self.executor, self._api, method, raw, request.scope.get("query_string", b""),
-                                                request.headers.get("authorization"), request.headers.get("if-none-match"), body)
+            answer = await loop.run_in_executor(
+                self.executor,
+                self._api,
+                method,
+                raw,
+                request.scope.get("query_string", b""),
+                request.headers.get("authorization"),
+                request.headers.get("if-none-match"),
+                body,
+            )
         except ClientDisconnect:
             return self._response(_error(400, "the client went away"))
         except Exception as error:  # noqa: BLE001 - mapped to a status, or raised again
@@ -314,7 +334,11 @@ class StoreApp:
             body = json.dumps(summaries).encode()
             cached = (stamp, body, f'"{hashlib.blake2b(body, digest_size=16).hexdigest()}"')
             self._listings[project] = cached
-        return Answer(200, cached[1], {"Content-Type": "application/json", "Cache-Control": "private, no-cache", "ETag": cached[2]})
+        return Answer(
+            200,
+            cached[1],
+            {"Content-Type": "application/json", "Cache-Control": "private, no-cache", "ETag": cached[2]},
+        )
 
     def _manifest(self, version: dict, value) -> Answer:
         """A version's manifest (or part of it): a final version never changes, so it may be cached for good."""
@@ -368,7 +392,9 @@ class StoreApp:
                 return _json(200, {"name": name, "version": version})
             case ["ids"]:
                 name = query.get("name", [None])[0]
-                return _json(200, {"versions": view.ids(query.get("id", [""])[0], refs.valid_name(name) if name else None)})
+                return _json(
+                    200, {"versions": view.ids(query.get("id", [""])[0], refs.valid_name(name) if name else None)}
+                )
             case ["lineage"]:  # any status for an exact reference or a short id: a deleted version keeps its edges
                 name, version = view.find(refs.parse(query.get("ref", [""])[0]))
                 exact = refs.exact(name, version["version"])
@@ -380,7 +406,11 @@ class StoreApp:
         match route:
             case ["blobs", "missing"]:
                 hashes = payload.get("sha256", [])
-                if not isinstance(hashes, list) or len(hashes) > 200_000 or not all(isinstance(h, str) and SHA256.fullmatch(h) for h in hashes):
+                if (
+                    not isinstance(hashes, list)
+                    or len(hashes) > 200_000
+                    or not all(isinstance(h, str) and SHA256.fullmatch(h) for h in hashes)
+                ):
                     raise ValueError("sha256 must be a list of hex digests")
                 absent = set(store.missing_hashes(hashes))
                 return _json(200, {"missing": [h for h in hashes if h in absent]})
@@ -428,7 +458,9 @@ class StoreApp:
                     store.beat(view.get_version(name, number)["uid"], owner=False)
                     return _json(200, {"version": number})
                 if action == "complete":
-                    view.complete_version(name, number, self._inputs(payload.get("inputs")), digest=self._digest(payload))
+                    view.complete_version(
+                        name, number, self._inputs(payload.get("inputs")), digest=self._digest(payload)
+                    )
                     return _json(200, {"version": number})
                 if action == "fail":
                     view.fail_version(name, number)
@@ -444,12 +476,22 @@ class StoreApp:
                 if payload.get("source") is not None and not isinstance(payload["source"], dict):
                     raise ValueError("source must be an object")
                 before = view.last_number(name)
-                number = view.publish(name, entries, label=payload.get("label"), metadata=payload.get("metadata"),
-                                      inputs=self._inputs(payload.get("inputs")), aliases=aliases,
-                                      source=payload.get("source"), uid=self._uid(payload), digest=self._digest(payload))
+                number = view.publish(
+                    name,
+                    entries,
+                    label=payload.get("label"),
+                    metadata=payload.get("metadata"),
+                    inputs=self._inputs(payload.get("inputs")),
+                    aliases=aliases,
+                    source=payload.get("source"),
+                    uid=self._uid(payload),
+                    digest=self._digest(payload),
+                )
                 created = number > before  # new versions are numbered after every existing one
-                return _json(201 if created else 200, {"version": number, "uid": view.get_version(name, number)["uid"],
-                                                       "created": created})
+                return _json(
+                    201 if created else 200,
+                    {"version": number, "uid": view.get_version(name, number)["uid"], "created": created},
+                )
             case ["projects", project, "artifacts", name, "aliases"]:
                 alias, number = payload.get("alias"), payload.get("version")
                 if not isinstance(alias, str) or isinstance(number, bool) or not isinstance(number, int):
@@ -475,14 +517,25 @@ class StoreApp:
             raise HttpError(404, "no such API route")
         view = self.view(route[1])
         match route:
-            case ["projects", project, "artifacts", name, "versions", number] if number.isdigit() or UID.fullmatch(number):
-                return _json(200, view.delete_version(name, int(number) if number.isdigit() else number, reason=reason,
-                                                      force=force, by="owner"))
+            case ["projects", project, "artifacts", name, "versions", number] if number.isdigit() or UID.fullmatch(
+                number
+            ):
+                return _json(
+                    200,
+                    view.delete_version(
+                        name, int(number) if number.isdigit() else number, reason=reason, force=force, by="owner"
+                    ),
+                )
             case ["projects", project, "artifacts", name]:
                 return _json(200, view.delete_artifact(name, reason=reason, force=force, by="owner"))
             case ["projects", project]:
-                return _json(200, {**self.store.delete_project(view.project, reason=reason, force=force, by="owner"),
-                                   "project": project})
+                return _json(
+                    200,
+                    {
+                        **self.store.delete_project(view.project, reason=reason, force=force, by="owner"),
+                        "project": project,
+                    },
+                )
         raise HttpError(404, "no such API route")
 
     def _put_json(self, route: list[str], payload: dict) -> Answer:
@@ -555,9 +608,11 @@ class StoreApp:
                     if pending is not None:
                         _raise_first(await pending)
                     piece = b"".join(pieces)  # hashed and written in two threads at once, while the next piece arrives
-                    pending = asyncio.gather(loop.run_in_executor(self.executor, writer.hash_part, piece),
-                                             loop.run_in_executor(self.executor, writer.write_part, piece),
-                                             return_exceptions=True)  # both finish before anything else touches the writer
+                    pending = asyncio.gather(
+                        loop.run_in_executor(self.executor, writer.hash_part, piece),
+                        loop.run_in_executor(self.executor, writer.write_part, piece),
+                        return_exceptions=True,
+                    )  # both finish before anything else touches the writer
                     pieces, held = [], 0
             if pending is not None:
                 outcome, pending = await pending, None
@@ -591,8 +646,10 @@ def gc_schedule(app: StoreApp, interval: float, grace: float = GRACE, say=None) 
             except Exception as error:  # noqa: BLE001 - keep serving; try again next time
                 say(f"gc: failed: {error}")
                 continue
-            say(f"gc: deleted {len(found['deleted'])} versions ({len(found['skipped'])} protected, kept), removed "
-                f"{found['blobs']} blobs ({describe_bytes(found['bytes'])}) and {found['temporary']} stale uploads")
+            say(
+                f"gc: deleted {len(found['deleted'])} versions ({len(found['skipped'])} protected, kept), removed "
+                f"{found['blobs']} blobs ({describe_bytes(found['bytes'])}) and {found['temporary']} stale uploads"
+            )
 
     threading.Thread(target=loop, name="cairn-gc", daemon=True).start()
     return stop
@@ -602,7 +659,9 @@ REAP_EVERY = 60.0  # seconds between looks for running versions whose clients st
 RUNNING_TIMEOUT = 600.0  # seconds without a sync before the server fails a client's running version
 
 
-def reap_schedule(app: StoreApp, every: float = REAP_EVERY, timeout: float = RUNNING_TIMEOUT, say=None) -> threading.Event:
+def reap_schedule(
+    app: StoreApp, every: float = REAP_EVERY, timeout: float = RUNNING_TIMEOUT, say=None
+) -> threading.Event:
     """Every `every` seconds, fail the running versions no client synced for `timeout` seconds (their job died where
     nothing could tell: a node that went away). Set the returned event to stop it."""
     stop = threading.Event()
@@ -650,24 +709,38 @@ class StoreServer:
                 if error.errno != errno.EADDRINUSE:
                     raise
         else:
-            raise SystemExit(f"cairn: ports {port}-{port + PORT_TRIES - 1} on {host} all in use; choose one with --port")
+            raise SystemExit(
+                f"cairn: ports {port}-{port + PORT_TRIES - 1} on {host} all in use; choose one with --port"
+            )
         self.server_address = self.socket.getsockname()[:2]
         if port and self.server_address[1] != port:
             self.moved_from = port
         try:
             import uvloop  # noqa: F401
+
             loop = "uvloop"
         except ImportError:
             loop = "asyncio"
         try:
             import httptools  # noqa: F401
+
             protocol = "httptools"
         except ImportError:
             protocol = "h11"
-        config = uvicorn.Config(app, loop=loop, http=protocol, lifespan="off", log_config=None, log_level="warning",
-                                access_log=False, proxy_headers=False, server_header=False,
-                                headers=[("Server", f"cairn-store/{__version__}")], timeout_keep_alive=30,
-                                timeout_graceful_shutdown=5)
+        config = uvicorn.Config(
+            app,
+            loop=loop,
+            http=protocol,
+            lifespan="off",
+            log_config=None,
+            log_level="warning",
+            access_log=False,
+            proxy_headers=False,
+            server_header=False,
+            headers=[("Server", f"cairn-store/{__version__}")],
+            timeout_keep_alive=30,
+            timeout_graceful_shutdown=5,
+        )
         self.uvicorn = uvicorn.Server(config)
         self._done = threading.Event()
         self._started = False
@@ -710,8 +783,15 @@ class StoreServer:
             self.lock.release()
 
 
-def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
-                no_auth: bool = False, allow_network_fs: bool = False, own: str | None = None) -> StoreServer:
+def make_server(
+    root: Path,
+    host: str = "127.0.0.1",
+    port: int = 8800,
+    max_blob: int = 50 * 1024**3,
+    no_auth: bool = False,
+    allow_network_fs: bool = False,
+    own: str | None = None,
+) -> StoreServer:
     """A bound server (not yet serving) for a repo that has its owner token. With no_auth every request acts as the
     owner, so it is refused on any address but this machine's loopback. A repo on a network filesystem is refused
     (by LocalRepo) unless `allow_network_fs` (this server is then its only writer; see store/fs.py). `own`: the name
@@ -721,7 +801,9 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         raise SystemExit("cairn: --no-auth needs a loopback --host (it serves every project to anyone)")
     root = root.resolve()
     if not (root / "token").is_file():
-        raise SystemExit(f"cairn: {short_path(root)} is not a repo with a token (`cairn server {short_path(root)}` creates it)")
+        raise SystemExit(
+            f"cairn: {short_path(root)} is not a repo with a token (`cairn server {short_path(root)}` creates it)"
+        )
     lock = ServerLock(root)
     lock.acquire()  # one server per root, and other processes leave its metadata alone (store/db.py)
     try:
@@ -729,8 +811,12 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
             store = LocalRepo(root, allow_network_fs=allow_network_fs, where="")
         except StoreError as error:
             raise SystemExit(f"cairn: {error}") from None
-        app = StoreApp(store, Auth(read_token(root / "token"), no_auth), max_blob,
-                       own=refs.valid_project(own) if own is not None else None)
+        app = StoreApp(
+            store,
+            Auth(read_token(root / "token"), no_auth),
+            max_blob,
+            own=refs.valid_project(own) if own is not None else None,
+        )
         server = StoreServer(app, host, port, app.auth.owner_token)
     except BaseException:
         lock.release()
@@ -743,9 +829,18 @@ READY = "Serving; Ctrl-C stops it."
 PLAIN_HTTP = "plain HTTP: use a VPN (Tailscale), an SSH tunnel, or an HTTPS proxy"
 
 
-def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
-                no_auth: bool = False, ui_port: int | None = None, allow_network_fs: bool = False, gc_interval: float | None = None,
-                gc_grace: float = GRACE, own: str | None = None) -> None:
+def serve_store(
+    root: Path,
+    host: str = "127.0.0.1",
+    port: int = 8800,
+    max_blob: int = 50 * 1024**3,
+    no_auth: bool = False,
+    ui_port: int | None = None,
+    allow_network_fs: bool = False,
+    gc_interval: float | None = None,
+    gc_grace: float = GRACE,
+    own: str | None = None,
+) -> None:
     """Serve a store; a new root (no token yet) is initialized first. Prints the owner token, which clients
     and `cairn ui` log in with, to the terminal only: never into a URL. With `ui_port` (0: any free
     port), `cairn ui` runs as a child process beside the store and stops with it. With `gc_interval` (seconds),
@@ -757,7 +852,9 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     except StoreError as error:
         raise SystemExit(f"cairn: {error}") from None
     created = None if (root / "token").exists() else init_root(root)
-    server = make_server(root, host, port, max_blob=max_blob, no_auth=no_auth, allow_network_fs=allow_network_fs, own=own)
+    server = make_server(
+        root, host, port, max_blob=max_blob, no_auth=no_auth, allow_network_fs=allow_network_fs, own=own
+    )
     actual = server.server_address[1]
     here = f"http://{url_host(host)}:{actual}/"  # this machine's name for 0.0.0.0, which nobody can connect to
     if server.moved_from:
@@ -778,7 +875,10 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         rows.append(("Auth", "off (--no-auth): every request acts as the owner"))
     else:
         rows.append(("Token", f"{server.owner_token}   ({token_file})"))
-    print(field("Cairn server", short_path(root) + ("   (created, with a new owner token)" if created else "")), flush=True)
+    print(
+        field("Cairn server", short_path(root) + ("   (created, with a new owner token)" if created else "")),
+        flush=True,
+    )
     print(field("  API", here), flush=True)
     for line in block_lines:
         print(line, flush=True)

@@ -82,8 +82,13 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-def serve(config: Config | None = None, host: str = "127.0.0.1", port: int = 8000,
-          strict_port: bool = False, build: bool = True) -> None:
+def serve(
+    config: Config | None = None,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    strict_port: bool = False,
+    build: bool = True,
+) -> None:
     """Build (unless build=False) and serve; move to the next free port unless strict_port."""
     global OUTPUT_ROOT
     config = config or load_config()

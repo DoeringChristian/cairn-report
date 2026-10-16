@@ -48,18 +48,48 @@ def _target(name: str) -> str:
     return target.name
 
 
-def publish_version(repo, name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                    inputs=None, config: Config | None = None, allow_incomplete: bool = False):
+def publish_version(
+    repo,
+    name: str,
+    folder: Path | str,
+    *,
+    metadata: dict | None = None,
+    aliases=(),
+    label: str | None = None,
+    inputs=None,
+    config: Config | None = None,
+    allow_incomplete: bool = False,
+):
     """`Artifact.publish` in the repo `repo` (a client/repo.py ProjectRepo): the Version."""
     from .objects import Repo
 
-    return Repo(repo).artifact(_target(name)).publish(folder, metadata=metadata, aliases=aliases, label=label, inputs=inputs,
-                                                      config=config, allow_incomplete=allow_incomplete)
+    return (
+        Repo(repo)
+        .artifact(_target(name))
+        .publish(
+            folder,
+            metadata=metadata,
+            aliases=aliases,
+            label=label,
+            inputs=inputs,
+            config=config,
+            allow_incomplete=allow_incomplete,
+        )
+    )
 
 
 @public("cairn.publish")
-def publish(name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-            inputs=None, config: Config | None = None, allow_incomplete: bool = False) -> int | None:
+def publish(
+    name: str,
+    folder: Path | str,
+    *,
+    metadata: dict | None = None,
+    aliases=(),
+    label: str | None = None,
+    inputs=None,
+    config: Config | None = None,
+    allow_incomplete: bool = False,
+) -> int | None:
     """Store a folder as the next version of artifact `name` in the project's repo; returns the version number
     (`Artifact.publish`).
 
@@ -71,8 +101,17 @@ def publish(name: str, folder: Path | str, *, metadata: dict | None = None, alia
     """
     repo = open_repo(config)
     repo.resume()
-    return publish_version(repo, name, folder, metadata=metadata, aliases=aliases, label=label, inputs=inputs, config=config,
-                           allow_incomplete=allow_incomplete).number
+    return publish_version(
+        repo,
+        name,
+        folder,
+        metadata=metadata,
+        aliases=aliases,
+        label=label,
+        inputs=inputs,
+        config=config,
+        allow_incomplete=allow_incomplete,
+    ).number
 
 
 @surface
@@ -89,8 +128,18 @@ class Publication:
     its earlier entry. Files deleted from the folder stay in the running version.
     """
 
-    def __init__(self, name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                 inputs=None, uid: str | None = None, _repo=None):
+    def __init__(
+        self,
+        name: str,
+        folder: Path | str,
+        *,
+        metadata: dict | None = None,
+        aliases=(),
+        label: str | None = None,
+        inputs=None,
+        uid: str | None = None,
+        _repo=None,
+    ):
         from .open import heartbeat_timeout
 
         self.local = Path(folder).resolve()
@@ -98,7 +147,12 @@ class Publication:
         self.name = _target(name)
         self.config = load_config()
         self.exclude = self.config.repo.get("exclude", [])
-        self.label, self.metadata, self.aliases, self.inputs = label or self.local.name, metadata, tuple(aliases), inputs
+        self.label, self.metadata, self.aliases, self.inputs = (
+            label or self.local.name,
+            metadata,
+            tuple(aliases),
+            inputs,
+        )
         self.version: int | None = None  # the number; None while the source of truth has not numbered the version
         self.uid: str | None = uid  # the version's uid (default: a new one, made when it starts)
         self.queued = False  # pending: the remote has not taken it yet
@@ -154,11 +208,15 @@ class Publication:
         self.start()
         for attempt in range(3):
             entries, sources = self.store.stage(self.local, self.exclude, self.config.project)
-            fresh = [entry for entry in entries if self._sent.get(entry["path"]) != (entry.get("sha256"), entry.get("link"))]
+            fresh = [
+                entry for entry in entries if self._sent.get(entry["path"]) != (entry.get("sha256"), entry.get("link"))
+            ]
             try:
                 self.store.add_files(self.name, self.uid, fresh)
                 break
-            except MissingBlobs:  # garbage collection removed a staged blob meanwhile: stage again (the version is fine)
+            except (
+                MissingBlobs
+            ):  # garbage collection removed a staged blob meanwhile: stage again (the version is fine)
                 if attempt == 2:
                     raise
             except StoreError:
@@ -229,8 +287,15 @@ def published(name: str, version: dict, before: int = 0, why: str | None = None)
     return f"published {name}@v{version['version']} ({short}, {describe(version)})"
 
 
-def publish_folder(config: Config, folder: Path, name: str, label: str | None, aliases: list[str], meta: dict,
-                   allow_incomplete: bool = False) -> None:
+def publish_folder(
+    config: Config,
+    folder: Path,
+    name: str,
+    label: str | None,
+    aliases: list[str],
+    meta: dict,
+    allow_incomplete: bool = False,
+) -> None:
     """Publish one folder and print what happened."""
     store = open_repo(config)
     store.quiet_pending = True  # the line below says why
@@ -239,8 +304,16 @@ def publish_folder(config: Config, folder: Path, name: str, label: str | None, a
         before = max((v["version"] or 0 for v in store.versions(target)), default=0)
     except StoreError:  # also a remote that does not answer: the version stays pending below
         before = 0
-    version = publish_version(store, target, folder, metadata=meta, aliases=aliases, label=label, config=config,
-                              allow_incomplete=allow_incomplete)
+    version = publish_version(
+        store,
+        target,
+        folder,
+        metadata=meta,
+        aliases=aliases,
+        label=label,
+        config=config,
+        allow_incomplete=allow_incomplete,
+    )
     why = getattr(store, "pending_reasons", {}).get(version.manifest.get("uid"))
     print(published(target, version.manifest, before, why), flush=True)
 
@@ -251,14 +324,24 @@ def signature(folder: Path, config: Config) -> dict:
     return {path: (info.get("size"), info.get("mtime_ns"), info.get("link")) for path, info in files.items()}
 
 
-def watch_folder(config: Config, folder: Path, name: str, label: str | None, aliases: list[str], meta: dict,
-                 command: list[str] | None = None, interval: float | None = None) -> int:
+def watch_folder(
+    config: Config,
+    folder: Path,
+    name: str,
+    label: str | None,
+    aliases: list[str],
+    meta: dict,
+    command: list[str] | None = None,
+    interval: float | None = None,
+) -> int:
     """Follow `folder` into one running version of `name` while `command` runs; returns the exit code."""
     interval = float(interval if interval is not None else config.repo.get("interval", 30))
     settle, tick = min(SETTLE, interval / 2), max(0.05, min(1.0, interval / 4))
     stopped: list[int] = []
-    previous = {signum: signal.signal(signum, lambda number, _frame: stopped.append(number))
-                for signum in (signal.SIGTERM, signal.SIGINT)}
+    previous = {
+        signum: signal.signal(signum, lambda number, _frame: stopped.append(number))
+        for signum in (signal.SIGTERM, signal.SIGINT)
+    }
     try:
         return _follow(config, folder, name, label, aliases, meta, command, interval, settle, tick, stopped)
     finally:
@@ -279,9 +362,14 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             time.sleep(1)
     short = refs.default_short_id(pub.uid)
     if pub.version is None:
-        print(f"following {short_path(folder)} as {pub.name} ({short}, running, pending) every {interval:g} s", flush=True)
+        print(
+            f"following {short_path(folder)} as {pub.name} ({short}, running, pending) every {interval:g} s", flush=True
+        )
     else:
-        print(f"following {short_path(folder)} as {pub.name}@v{pub.version} ({short}, running) every {interval:g} s", flush=True)
+        print(
+            f"following {short_path(folder)} as {pub.name}@v{pub.version} ({short}, running) every {interval:g} s",
+            flush=True,
+        )
     # what the command pulls is recorded in the folder it writes, unless the caller chose a file
     env = os.environ | {INPUTS_ENV: os.environ.get(INPUTS_ENV) or str(Path(folder).resolve() / INPUTS_FILE)}
     process = subprocess.Popen(command, env=env) if command else None
@@ -336,8 +424,11 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             else:
                 number = pub.complete()
                 if number is None or pub.queued:
-                    print(f"pending {pub.name} ({short}, completed): remote not reachable\n" + hint("run `cairn sync` to send it now"),
-                          flush=True)
+                    print(
+                        f"pending {pub.name} ({short}, completed): remote not reachable\n"
+                        + hint("run `cairn sync` to send it now"),
+                        flush=True,
+                    )
                 else:
                     print(published(pub.name, pub.store.get_version(pub.name, pub.uid)), flush=True)
             return code
@@ -345,6 +436,6 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             if "can no longer change" in str(error):
                 return code
             warn(f"final publish failed ({error}); retrying", once=False)
-            time.sleep(min(2 ** attempt, 10))
+            time.sleep(min(2**attempt, 10))
     note(f"cairn: {pub.name}@v{pub.version} was left running; publish the folder again")
     return code or 1

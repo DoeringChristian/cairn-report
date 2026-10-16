@@ -54,11 +54,13 @@ def test_the_repo_layout(proj, tmp_path):
 def test_base_resolution_order(proj, tmp_path, monkeypatch):
     write_config(proj, '[reports]\noutput_dir = "site"\n')
     assert load_config().output_dir == proj / "site"  # relative to the project root, the folder holding .cairn/
-    monkeypatch.setenv("CAIRN_DIR", str(tmp_path / "elsewhere"))  # the environment beats .cairn, and its config is the config
+    monkeypatch.setenv(
+        "CAIRN_DIR", str(tmp_path / "elsewhere")
+    )  # the environment beats .cairn, and its config is the config
     assert cairn_base() == tmp_path / "elsewhere"
     assert load_config().output_dir == tmp_path / "elsewhere" / "build"
     (tmp_path / "elsewhere").mkdir()
-    (tmp_path / "elsewhere" / "config.toml").write_text('[repo]\ninterval = 3\n')
+    (tmp_path / "elsewhere" / "config.toml").write_text("[repo]\ninterval = 3\n")
     assert load_config().repo == {"interval": 3} and load_config().project == proj
 
 
@@ -84,9 +86,14 @@ def test_a_script_in_a_subfolder_finds_the_parents_repo(tmp_path):
     import sys
 
     (tmp_path / "work" / "deep").mkdir(parents=True)
-    assert subprocess.run([sys.executable, "-m", "cairn", "init"], cwd=tmp_path / "work", capture_output=True).returncode == 0
+    assert (
+        subprocess.run([sys.executable, "-m", "cairn", "init"], cwd=tmp_path / "work", capture_output=True).returncode
+        == 0
+    )
     script = "import cairn; run = cairn.init(name='x', system=False, code=False); print(run.path)"
-    result = subprocess.run([sys.executable, "-c", script], cwd=tmp_path / "work" / "deep", capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path / "work" / "deep", capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().startswith(str((tmp_path / "work" / ".cairn" / "drafts").resolve()))
     assert not (tmp_path / "work" / "deep" / ".cairn").exists() and "created the repo" not in result.stderr
@@ -138,7 +145,10 @@ def test_cairn_init_is_idempotent_and_writes_only_the_repo(tmp_path, capsys):
     main(["init", str(tmp_path)])
     assert "exists already" in capsys.readouterr().out
     assert json.loads((repo / "repo.json").read_text())["uid"] == uid
-    assert (tmp_path / ".gitignore").read_text() == "mine\n" and set(path.name for path in tmp_path.iterdir()) == {".gitignore", ".cairn"}
+    assert (tmp_path / ".gitignore").read_text() == "mine\n" and set(path.name for path in tmp_path.iterdir()) == {
+        ".gitignore",
+        ".cairn",
+    }
     template = (repo / "config.toml").read_text()
     assert load_config(tmp_path).repo == {} and "# [remote]" in template and "# exclude" in template  # commented out
 
@@ -147,14 +157,14 @@ def test_cairn_remote_shows_sets_and_removes_the_remote(proj, capsys):
     from cairn.cli import main
 
     file = proj / ".cairn" / "config.toml"
-    file.write_text("# mine\n[repo]\nexclude = [\"*.pkl\"]  # keep\n")
+    file.write_text('# mine\n[repo]\nexclude = ["*.pkl"]  # keep\n')
     main(["remote"])
     assert capsys.readouterr().out == "no remote\n"
     main(["remote", "set", "http://box:8800/a/"])
     out = capsys.readouterr().out
     assert out.startswith("remote  http://box:8800/a\n") and "cairn sync" in out
     assert load_config().repo == {"exclude": ["*.pkl"], "remote": "http://box:8800/a"}
-    assert file.read_text().startswith("# mine\n[repo]\nexclude = [\"*.pkl\"]  # keep\n")  # the rest as it was
+    assert file.read_text().startswith('# mine\n[repo]\nexclude = ["*.pkl"]  # keep\n')  # the rest as it was
     main(["remote", "set", "https://box/prefix/b"])
     assert load_config().repo["remote"] == "https://box/prefix/b" and file.read_text().count("[remote]") == 1
     main(["remote"])
@@ -165,7 +175,7 @@ def test_cairn_remote_shows_sets_and_removes_the_remote(proj, capsys):
     main(["remote", "remove"])
     out = capsys.readouterr().out
     assert "removed the remote https://box/prefix/b" in out and "pending versions wait" in out
-    assert "remote" not in load_config().repo and file.read_text() == "# mine\n[repo]\nexclude = [\"*.pkl\"]  # keep\n"
+    assert "remote" not in load_config().repo and file.read_text() == '# mine\n[repo]\nexclude = ["*.pkl"]  # keep\n'
     main(["remote", "remove"])
     assert capsys.readouterr().out == "no remote\n"
 

@@ -238,8 +238,13 @@ def test_cli_lists_publishes_and_discards_kept_drafts(configured, env, capsys):
     listed = capsys.readouterr().out.splitlines()[1:]  # under the header
     assert [line.split()[0] for line in listed] == ["jobs/first", "jobs/second", "jobs/third"]
     found = drafts.drafts()
-    assert all(line.split()[1] == found[i].short_id and line.split()[2].rstrip("…") in found[i].uid and line.split()[3] == "kept"
-               and line.endswith(found[i].uid) for i, line in enumerate(listed))
+    assert all(
+        line.split()[1] == found[i].short_id
+        and line.split()[2].rstrip("…") in found[i].uid
+        and line.split()[3] == "kept"
+        and line.endswith(found[i].uid)
+        for i, line in enumerate(listed)
+    )
     first, second, third = drafts.drafts()
 
     main(["drafts", "publish", first.uid[:30]])
@@ -360,13 +365,19 @@ def hydra_project(configured, env):
     (env / "experiments" / "run.py").write_text(RUN)
     (env / "experiments" / "toy.py").write_text(TOY)
     (env / ".gitignore").write_text(".cairn/\n")
-    for command in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+    for command in (
+        ["init", "-q"],
+        ["add", "-A"],
+        ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"],
+    ):
         subprocess.run(["git", *command], cwd=env, check=True)
     return env
 
 
 def hydra(project, *overrides):
-    return subprocess.run([sys.executable, "experiments/run.py", *overrides], cwd=project, capture_output=True, text=True)
+    return subprocess.run(
+        [sys.executable, "experiments/run.py", *overrides], cwd=project, capture_output=True, text=True
+    )
 
 
 def test_hydra_single_run_publishes_its_draft(hydra_project):
@@ -416,7 +427,14 @@ def test_hydra_multirun_publishes_one_sweep_draft(hydra_project):
         store.sync()
     [version] = store.artifact("demo-sweep").versions()
     paths = {f.path for f in version.files}
-    assert {"run.json", "multirun.yaml", "0/result.txt", "1/result.txt", "0/metrics.jsonl", "1/provenance/manifest.json"} <= paths
+    assert {
+        "run.json",
+        "multirun.yaml",
+        "0/result.txt",
+        "1/result.txt",
+        "0/metrics.jsonl",
+        "1/provenance/manifest.json",
+    } <= paths
     assert version.inputs == ["runs/demo@v1", "runs/demo@v2"]  # the trials' runs
     assert [store.version(ref).inputs for ref in version.inputs] == [[first.ref], [second.ref]]
     assert [v.ref for v in version.upstream()] == [first.ref, second.ref]
@@ -435,7 +453,9 @@ def test_finalize_study_publishes_a_sweep_draft(env, capsys):
     for trial in ("0", "1"):
         (sweep.folder / trial / ".hydra").mkdir(parents=True)
         (sweep.folder / trial / ".hydra" / "config.yaml").write_text("run:\n  name: sweep\n")
-        (sweep.folder / trial / "run.json").write_text(json.dumps({"status": "completed", "started": "t0", "code_revision": "abc"}))
+        (sweep.folder / trial / "run.json").write_text(
+            json.dumps({"status": "completed", "started": "t0", "code_revision": "abc"})
+        )
     main(["finalize-study", str(sweep.folder)])
     assert "completed and published" in capsys.readouterr().out
     version = cairn.connect().artifact("sweep").latest

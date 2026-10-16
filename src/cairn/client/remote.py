@@ -23,13 +23,24 @@ from urllib.parse import quote
 from ..store import refs
 from ..store.blobs import blob_path
 from ..store.folders import place, scratch
-from ..store.errors import (Ambiguous, BadRange, Conflict, Deleted, Forbidden, InvalidRef, MissingBlobs, NotFound, Protected, StoreError,
-                            Unauthorized, Unreachable)
+from ..store.errors import (
+    Ambiguous,
+    BadRange,
+    Conflict,
+    Deleted,
+    Forbidden,
+    InvalidRef,
+    MissingBlobs,
+    NotFound,
+    Protected,
+    StoreError,
+    Unauthorized,
+    Unreachable,
+)
 from ..store.local import FileRead
 from ..store.refs import Ref
 from ..store.uids import UID
 from .http import BATCH, Client, ClientError, upload_missing
-
 
 ANNOUNCE = 3.0  # seconds after which an upload in progress is announced (once)
 
@@ -118,8 +129,16 @@ class Remote:
         version's name), an upload still going after ANNOUNCE seconds says so once on stderr."""
         errors: list = []
         size = sum(item[1] for item in sources.values())
-        timer = threading.Timer(ANNOUNCE, lambda: print(f"cairn: sending {size / 1e6:.0f} MB of {what} to {self.url}",
-                                                        file=sys.stderr, flush=True)) if what else None
+        timer = (
+            threading.Timer(
+                ANNOUNCE,
+                lambda: print(
+                    f"cairn: sending {size / 1e6:.0f} MB of {what} to {self.url}", file=sys.stderr, flush=True
+                ),
+            )
+            if what
+            else None
+        )
         if timer is not None:
             timer.daemon = True
             timer.start()
@@ -131,16 +150,22 @@ class Remote:
             if timer is not None:
                 timer.cancel()
         if failed:
-            if any(isinstance(error, ClientError) and (error.unreachable or (error.status or 0) >= 500) for error in errors):
+            if any(
+                isinstance(error, ClientError) and (error.unreachable or (error.status or 0) >= 500) for error in errors
+            ):
                 # a remote that errors (5xx: a full disk, a crash) is a remote that does not answer now (as _translate)
                 raise Unreachable(f"{len(failed)} files were not uploaded to {self.url}: {errors[0]}")
             raise StoreError(f"{len(failed)} files were not uploaded to {self.url}; publish again")
 
     def put_blob(self, sha: str, stream, size: int) -> bool:
         try:
-            status, _ = self.client.request("PUT", f"/api/v2/blobs/{sha}", body=stream,
-                                            headers={"Content-Length": str(size), "Content-Type": "application/octet-stream"},
-                                            expect=(200, 201))
+            status, _ = self.client.request(
+                "PUT",
+                f"/api/v2/blobs/{sha}",
+                body=stream,
+                headers={"Content-Length": str(size), "Content-Type": "application/octet-stream"},
+                expect=(200, 201),
+            )
         except ClientError as error:
             raise _translate(error, self.url, self.client) from error
         return status == 201
@@ -193,7 +218,14 @@ class Remote:
         else:
             total = int(headers.get("content-length", 0))
             first, last = 0, total - 1
-        return FileRead(total, first, last, headers.get("etag", "").strip('"'), "immutable" in headers.get("cache-control", ""), chunks)
+        return FileRead(
+            total,
+            first,
+            last,
+            headers.get("etag", "").strip('"'),
+            "immutable" in headers.get("cache-control", ""),
+            chunks,
+        )
 
     # --------------------------------------------------------------- the project
 
@@ -202,8 +234,12 @@ class Remote:
 
     def create(self, title: str | None = None, description: str = "") -> dict:
         """Make the project on the server if it is new."""
-        return self._call("POST", "/api/v2/projects", {"name": self.project, "title": title, "description": description},
-                          expect=(200, 201))
+        return self._call(
+            "POST",
+            "/api/v2/projects",
+            {"name": self.project, "title": title, "description": description},
+            expect=(200, 201),
+        )
 
     def update(self, title: str | None = None, description: str | None = None) -> dict:
         return self._call("PATCH", self._base, {"title": title, "description": description})
@@ -236,14 +272,26 @@ class Remote:
     def aliases(self, name: str) -> dict[str, int]:
         return self._call("GET", f"{self._artifact(name)}/aliases")
 
-    def start_version(self, name: str, label: str | None = None, metadata: dict | None = None,
-                      source: dict | None = None, uid: str | None = None) -> int:
-        return self._call("POST", f"{self._artifact(name)}/versions",
-                          {"label": label, "metadata": metadata, "source": source, "uid": uid}, expect=(201,))["version"]
+    def start_version(
+        self,
+        name: str,
+        label: str | None = None,
+        metadata: dict | None = None,
+        source: dict | None = None,
+        uid: str | None = None,
+    ) -> int:
+        return self._call(
+            "POST",
+            f"{self._artifact(name)}/versions",
+            {"label": label, "metadata": metadata, "source": source, "uid": uid},
+            expect=(201,),
+        )["version"]
 
     def add_files(self, name: str, version: int, entries: list[dict]) -> None:
         for start in range(0, len(entries), BATCH):
-            self._call("POST", f"{self._artifact(name)}/versions/{version}/files", {"entries": entries[start:start + BATCH]})
+            self._call(
+                "POST", f"{self._artifact(name)}/versions/{version}/files", {"entries": entries[start : start + BATCH]}
+            )
 
     def keep_alive(self, name: str, version: int) -> None:
         """Tell the remote a running version is still being synced (an empty file list), so it does not time it out."""
@@ -263,11 +311,27 @@ class Remote:
     def fail_version(self, name: str, version: int) -> None:
         self._call("POST", f"{self._artifact(name)}/versions/{version}/fail", {})
 
-    def publish(self, name: str, entries: list[dict], label: str | None = None, metadata: dict | None = None,
-                inputs=None, aliases=(), source: dict | None = None, uid: str | None = None,
-                digest: str | None = None) -> int:
-        body = {"entries": entries, "label": label, "metadata": metadata, "inputs": [str(item) for item in inputs or []],
-                "aliases": list(aliases), "source": source, "uid": uid}
+    def publish(
+        self,
+        name: str,
+        entries: list[dict],
+        label: str | None = None,
+        metadata: dict | None = None,
+        inputs=None,
+        aliases=(),
+        source: dict | None = None,
+        uid: str | None = None,
+        digest: str | None = None,
+    ) -> int:
+        body = {
+            "entries": entries,
+            "label": label,
+            "metadata": metadata,
+            "inputs": [str(item) for item in inputs or []],
+            "aliases": list(aliases),
+            "source": source,
+            "uid": uid,
+        }
         if digest is not None:
             body["digest"] = digest
         answer = self._call("POST", f"{self._artifact(name)}/publish", body, expect=(200, 201))
@@ -332,7 +396,9 @@ def _translate(error: ClientError, url: str, client: Client) -> StoreError:
     if error.status == 401:
         return Unauthorized(client.refused(url))
     if error.status == 403:
-        return Forbidden(f"{text} ({client.refused(url).replace(' was refused by ', ' on ')})" if client.token else text)
+        return Forbidden(
+            f"{text} ({client.refused(url).replace(' was refused by ', ' on ')})" if client.token else text
+        )
     if error.status in (404, 410):
         located = f"{text} on the remote {url}" if " on the remote " not in text else text
         if error.status == 410:

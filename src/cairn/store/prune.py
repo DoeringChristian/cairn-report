@@ -55,8 +55,13 @@ def _files(folder: Path):
                 continue
 
 
-def prune(root: Path, older_than: float | None = None, max_size: int | None = None, dry_run: bool = False,
-          keep: set[str] | None = None) -> dict:
+def prune(
+    root: Path,
+    older_than: float | None = None,
+    max_size: int | None = None,
+    dry_run: bool = False,
+    keep: set[str] | None = None,
+) -> dict:
     """Remove read-only folders (and, with `keep`, unreferenced blobs) from the repo `root` (see the module doc).
 
     Returns {"versions": [uids of folders removed], "blobs": count, "freed": bytes, "size": bytes left}."""
@@ -119,7 +124,9 @@ def prune(root: Path, older_than: float | None = None, max_size: int | None = No
             size, freed, count = size - gained, freed + gained, count + 1
     if not dry_run:
         outbox = root / "outbox"
-        for folder in sorted(outbox.iterdir()) if outbox.is_dir() else []:  # sent, but its folder was not removed (a crash)
+        for folder in (
+            sorted(outbox.iterdir()) if outbox.is_dir() else []
+        ):  # sent, but its folder was not removed (a crash)
             record = read_record(folder) if ".tmp-" not in folder.name else None
             if record is not None and record.get("sync") == "synced":
                 remove(folder)

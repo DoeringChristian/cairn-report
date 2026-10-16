@@ -37,7 +37,9 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
 
     folder = folder.resolve()
     slug = folder.name
-    build = next(item for item in builder.build_all(config) if item.key == slug)  # all: links are checked against the other pages
+    build = next(
+        item for item in builder.build_all(config) if item.key == slug
+    )  # all: links are checked against the other pages
     data = json.loads((build.generated / "report-data.json").read_text())
     metadata = {field: data[field] for field in ("title", "status", "summary")}
     inputs = list(dict.fromkeys(item["resolved"] for item in build.inputs.values()))
@@ -58,9 +60,18 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
         if latest is not None:
             say(published(name, latest, before), flush=True)
             return latest["version"]
-        version = publish_version(store, name, stage, metadata=metadata, inputs=inputs, label=time.strftime("%Y-%m-%d_%H-%M-%S"),
-                                  config=config)
-    line = published(name, version.manifest, before, getattr(store, "pending_reasons", {}).get(version.manifest.get("uid")))
+        version = publish_version(
+            store,
+            name,
+            stage,
+            metadata=metadata,
+            inputs=inputs,
+            label=time.strftime("%Y-%m-%d_%H-%M-%S"),
+            config=config,
+        )
+    line = published(
+        name, version.manifest, before, getattr(store, "pending_reasons", {}).get(version.manifest.get("uid"))
+    )
     new = version.number is not None and version.number > before
     say(line[:-1] + f"; {plural(len(inputs), 'input')})" if new and line.endswith(")") else line, flush=True)
     return version.number
@@ -86,6 +97,9 @@ def _same_source(store, name: str, source: Path, config: Config, inputs: list[st
         return (prefix + entry["path"], entry.get("sha256"), entry.get("link"))
 
     old = sorted(key(entry) for entry in latest["files"] if entry["path"].startswith("source/"))
-    same = (old == sorted(key(entry, "source/") for entry in entries) and sorted(latest["inputs"]) == sorted(inputs)
-            and latest["metadata"] == metadata)
+    same = (
+        old == sorted(key(entry, "source/") for entry in entries)
+        and sorted(latest["inputs"]) == sorted(inputs)
+        and latest["metadata"] == metadata
+    )
     return latest if same else None

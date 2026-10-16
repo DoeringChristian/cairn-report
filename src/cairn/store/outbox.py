@@ -46,6 +46,8 @@ def _put(path: Path, value) -> bool:
     if not path.parent.is_dir():  # removed between the two steps (a rename into a folder being removed)
         return False
     return True
+
+
 from .refs import Ref
 
 OUTBOX = "outbox"
@@ -72,12 +74,24 @@ def belongs(record: dict, url: str, uid: str | None) -> bool:
 def manifest_of(record: dict) -> dict:
     """A version-style manifest for an entry (what `Version`, the UI, and `pull` read): number None, `pending` set."""
     status = "pending" if record["status"] == "completed" else record["status"]
-    return {"version": record.get("number"), "uid": record["uid"], "short_id": refs.default_short_id(record["uid"]),
-            "label": record.get("label"), "status": status,
-            "created": record["created"], "completed": record.get("completed"), "files": list(record["files"]),
-            "metadata": record.get("metadata") or {}, "inputs": record.get("inputs") or [], "source": record.get("source"),
-            "digest": record.get("digest"), "pending": True, "sync": record["sync"], "aliases": record.get("aliases") or [],
-            "error": record.get("error")}
+    return {
+        "version": record.get("number"),
+        "uid": record["uid"],
+        "short_id": refs.default_short_id(record["uid"]),
+        "label": record.get("label"),
+        "status": status,
+        "created": record["created"],
+        "completed": record.get("completed"),
+        "files": list(record["files"]),
+        "metadata": record.get("metadata") or {},
+        "inputs": record.get("inputs") or [],
+        "source": record.get("source"),
+        "digest": record.get("digest"),
+        "pending": True,
+        "sync": record["sync"],
+        "aliases": record.get("aliases") or [],
+        "error": record.get("error"),
+    }
 
 
 def usable(record: dict | None) -> bool:
@@ -135,7 +149,10 @@ class Outbox:
 
     def save(self, record: dict) -> bool:
         """Rewrite an entry; False (and nothing written) when it is gone (sent and removed by another sender)."""
-        return _put(self.folder_of(record["uid"]) / RECORD, {key: value for key, value in record.items() if not key.startswith("_")})
+        return _put(
+            self.folder_of(record["uid"]) / RECORD,
+            {key: value for key, value in record.items() if not key.startswith("_")},
+        )
 
     def create(self, record: dict, running: bool) -> None:
         """Put a new entry in place in one step (built under a scratch name, then renamed): it exists whole or not at all."""
@@ -181,7 +198,10 @@ class Outbox:
         if not folder.is_dir():
             return
         try:
-            _put(folder / RECORD, {**{key: value for key, value in record.items() if not key.startswith("_")}, "sync": "synced"})
+            _put(
+                folder / RECORD,
+                {**{key: value for key, value in record.items() if not key.startswith("_")}, "sync": "synced"},
+            )
         except OSError:
             pass
         for _ in range(3):  # a late heartbeat or claim written while it was being removed: remove again
@@ -213,7 +233,9 @@ class Outbox:
             return f"its process ({owner.get('host')} pid {owner['pid']}) is gone"
         age = time.time() - self.last_beat(record)
         if age > timeout:
-            return f"no heartbeat from {owner.get('host')} pid {owner.get('pid')} for {age:.0f} s (timeout {timeout:g} s)"
+            return (
+                f"no heartbeat from {owner.get('host')} pid {owner.get('pid')} for {age:.0f} s (timeout {timeout:g} s)"
+            )
         return None
 
     # ------------------------------------------------------------------ claims

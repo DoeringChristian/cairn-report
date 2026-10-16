@@ -106,17 +106,33 @@ class Run(Draft):
 
     is_run = True
 
-    def __init__(self, name: str | None = None, *, config=None, metadata: dict | None = None, watch: bool | None = None,
-                 capture: bool = True, system: bool | float = True, code: bool = True, label: str | None = None,
-                 folder: Path | None = None, adopt: Draft | None = None, inputs=(), _repo=None):
+    def __init__(
+        self,
+        name: str | None = None,
+        *,
+        config=None,
+        metadata: dict | None = None,
+        watch: bool | None = None,
+        capture: bool = True,
+        system: bool | float = True,
+        code: bool = True,
+        label: str | None = None,
+        folder: Path | None = None,
+        adopt: Draft | None = None,
+        inputs=(),
+        _repo=None,
+    ):
         self.run_name = _slug(name or default_name())
         meta = {"kind": "run", **(metadata or {})}
         if config is not None:
             meta["config"] = config
         if adopt is not None:  # a folder reserved earlier (Hydra's ${cairn.run:}): its uid and label stay
             record = adopt.record
-            record.update(metadata={**(record.get("metadata") or {}), **meta}, name=f"{RUNS}/{self.run_name}",
-                          label=label or record.get("label"))
+            record.update(
+                metadata={**(record.get("metadata") or {}), **meta},
+                name=f"{RUNS}/{self.run_name}",
+                label=label or record.get("label"),
+            )
             folder = adopt.folder
             self._setup(folder, folder, record, _repo, None)
             self._save()
@@ -177,7 +193,9 @@ class Run(Draft):
 
             (self.folder / "system").mkdir(parents=True, exist_ok=True)
             facts = {**info(), "run": self.ref}
-            (self.folder / "system" / "info.json").write_text(json.dumps(facts, indent=2, default=str) + "\n", encoding="utf-8")
+            (self.folder / "system" / "info.json").write_text(
+                json.dumps(facts, indent=2, default=str) + "\n", encoding="utf-8"
+            )
             interval = SYSTEM_INTERVAL if system is True else float(system)
             self._sampler = Sampler(self.folder, interval).start()
         if self.options["code"]:
@@ -198,8 +216,9 @@ class Run(Draft):
         code = self.folder / "code"
         if root is None:
             code.mkdir(parents=True, exist_ok=True)
-            (code / "manifest.json").write_text(json.dumps({"skipped": "no project root (.cairn/repo.json)"},
-                                                           indent=2) + "\n")
+            (code / "manifest.json").write_text(
+                json.dumps({"skipped": "no project root (.cairn/repo.json)"}, indent=2) + "\n"
+            )
             return
         try:
             create_snapshot(root, code, snapshot_mode(root), 2_000_000, 50_000_000)
@@ -208,7 +227,9 @@ class Run(Draft):
 
             shutil.rmtree(code, ignore_errors=True)
             code.mkdir(parents=True, exist_ok=True)
-            (code / "manifest.json").write_text(json.dumps({"source_root": str(root), "error": str(error)}, indent=2) + "\n")
+            (code / "manifest.json").write_text(
+                json.dumps({"source_root": str(root), "error": str(error)}, indent=2) + "\n"
+            )
 
     # ------------------------------------------------------------ ending
 
@@ -306,9 +327,20 @@ def current() -> Run | None:
 
 
 @public("cairn.init")
-def init(name: str | None = None, *, config=None, metadata: dict | None = None, watch: bool | None = None, capture: bool | None = None,
-         system: bool | float = True, code: bool = True, label: str | None = None, _adopt: Draft | None = None,
-         _folder: Path | None = None, _inputs=()) -> Run:
+def init(
+    name: str | None = None,
+    *,
+    config=None,
+    metadata: dict | None = None,
+    watch: bool | None = None,
+    capture: bool | None = None,
+    system: bool | float = True,
+    code: bool = True,
+    label: str | None = None,
+    _adopt: Draft | None = None,
+    _folder: Path | None = None,
+    _inputs=(),
+) -> Run:
     """Start this process's run (see the module doc), or return it when it already runs.
 
     `name` (default: the script's stem) makes it a version of `runs/<name>`; `config` (plain values) becomes
@@ -326,9 +358,19 @@ def init(name: str | None = None, *, config=None, metadata: dict | None = None, 
             if config is not None or metadata:  # e.g. the run was started by the first cairn.use(): complete it now
                 run.set_metadata(**({"config": config} if config is not None else {}), **(metadata or {}))
             return run
-        run = Run(name, config=config, metadata=metadata, watch=watch,
-                  capture=CAPTURE_DEFAULT if capture is None else capture, system=system, code=code,
-                  label=label, folder=_folder, adopt=_adopt, inputs=_inputs)
+        run = Run(
+            name,
+            config=config,
+            metadata=metadata,
+            watch=watch,
+            capture=CAPTURE_DEFAULT if capture is None else capture,
+            system=system,
+            code=code,
+            label=label,
+            folder=_folder,
+            adopt=_adopt,
+            inputs=_inputs,
+        )
         try:
             with budget(START_BUDGET):  # its start waits for the remote this long in all; then it is pending
                 run.start()
@@ -425,8 +467,11 @@ def _watch_exit() -> None:
                 continue
 
             def unwind(code, offset, exception):
-                if isinstance(exception, SystemExit) and code.co_name == "<module>" and \
-                        sys._getframe(1).f_globals.get("__name__") == "__main__":
+                if (
+                    isinstance(exception, SystemExit)
+                    and code.co_name == "<module>"
+                    and sys._getframe(1).f_globals.get("__name__") == "__main__"
+                ):
                     _EXIT["code"] = _exit_code(exception)
 
             monitoring.register_callback(tool, monitoring.events.PY_UNWIND, unwind)
@@ -451,7 +496,11 @@ def _exit_status() -> int:
     error = _EXIT["error"]
     if error is not None and _EXIT["code"] is None:  # Python before 3.12: did the exception reach the main module?
         trace = error.__traceback__
-        if trace is not None and trace.tb_frame.f_code.co_name == "<module>" and trace.tb_frame.f_globals.get("__name__") == "__main__":
+        if (
+            trace is not None
+            and trace.tb_frame.f_code.co_name == "<module>"
+            and trace.tb_frame.f_globals.get("__name__") == "__main__"
+        ):
             return _exit_code(error)
     return _EXIT["code"] or 0
 
@@ -484,5 +533,8 @@ def _at_exit() -> None:
                 pass
         run.finish()
     except BaseException as error:  # noqa: BLE001  (never a traceback at interpreter exit)
-        print(f"cairn: could not finish the run {run.name} ({run.short_id}): {error}; folder {short_path(run.folder)}",
-              file=sys.__stderr__, flush=True)
+        print(
+            f"cairn: could not finish the run {run.name} ({run.short_id}): {error}; folder {short_path(run.folder)}",
+            file=sys.__stderr__,
+            flush=True,
+        )

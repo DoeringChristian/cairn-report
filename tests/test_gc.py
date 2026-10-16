@@ -60,7 +60,13 @@ def test_a_deleted_version_is_a_tombstone(local):
     assert result == {"deleted": ["run@v3"], "skipped": []}
     tomb = local.get_version("p", "run", 3)
     assert tomb["status"] == "deleted" and tomb["files"] == [] and tomb["was"] == "completed"
-    assert (tomb["reason"], tomb["deleted_by"], tomb["uid"], tomb["label"], tomb["metadata"]) == ("bad data", "tester", uid, "three", {"t": "three"})
+    assert (tomb["reason"], tomb["deleted_by"], tomb["uid"], tomb["label"], tomb["metadata"]) == (
+        "bad data",
+        "tester",
+        uid,
+        "three",
+        {"t": "three"},
+    )
     assert tomb["deleted_at"] and tomb["file_count"] == 1 and tomb["size"] == 5
     assert local.get_version("p", "run", uid)["status"] == "deleted"  # by uid too
     for ref in ("run@v3", f"run@{uid}", local.get_version("p", "run", 3)["short_id"]):  # exact references fail clearly
@@ -72,7 +78,9 @@ def test_a_deleted_version_is_a_tombstone(local):
         local.publish("p", "x", [blob(local, "x")], inputs=["run@v3"])  # not usable as an input
     with pytest.raises(NotFound):  # the label resolves to completed versions only
         local.resolve("p", "run@three")
-    assert local.aliases("p", "run") == {"latest": 2} and local.resolve("p", "run")[1]["version"] == 2  # latest moved back
+    assert (
+        local.aliases("p", "run") == {"latest": 2} and local.resolve("p", "run")[1]["version"] == 2
+    )  # latest moved back
     assert local.summary("p", "run")["versions"] == 2 and local.summary("p", "run")["metadata"] == {"t": "two"}
     # the number and the uid are never used again
     assert publish(local, "p", "run", "four") == 4
@@ -82,7 +90,11 @@ def test_a_deleted_version_is_a_tombstone(local):
         local.start_version("p", "run", uid=uid)
     with pytest.raises(Deleted):
         local.delete_version("p", "run", 3)  # already deleted
-    assert local.alias_log("p", "run")[-1] == {"alias": "latest", "version": 4, "time": local.alias_log("p", "run")[-1]["time"]}
+    assert local.alias_log("p", "run")[-1] == {
+        "alias": "latest",
+        "version": 4,
+        "time": local.alias_log("p", "run")[-1]["time"],
+    }
 
 
 def test_deleting_every_version_hides_the_artifact_and_keeps_the_tombstones(local):
@@ -141,12 +153,21 @@ def test_protected_versions_are_refused_without_force(local):
     assert local.get_version("p", "reports/summary", 1)["inputs"] == ["data@v3"]
     marked = local.lineage("p", "reports/summary@v1", marks=True)
     summary, data = local.get_version("p", "reports/summary", 1), local.get_version("p", "data", 3)
-    assert marked == {"inputs": ["data@v3"], "consumers": [], "deleted": ["data@v3"],
-                      "nodes": {"reports/summary@v1": {"status": "completed", "short_id": summary["short_id"]},
-                                "data@v3": {"status": "deleted", "short_id": data["short_id"]}}}
+    assert marked == {
+        "inputs": ["data@v3"],
+        "consumers": [],
+        "deleted": ["data@v3"],
+        "nodes": {
+            "reports/summary@v1": {"status": "completed", "short_id": summary["short_id"]},
+            "data@v3": {"status": "deleted", "short_id": data["short_id"]},
+        },
+    }
     marked = local.lineage("p", "data@v3", marks=True)
-    assert {key: marked[key] for key in ("inputs", "consumers", "deleted")} == {"inputs": [], "consumers": ["reports/summary@v1"],
-                                                                               "deleted": ["data@v3"]}
+    assert {key: marked[key] for key in ("inputs", "consumers", "deleted")} == {
+        "inputs": [],
+        "consumers": ["reports/summary@v1"],
+        "deleted": ["data@v3"],
+    }
     assert local.lineage("p", "data@v2", marks=True)["deleted"] == ["data@v2", "fit@v1"]
     assert local.lineage("q", "data@v1", marks=True)["consumers"] == []  # p's consumers are not q's
 
@@ -166,7 +187,10 @@ def test_an_artifact_deletes_its_own_chain_and_a_project_only_when_empty(local):
     publish(local, "p", "uses", "u", inputs=["chain@v3"])
     with pytest.raises(Protected):
         local.delete_project("p")
-    assert local.delete_project("p", force=True)["deleted"] == ["chain@v3", "uses@v1"]  # force deletes protected versions too
+    assert local.delete_project("p", force=True)["deleted"] == [
+        "chain@v3",
+        "uses@v1",
+    ]  # force deletes protected versions too
 
 
 # ------------------------------------------------------------------ retention rules
@@ -182,8 +206,10 @@ def test_retention_keep_last_skips_protected_versions(local):
     publish(local, "p", "other", "o1")
     publish(local, "p", "other", "o2")
     rules = local.set_retention("p", [{"keep_last": 5}, {"prefix": "runs/", "keep_last": 2}])
-    assert rules == [{"prefix": "", "keep_last": 5, "keep_days": None, "keep_aliased": True},
-                     {"prefix": "runs/", "keep_last": 2, "keep_days": None, "keep_aliased": True}]
+    assert rules == [
+        {"prefix": "", "keep_last": 5, "keep_days": None, "keep_aliased": True},
+        {"prefix": "runs/", "keep_last": 2, "keep_days": None, "keep_aliased": True},
+    ]
     assert local.retention("p") == rules and local.retention("q") == []
     before = local.versions("p", "runs/a")
     dry = local.gc(dry_run=True)
@@ -193,16 +219,24 @@ def test_retention_keep_last_skips_protected_versions(local):
     assert local.versions("p", "runs/a") == before  # a dry run changes nothing
     done = local.gc(dry_run=False)
     assert (done["deleted"], done["skipped"]) == (dry["deleted"], dry["skipped"])
-    assert statuses(local, "p", "runs/a") == [(1, "completed"), (2, "deleted"), (3, "completed"), (4, "deleted"),
-                                              (5, "completed"), (6, "completed")]
+    assert statuses(local, "p", "runs/a") == [
+        (1, "completed"),
+        (2, "deleted"),
+        (3, "completed"),
+        (4, "deleted"),
+        (5, "completed"),
+        (6, "completed"),
+    ]
     assert local.get_version("p", "runs/a", 2)["reason"] == "retention rule"
     assert statuses(local, "p", "other") == [(1, "completed"), (2, "completed")]  # the longest prefix wins
     assert statuses(local, "q", "runs/a") == [(1, "completed"), (2, "completed"), (3, "completed")]
     local.set_retention("p", [{"prefix": "runs/", "keep_last": 1, "keep_aliased": False}])
     result = local.gc(dry_run=False)
     assert result["deleted"] == ["runs/a@v5 (project p)"]  # v1 took a place, and is still never deleted
-    assert {item["ref"]: item["reasons"] for item in result["skipped"]} == {"runs/a@v3 (project p)": ["input of fit@v1"],
-                                                                           "runs/a@v1 (project p)": ["alias best"]}
+    assert {item["ref"]: item["reasons"] for item in result["skipped"]} == {
+        "runs/a@v3 (project p)": ["input of fit@v1"],
+        "runs/a@v1 (project p)": ["alias best"],
+    }
     with pytest.raises(ValueError):
         local.set_retention("p", [{"keep_last": 0}])
     with pytest.raises(ValueError):
@@ -225,7 +259,15 @@ def test_retention_keep_days_and_running_versions(local):
 
 
 def test_durations():
-    assert [parse_duration(text) for text in ("24h", "30m", "90s", "7d", "1w", 15, "0")] == [86400, 1800, 90, 7 * DAY, 7 * DAY, 15, 0]
+    assert [parse_duration(text) for text in ("24h", "30m", "90s", "7d", "1w", 15, "0")] == [
+        86400,
+        1800,
+        90,
+        7 * DAY,
+        7 * DAY,
+        15,
+        0,
+    ]
     for bad in ("soon", "-1h", True, "1y"):
         with pytest.raises(ValueError):
             parse_duration(bad)
@@ -359,7 +401,9 @@ def test_deleting_through_the_server_needs_the_token(server):
     status, _, body = call(server, "GET", "/api/v2/projects/alpha/resolve?ref=data@v3")
     assert status == 410 and b"was deleted" in body
     assert api(server, "GET", "/api/v2/projects/alpha/lineage?ref=data@v3")["deleted"] == ["data@v3"]
-    assert api(server, "GET", "/api/v2/projects/beta/artifacts/data/versions/3")["status"] == "completed"  # beta's own v3
+    assert (
+        api(server, "GET", "/api/v2/projects/beta/artifacts/data/versions/3")["status"] == "completed"
+    )  # beta's own v3
     assert api(server, "GET", "/api/v2/projects/alpha/artifacts/data/aliases") == {"latest": 2}
     # protected: 409 with the reasons; the owner may force
     api(server, "POST", "/api/v2/projects/alpha/artifacts/data/aliases", {"alias": "best", "version": 1}, token=writer)
@@ -382,11 +426,21 @@ def test_retention_and_gc_routes(server):
     assert api(server, "GET", "/api/v2/projects/alpha/retention")["rules"][0]["keep_last"] == 1
     assert call(server, "POST", "/api/v2/gc", {"dry_run": True}, token="x" * 43)[0] == 401
     dry = api(server, "POST", "/api/v2/gc", {})  # a dry run by default
-    assert dry["dry_run"] and dry["deleted"] == ["data@v2 (project alpha)", "data@v1 (project alpha)"] and dry["blobs"] == 0
-    assert [v["status"] for v in api(server, "GET", "/api/v2/projects/alpha/artifacts/data/versions")] == ["completed"] * 3
+    assert (
+        dry["dry_run"]
+        and dry["deleted"] == ["data@v2 (project alpha)", "data@v1 (project alpha)"]
+        and dry["blobs"] == 0
+    )
+    assert [v["status"] for v in api(server, "GET", "/api/v2/projects/alpha/artifacts/data/versions")] == [
+        "completed"
+    ] * 3
     done = api(server, "POST", "/api/v2/gc", {"dry_run": False, "grace": 0})
     assert done["deleted"] == dry["deleted"] and done["blobs"] == 0  # beta still names the same three blobs
-    assert [v["status"] for v in api(server, "GET", "/api/v2/projects/alpha/artifacts/data/versions")] == ["deleted", "deleted", "completed"]
+    assert [v["status"] for v in api(server, "GET", "/api/v2/projects/alpha/artifacts/data/versions")] == [
+        "deleted",
+        "deleted",
+        "completed",
+    ]
     api(server, "DELETE", "/api/v2/projects/beta/artifacts/data/versions/1")
     assert api(server, "POST", "/api/v2/gc", {"dry_run": False, "grace": "0s"})["blobs"] == 1  # "one" is garbage now
     assert call(server, "POST", "/api/v2/gc", {"grace": "soon"})[0] == 400
@@ -480,7 +534,12 @@ def test_object_api(configured, env):
         store.version("crops@v2")
     project.retention = [{"keep_last": 3}]
     assert project.retention == [{"prefix": "", "keep_last": 3, "keep_days": None, "keep_aliased": True}]
-    assert project.set_retention("runs/", keep_days=7)[1] == {"prefix": "runs/", "keep_last": None, "keep_days": 7, "keep_aliased": True}
+    assert project.set_retention("runs/", keep_days=7)[1] == {
+        "prefix": "runs/",
+        "keep_last": None,
+        "keep_days": 7,
+        "keep_aliased": True,
+    }
     report = store.gc(dry_run=True, grace=0)
     assert report["dry_run"] and report["blobs"] == 1  # v2's blob
     assert store.gc(dry_run=False, grace=0)["blobs"] == 1
@@ -503,7 +562,10 @@ def test_cli_delete_retention_gc(configured, env, capsys):
     assert capsys.readouterr().out == "(every artifact)  keep_last=1\n"
     main(["retention", "set", "--prefix", "runs/", "--keep-days", "7"])
     main(["retention", "show"])
-    assert capsys.readouterr().out.splitlines()[-2:] == ["(every artifact)  keep_last=1", "runs/             keep_days=7"]
+    assert capsys.readouterr().out.splitlines()[-2:] == [
+        "(every artifact)  keep_last=1",
+        "runs/             keep_days=7",
+    ]
     main(["gc", "--dry-run", "--grace", "0"])
     out = capsys.readouterr().out
     gone = "data@v2" if not configured.remote else "data@v2 (project study)"  # the server's report names the project
@@ -559,13 +621,24 @@ def test_the_ui_shows_tombstones(ui, env):
     r.delete_version("a", 1, reason="leaked labels", force=True)
     cookie = login(ui)
     rows = data(ui, "projects/study/artifacts/a", cookie)["versions"]
-    assert [(row["version"], row["status"], row.get("reason")) for row in rows] == [(1, "deleted", "leaked labels"), (2, "completed", None)]
+    assert [(row["version"], row["status"], row.get("reason")) for row in rows] == [
+        (1, "deleted", "leaked labels"),
+        (2, "completed", None),
+    ]
     assert rows[0]["file_count"] == 1 and rows[0]["size"] == 1 and rows[0]["deleted_by"] == "owner"
     gone = data(ui, "projects/study/artifacts/a/versions/1", cookie)
-    assert gone["version"]["status"] == "deleted" and gone["consumers"] == ["study:b@v1"] and gone["deleted"] == ["study:a@v1"]
+    assert (
+        gone["version"]["status"] == "deleted"
+        and gone["consumers"] == ["study:b@v1"]
+        and gone["deleted"] == ["study:a@v1"]
+    )
     assert data(ui, "projects/study/artifacts/b/versions/1", cookie)["deleted"] == ["study:a@v1"]
     nodes = data(ui, "lineage?ref=study:b@v1", cookie)["nodes"]
-    assert {key: value for key, value in nodes["study:a@v1"].items() if key != "short_id"} == {"inputs": None, "consumers": None, "deleted": True}
+    assert {key: value for key, value in nodes["study:a@v1"].items() if key != "short_id"} == {
+        "inputs": None,
+        "consumers": None,
+        "deleted": True,
+    }
     assert "deleted" not in nodes["study:b@v1"]
     assert data(ui, "lineage?ref=study:a@v1", cookie)["nodes"]["study:a@v1"]["deleted"] is True
     status = call(ui, "GET", "/files/study/a@v1//f", token=None, headers=cookie)[0]

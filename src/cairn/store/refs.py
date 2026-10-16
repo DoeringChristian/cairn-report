@@ -24,7 +24,9 @@ from .uids import UID
 PROJECT = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 SEGMENT = re.compile(r"[a-z0-9][a-z0-9_.-]*")
 WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")  # aliases and labels
-LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*")  # labels may also be words joined by `/`
+LABEL = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*"
+)  # labels may also be words joined by `/`
 VERSION = re.compile(r"v(0|[1-9][0-9]*)")
 HEX = re.compile(r"[0-9a-f]{4,64}")  # what may be a short id
 MAX_NAME = 200
@@ -43,7 +45,9 @@ def valid_name(name: str) -> str:
         raise InvalidRef(f"invalid artifact name {name!r}")
     for segment in name.split("/"):
         if not SEGMENT.fullmatch(segment) or ".." in segment:
-            raise InvalidRef(f"invalid artifact name {name!r}: segment {segment!r} must match [a-z0-9][a-z0-9_.-]* without '..'")
+            raise InvalidRef(
+                f"invalid artifact name {name!r}: segment {segment!r} must match [a-z0-9][a-z0-9_.-]* without '..'"
+            )
     return name
 
 
@@ -111,11 +115,17 @@ def parse(text: str) -> Ref:
     head, separator, path = text.partition("//")
     if separator:
         parts = path.split("/")
-        if not path or any(part in ("", ".", "..") or any(ord(char) < 32 for char in part) for part in parts) or "\\" in path:
+        if (
+            not path
+            or any(part in ("", ".", "..") or any(ord(char) < 32 for char in part) for part in parts)
+            or "\\" in path
+        ):
             raise InvalidRef(f"invalid reference {text!r}: bad path after '//'")
     if ":" in head:
-        raise InvalidRef(f"invalid reference {text!r}: a reference names an artifact of this project (name@version), "
-                         "without a project")
+        raise InvalidRef(
+            f"invalid reference {text!r}: a reference names an artifact of this project (name@version), "
+            "without a project"
+        )
     name, at, selector = head.partition("@")
     valid_name(name)
     if at:
@@ -161,8 +171,13 @@ def short_of(manifest: dict) -> str:
 
 def candidate(name: str, manifest: dict) -> dict:
     """A version as an id lookup lists it: {name, version, uid, short_id, status}."""
-    return {"name": name, "version": manifest.get("version"), "uid": manifest["uid"], "short_id": short_of(manifest),
-            "status": manifest.get("status")}
+    return {
+        "name": name,
+        "version": manifest.get("version"),
+        "uid": manifest["uid"],
+        "short_id": short_of(manifest),
+        "status": manifest.get("status"),
+    }
 
 
 def describe(item: dict) -> str:
@@ -186,6 +201,8 @@ def pick(text: str, candidates: list[dict], where: str = "") -> dict:
     if not unique:
         raise NotFound(f"no version with the id {text}{where}")
     if len(unique) > 1:
-        listed = ", ".join(describe(item) for item in sorted(unique, key=lambda item: (item["name"], item["version"] or 0)))
+        listed = ", ".join(
+            describe(item) for item in sorted(unique, key=lambda item: (item["name"], item["version"] or 0))
+        )
         raise Ambiguous(f"the id {text} names {len(unique)} versions{where}: {listed}; give more digits", unique)
     return unique[0]

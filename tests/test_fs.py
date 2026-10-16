@@ -27,31 +27,55 @@ fileserver:/export/old /data nfs rw 0 0
 """
 
 
-@pytest.mark.parametrize("path,expected", [
-    ("/home/bob/store", "nfs4"),
-    ("/home", "nfs4"),
-    ("/home/alice/local/store", "xfs"),  # a local disk mounted inside the NFS home
-    ("/homework/store", "ext4"),  # a prefix of the name is not a parent folder
-    ("/ceph/projects/store", "fuse.ceph-fuse"),
-    ("/scratch/u/store", "lustre"),
-    ("/gpfs/x", "gpfs"),
-    ("/mnt/nas/x", "cifs"),
-    ("/beegfs/x", "beegfs"),
-    ("/mnt/with space/store", "ext4"),  # /proc/mounts escapes spaces as \040
-    ("/tmp/store", "tmpfs"),
-    ("/data/store", "btrfs"),  # mounted over the NFS mount: the later line wins
-    ("/var/lib/store", "ext4"),
-])
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("/home/bob/store", "nfs4"),
+        ("/home", "nfs4"),
+        ("/home/alice/local/store", "xfs"),  # a local disk mounted inside the NFS home
+        ("/homework/store", "ext4"),  # a prefix of the name is not a parent folder
+        ("/ceph/projects/store", "fuse.ceph-fuse"),
+        ("/scratch/u/store", "lustre"),
+        ("/gpfs/x", "gpfs"),
+        ("/mnt/nas/x", "cifs"),
+        ("/beegfs/x", "beegfs"),
+        ("/mnt/with space/store", "ext4"),  # /proc/mounts escapes spaces as \040
+        ("/tmp/store", "tmpfs"),
+        ("/data/store", "btrfs"),  # mounted over the NFS mount: the later line wins
+        ("/var/lib/store", "ext4"),
+    ],
+)
 def test_the_mount_holding_a_path(path, expected):
     assert type_from_mounts(path, MOUNTS) == expected
 
 
-@pytest.mark.parametrize("fstype,network", [
-    ("nfs", True), ("nfs4", True), ("lustre", True), ("gpfs", True), ("smbfs", True), ("cifs", True), ("smb3", True),
-    ("beegfs", True), ("ceph", True), ("fuse.ceph-fuse", True), ("fuse.sshfs", True), ("afpfs", True), ("webdav", True),
-    ("ext4", False), ("xfs", False), ("btrfs", False), ("apfs", False), ("zfs", False), ("tmpfs", False),
-    ("fuse.portal", False), ("hfs", False), ("NFS", True),
-])
+@pytest.mark.parametrize(
+    "fstype,network",
+    [
+        ("nfs", True),
+        ("nfs4", True),
+        ("lustre", True),
+        ("gpfs", True),
+        ("smbfs", True),
+        ("cifs", True),
+        ("smb3", True),
+        ("beegfs", True),
+        ("ceph", True),
+        ("fuse.ceph-fuse", True),
+        ("fuse.sshfs", True),
+        ("afpfs", True),
+        ("webdav", True),
+        ("ext4", False),
+        ("xfs", False),
+        ("btrfs", False),
+        ("apfs", False),
+        ("zfs", False),
+        ("tmpfs", False),
+        ("fuse.portal", False),
+        ("hfs", False),
+        ("NFS", True),
+    ],
+)
 def test_network_types(fstype, network):
     assert is_network_type(fstype) is network
 
@@ -101,7 +125,9 @@ def test_a_repo_database_is_never_made_on_a_network_filesystem(tmp_path, on_nfs)
     LocalRepo(tmp_path / "allowed", allow_network_fs=True).create_project("p")  # one writer, by the owner's word
 
 
-def test_without_a_remote_a_repo_on_a_network_filesystem_explains_the_cluster_setup(tmp_path, on_nfs, monkeypatch, capsys):
+def test_without_a_remote_a_repo_on_a_network_filesystem_explains_the_cluster_setup(
+    tmp_path, on_nfs, monkeypatch, capsys
+):
     from cairn.client.open import open_repo
     from cairn.config import load_config
 
@@ -118,7 +144,7 @@ def test_allow_network_fs_comes_from_cairn_toml(tmp_path, on_nfs, monkeypatch):
     from cairn.client.open import open_repo
     from cairn.config import load_config
 
-    write_config(tmp_path, '[repo]\nallow_network_fs = true\n')
+    write_config(tmp_path, "[repo]\nallow_network_fs = true\n")
     assert open_repo(load_config(tmp_path)).summaries() == []
     write_config(tmp_path, '[repo]\nallow_network_fs = "yes"\n')
     with pytest.raises(ValueError, match="allow_network_fs must be true or false"):

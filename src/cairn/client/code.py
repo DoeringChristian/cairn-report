@@ -155,16 +155,15 @@ TOP_DENIED = {"data", "datasets"}  # a project's data folders (a package's own `
 def _denied(relative: Path) -> bool:
     name = relative.name.lower()
     top = relative.parts[0] if len(relative.parts) > 1 else None
-    return top in TOP_DENIED or any(part in DENIED_PARTS for part in relative.parts) or any(
-        fnmatch.fnmatch(name, pattern) for pattern in DENIED_PATTERNS
+    return (
+        top in TOP_DENIED
+        or any(part in DENIED_PARTS for part in relative.parts)
+        or any(fnmatch.fnmatch(name, pattern) for pattern in DENIED_PATTERNS)
     )
 
 
 def _source_type(relative: Path) -> bool:
-    return (
-        relative.suffix.lower() in SOURCE_SUFFIXES
-        or relative.name.lower() in SOURCE_NAMES
-    )
+    return relative.suffix.lower() in SOURCE_SUFFIXES or relative.name.lower() in SOURCE_NAMES
 
 
 def _select(paths, root: Path, max_file_bytes: int, skipped: list[dict]) -> list[Path]:
@@ -172,12 +171,7 @@ def _select(paths, root: Path, max_file_bytes: int, skipped: list[dict]) -> list
     selected = []
     for path in paths:
         relative = path.relative_to(root)
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or _denied(relative)
-            or not _source_type(relative)
-        ):
+        if path.is_symlink() or not path.is_file() or _denied(relative) or not _source_type(relative):
             continue
         size = path.stat().st_size
         if size > max_file_bytes:
@@ -196,9 +190,7 @@ def _select(paths, root: Path, max_file_bytes: int, skipped: list[dict]) -> list
 
 def _working_files(root: Path) -> list[Path]:
     try:
-        names = _git(
-            root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"
-        ).split(b"\0")
+        names = _git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z").split(b"\0")
         return [root / os.fsdecode(name) for name in names if name]
     except (FileNotFoundError, subprocess.CalledProcessError):
         return list(root.rglob("*"))
@@ -209,9 +201,7 @@ def _check_total(total: int, max_total_bytes: int, what: str) -> None:
         raise RuntimeError(f"{what} is {total} bytes; total limit is {max_total_bytes}")
 
 
-def create_snapshot(
-    root: Path, destination: Path, mode: str, max_file_bytes: int, max_total_bytes: int
-) -> None:
+def create_snapshot(root: Path, destination: Path, mode: str, max_file_bytes: int, max_total_bytes: int) -> None:
     """Write a bounded source snapshot into `destination` (absent or empty)."""
     destination.mkdir(parents=True, exist_ok=True)
     if any(destination.iterdir()):
@@ -237,15 +227,11 @@ def create_snapshot(
             commit = _git(root, "rev-parse", "HEAD").decode().strip()
             tracked = {
                 os.fsdecode(name)
-                for name in _git(
-                    root, "ls-tree", "-r", "--name-only", "-z", commit
-                ).split(b"\0")
+                for name in _git(root, "ls-tree", "-r", "--name-only", "-z", commit).split(b"\0")
                 if name
             }
         except (FileNotFoundError, subprocess.CalledProcessError) as error:
-            raise RuntimeError(
-                "git mode requires a repository with a commit"
-            ) from error
+            raise RuntimeError("git mode requires a repository with a commit") from error
 
         committed: list[tuple[str, bytes]] = []
         for relative in sorted(tracked):
@@ -262,18 +248,9 @@ def create_snapshot(
                 skipped.append({"path": relative, "reason": "not UTF-8 text"})
                 continue
             committed.append((relative, payload))
-        untracked = [
-            path for path in files if str(path.relative_to(root)) not in tracked
-        ]
-        relevant = sorted(
-            {relative for relative, _ in committed}
-            | {str(p.relative_to(root)) for p in files}
-        )
-        patch = (
-            _git(root, "diff", "--no-ext-diff", "--no-color", "HEAD", "--", *relevant)
-            if relevant
-            else b""
-        )
+        untracked = [path for path in files if str(path.relative_to(root)) not in tracked]
+        relevant = sorted({relative for relative, _ in committed} | {str(p.relative_to(root)) for p in files})
+        patch = _git(root, "diff", "--no-ext-diff", "--no-color", "HEAD", "--", *relevant) if relevant else b""
         committed_total = sum(len(payload) for _, payload in committed)
         untracked_total = sum(path.stat().st_size for path in untracked)
         # Each byte is stored once: committed tree, untracked copies, and the patch.
@@ -303,15 +280,8 @@ def create_snapshot(
     else:
         raise ValueError("source snapshot mode must be 'git' or 'tree'")
 
-    manifest["skipped"] = [
-        dict(entry)
-        for entry in sorted({tuple(sorted(item.items())) for item in skipped})
-    ]
-    (destination / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
-
-
+    manifest["skipped"] = [dict(entry) for entry in sorted({tuple(sorted(item.items())) for item in skipped})]
+    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
 def snapshot_mode(root: Path) -> str:
@@ -325,8 +295,10 @@ def snapshot_mode(root: Path) -> str:
 
 def packages() -> list[str]:
     """The installed distributions in `pip freeze` format, read from package metadata (pip is not required)."""
-    return sorted({f"{dist.metadata['Name']}=={dist.version}" for dist in metadata.distributions() if dist.metadata["Name"]},
-                  key=str.lower)
+    return sorted(
+        {f"{dist.metadata['Name']}=={dist.version}" for dist in metadata.distributions() if dist.metadata["Name"]},
+        key=str.lower,
+    )
 
 
 def write_environment(root: Path, destination: Path) -> None:

@@ -75,12 +75,18 @@ def clean_rule(rule) -> dict:
     if unknown:
         raise ValueError(f"unknown retention settings {sorted(unknown)}")
     prefix = rule.get("prefix") or ""
-    if not isinstance(prefix, str) or len(prefix) > refs.MAX_NAME or (prefix and not re.fullmatch(r"[a-z0-9][a-z0-9_./-]*", prefix)):
+    if (
+        not isinstance(prefix, str)
+        or len(prefix) > refs.MAX_NAME
+        or (prefix and not re.fullmatch(r"[a-z0-9][a-z0-9_./-]*", prefix))
+    ):
         raise ValueError(f"invalid artifact prefix {prefix!r}")
     keep_last, keep_days = rule.get("keep_last"), rule.get("keep_days")
     if keep_last is not None and (isinstance(keep_last, bool) or not isinstance(keep_last, int) or keep_last < 1):
         raise ValueError("keep_last must be a whole number of at least 1")
-    if keep_days is not None and (isinstance(keep_days, bool) or not isinstance(keep_days, (int, float)) or keep_days < 0):
+    if keep_days is not None and (
+        isinstance(keep_days, bool) or not isinstance(keep_days, (int, float)) or keep_days < 0
+    ):
         raise ValueError("keep_days must be a number of days, at least 0")
     if keep_last is None and keep_days is None:
         raise ValueError("a retention rule needs keep_last and/or keep_days")
@@ -152,7 +158,12 @@ def blob_files(blobs_folder: str):
             with os.scandir(folder.path) as entries:
                 for entry in entries:
                     sha = entry.name
-                    if len(sha) == 64 and sha.startswith(folder.name) and HEX.fullmatch(sha) and entry.is_file(follow_symlinks=False):
+                    if (
+                        len(sha) == 64
+                        and sha.startswith(folder.name)
+                        and HEX.fullmatch(sha)
+                        and entry.is_file(follow_symlinks=False)
+                    ):
                         yield sha, entry.path
 
 

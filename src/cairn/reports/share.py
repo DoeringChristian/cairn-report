@@ -78,7 +78,7 @@ def page(title: str, notice: str, bundle: dict, start: str) -> str:
         raise SystemExit("cairn: report.js or a stylesheet contains </script or </style; it cannot be inlined")
     plotly = PLOTLY_CDN.format(version=builder.get_plotlyjs_version())
     return (
-        f"{notice}\n<meta charset=\"utf-8\">\n<title>{builder.esc(title)}</title>\n"
+        f'{notice}\n<meta charset="utf-8">\n<title>{builder.esc(title)}</title>\n'
         + "".join(f"<style>\n{sheet}\n</style>\n" for sheet in sheets)
         + body.strip()
         + f'\n<script type="application/json" id="cairn-bundle">{script_json(bundle)}</script>\n'
@@ -112,8 +112,11 @@ def share(config: Config, report: str | None = None, build: bool = True, out: Pa
     start = entries[0]["key"]
     title = bundle_reports[start]["data"]["title"] if report is not None else site["title"]
     bundle = {"start": start, "site": site | {"title": title, "reports": entries}, "reports": bundle_reports}
-    source = (builder.REPORTS_ROOT / start).relative_to(config.project).as_posix() + "/" if report is not None else \
-        builder.REPORTS_ROOT.relative_to(config.project).as_posix() + "/"
+    source = (
+        (builder.REPORTS_ROOT / start).relative_to(config.project).as_posix() + "/"
+        if report is not None
+        else builder.REPORTS_ROOT.relative_to(config.project).as_posix() + "/"
+    )
     text = page(title, NOTICE.format(source=source), bundle, start)
     size = len(text.encode())
     if size > MAX_BYTES:

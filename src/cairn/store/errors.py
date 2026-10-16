@@ -77,5 +77,8 @@ class MissingBlobs(Conflict):
 
     def __init__(self, missing=(), message: str | None = None):
         self.missing = sorted(missing)
-        super().__init__(message or f"{len(self.missing)} blobs are not in the repo (yet), e.g. "
-                         f"{self.missing[0] if self.missing else '?'}: upload them first")
+        super().__init__(
+            message
+            or f"{len(self.missing)} blobs are not in the repo (yet), e.g. "
+            f"{self.missing[0] if self.missing else '?'}: upload them first"
+        )

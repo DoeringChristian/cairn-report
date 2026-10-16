@@ -61,8 +61,10 @@ CREATE TABLE IF NOT EXISTS consumers (
     seq INTEGER PRIMARY KEY, project TEXT NOT NULL, input TEXT NOT NULL, consumer TEXT NOT NULL, time TEXT NOT NULL,
     UNIQUE (project, input, consumer));
 """
-RETENTION_TABLE = ("CREATE TABLE IF NOT EXISTS retention (project TEXT NOT NULL, prefix TEXT NOT NULL, rule TEXT NOT NULL, "
-                   "PRIMARY KEY (project, prefix)) WITHOUT ROWID")
+RETENTION_TABLE = (
+    "CREATE TABLE IF NOT EXISTS retention (project TEXT NOT NULL, prefix TEXT NOT NULL, rule TEXT NOT NULL, "
+    "PRIMARY KEY (project, prefix)) WITHOUT ROWID"
+)
 TABLES += RETENTION_TABLE + ";\n"
 
 
@@ -166,12 +168,18 @@ def export(database: Database, folder: Path) -> dict[str, int]:
     with database.read() as connection:
         queries = {
             "projects.jsonl": ("SELECT record FROM projects ORDER BY name", lambda row: json.loads(row[0])),
-            "versions.jsonl": ("SELECT project, name, manifest FROM versions ORDER BY project, name, number",
-                               lambda row: {"project": row[0], "name": row[1], **json.loads(row[2])}),
-            "aliases.jsonl": ("SELECT project, name, alias, number, time FROM alias_log ORDER BY seq",
-                              lambda row: {"project": row[0], "name": row[1], "alias": row[2], "version": row[3], "time": row[4]}),
-            "consumers.jsonl": ("SELECT project, input, consumer, time FROM consumers ORDER BY seq",
-                                lambda row: {"project": row[0], "input": row[1], "consumer": row[2], "time": row[3]}),
+            "versions.jsonl": (
+                "SELECT project, name, manifest FROM versions ORDER BY project, name, number",
+                lambda row: {"project": row[0], "name": row[1], **json.loads(row[2])},
+            ),
+            "aliases.jsonl": (
+                "SELECT project, name, alias, number, time FROM alias_log ORDER BY seq",
+                lambda row: {"project": row[0], "name": row[1], "alias": row[2], "version": row[3], "time": row[4]},
+            ),
+            "consumers.jsonl": (
+                "SELECT project, input, consumer, time FROM consumers ORDER BY seq",
+                lambda row: {"project": row[0], "input": row[1], "consumer": row[2], "time": row[3]},
+            ),
         }
         for file, (query, shape) in queries.items():
             temporary = folder / f".{file}.tmp"

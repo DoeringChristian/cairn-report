@@ -17,5 +17,23 @@ from .remote import Remote, Server
 from .repo import SyncedRepo
 from .runs import Run, init
 
-__all__ = ["Artifact", "Client", "ClientError", "Draft", "File", "current_draft", "draft", "Publication", "Remote", "Run", "Repo",
-           "Server", "SyncedRepo", "Version", "connect", "init", "open_repo", "publish"]
+__all__ = [
+    "Artifact",
+    "Client",
+    "ClientError",
+    "Draft",
+    "File",
+    "current_draft",
+    "draft",
+    "Publication",
+    "Remote",
+    "Run",
+    "Repo",
+    "Server",
+    "SyncedRepo",
+    "Version",
+    "connect",
+    "init",
+    "open_repo",
+    "publish",
+]

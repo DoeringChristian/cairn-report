@@ -17,7 +17,14 @@ from cairn.ui import server as ui_server
 from cairn.ui.server import LocalBackend, RemoteBackend, make_ui_server
 
 from conftest import make_data, write, write_config
-from test_server import api, call, remote, seed, server, use_remote  # noqa: F401  (the store server in a thread, helpers)
+from test_server import (
+    api,
+    call,
+    remote,
+    seed,
+    server,
+    use_remote,
+)  # noqa: F401  (the store server in a thread, helpers)
 from test_store import env, folder  # noqa: F401
 
 X = {"X-Cairn": "1"}
@@ -48,7 +55,9 @@ def ui(request, server):
 
 def login(ui, token=None):
     """A session cookie header for a token (the owner's by default)."""
-    status, headers, _ = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token or ui.server.token}), token=None, headers=JSON)
+    status, headers, _ = call(
+        ui, "POST", "/ui-api/login", body=json.dumps({"token": token or ui.server.token}), token=None, headers=JSON
+    )
     assert status == 200, status
     return {"Cookie": headers["Set-Cookie"].split(";")[0]}
 
@@ -95,17 +104,43 @@ def test_login_is_required_and_the_token_stays_server_side(ui):
     status, _, page = call(ui, "GET", "/login?next=/p/study/", token=None)  # the app's login route (a static page)
     assert status == 200 and b'<div id="root">' in page
     # a wrong token is rejected and sets nothing
-    status, headers, body = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": "w" * 40}), token=None, headers=JSON)
+    status, headers, body = call(
+        ui, "POST", "/ui-api/login", body=json.dumps({"token": "w" * 40}), token=None, headers=JSON
+    )
     assert status == 401 and "Set-Cookie" not in headers and b"not valid" in body
     assert call(ui, "POST", "/ui-api/login", body='{"token": ""}', token=None, headers=JSON)[0] == 401
     assert call(ui, "POST", "/ui-api/login", body="nonsense", token=None, headers=JSON)[0] == 400
-    assert call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers={"Content-Type": "application/json"})[0] == 403  # no X-Cairn
-    assert call(ui, "POST", "/login", body=f"token={token}", token=None, headers={"Content-Type": "application/x-www-form-urlencoded"})[0] == 404
+    assert (
+        call(
+            ui,
+            "POST",
+            "/ui-api/login",
+            body=json.dumps({"token": token}),
+            token=None,
+            headers={"Content-Type": "application/json"},
+        )[0]
+        == 403
+    )  # no X-Cairn
+    assert (
+        call(
+            ui,
+            "POST",
+            "/login",
+            body=f"token={token}",
+            token=None,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )[0]
+        == 404
+    )
     # the right one gives an opaque, HttpOnly, SameSite=Strict session id
-    status, headers, body = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=JSON)
+    status, headers, body = call(
+        ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=JSON
+    )
     assert status == 200
     cookie = headers["Set-Cookie"]
-    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and token not in cookie and "Secure" not in cookie  # plain HTTP
+    assert (
+        "HttpOnly" in cookie and "SameSite=Strict" in cookie and token not in cookie and "Secure" not in cookie
+    )  # plain HTTP
     assert token.encode() not in body
     session = {"Cookie": cookie.split(";")[0]}
     for path in ("/", "/p/study/", "/ui-api/me"):
@@ -117,7 +152,9 @@ def test_login_is_required_and_the_token_stays_server_side(ui):
     forged = {"Cookie": "cairn_ui=" + "a" * 43}
     assert get(ui, "/", forged)[0] == 303 and get(ui, "/ui-api/me", forged, **X)[0] == 401
     status, headers, _ = get(ui, "/logout", session)
-    assert status == 303 and headers["Location"] == "/login" and "Max-Age=0" in headers["Set-Cookie"]  # the cookie is cleared
+    assert (
+        status == 303 and headers["Location"] == "/login" and "Max-Age=0" in headers["Set-Cookie"]
+    )  # the cookie is cleared
 
 
 def test_the_api_needs_the_x_cairn_header(ui):
@@ -127,14 +164,20 @@ def test_the_api_needs_the_x_cairn_header(ui):
         assert get(ui, "/ui-api/" + path, cookie, **{"X-Cairn": "0"})[0] == 403
     assert get(ui, "/ui-api/me", {}, **X)[0] == 401  # and the header alone is not a login
     assert get(ui, "/ui-api/nope", cookie, **X)[0] == 404
-    assert data(ui, "me", cookie) == {"auth": True, "mode": "server", "home": None}  # a server's repo, or a server: many projects
+    assert data(ui, "me", cookie) == {
+        "auth": True,
+        "mode": "server",
+        "home": None,
+    }  # a server's repo, or a server: many projects
 
 
 def test_the_cookie_is_secure_behind_https_and_plain_on_this_machine(server):
     httpd, ui = start(RemoteBackend(server.url))
     try:
         body = json.dumps({"token": server.token})
-        status, headers, _ = call(ui, "POST", "/ui-api/login", body=body, token=None, headers={**JSON, "X-Forwarded-Proto": "https"})
+        status, headers, _ = call(
+            ui, "POST", "/ui-api/login", body=body, token=None, headers={**JSON, "X-Forwarded-Proto": "https"}
+        )
         assert status == 200 and "Secure" in headers["Set-Cookie"] and "HttpOnly" in headers["Set-Cookie"]
         status, headers, _ = call(ui, "POST", "/ui-api/login", body=body, token=None, headers=JSON)  # http://127.0.0.1
         assert status == 200 and "Secure" not in headers["Set-Cookie"] and "HttpOnly" in headers["Set-Cookie"]
@@ -174,7 +217,9 @@ def test_a_session_has_no_expiry_survives_a_restart_and_ends_with_the_token(serv
     httpd, ui = start(RemoteBackend(server.url))  # no token known yet: a login with the form, and the same id
     try:
         assert get(ui, "/", session)[0] == 303
-        status, headers, _ = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": server.token}), token=None, headers=JSON)
+        status, headers, _ = call(
+            ui, "POST", "/ui-api/login", body=json.dumps({"token": server.token}), token=None, headers=JSON
+        )
         assert status == 200 and headers["Set-Cookie"].split(";")[0] == session["Cookie"]
     finally:
         httpd.shutdown()
@@ -192,7 +237,10 @@ def test_no_auth_ui_is_loopback_only_and_needs_no_login(server):
             assert call(ui, "GET", "/ui-api/me", token=None)[0] == 403  # the header is needed without a login too
             assert json.loads(call(ui, "GET", "/ui-api/me", token=None, headers=X)[2])["auth"] is False
             assert call(ui, "GET", "/login", token=None)[0] == 404
-            assert call(ui, "POST", "/ui-api/login", body=json.dumps({"token": server.token}), token=None, headers=JSON)[0] == 404
+            assert (
+                call(ui, "POST", "/ui-api/login", body=json.dumps({"token": server.token}), token=None, headers=JSON)[0]
+                == 404
+            )
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -237,7 +285,15 @@ def test_plain_http_to_a_non_local_store_works_with_one_warning(capsys, monkeypa
 def test_the_app_routes_serve_the_built_index(ui):
     cookie = login(ui)
     index = (Path(ui_server.__file__).parent / "static" / "index.html").read_bytes()
-    for path in ("/", "/p/study/", "/p/study/a/data", "/p/study/a/reports/alpha@v1", "/p/anything/a/a/b/c@best", "/palette", "/login"):
+    for path in (
+        "/",
+        "/p/study/",
+        "/p/study/a/data",
+        "/p/study/a/reports/alpha@v1",
+        "/p/anything/a/a/b/c@best",
+        "/palette",
+        "/login",
+    ):
         status, headers, body = get(ui, path, cookie)
         if path == "/login":
             assert status == 303  # logged in already
@@ -260,25 +316,43 @@ def test_api_returns_what_the_pages_need(ui, project, capsys):
     capsys.readouterr()
     cookie = login(ui)
     projects = data(ui, "projects", cookie)
-    assert [p["name"] for p in projects] == ["study"] and projects[0]["artifacts"] == 4  # descent, two reports, datasets/other
+    assert [p["name"] for p in projects] == ["study"] and projects[0][
+        "artifacts"
+    ] == 4  # descent, two reports, datasets/other
     assert {"title", "description", "updated"} <= set(projects[0])
     page = data(ui, "projects/study", cookie)
     assert page["project"]["name"] == "study"
     by_name = {a["name"]: a for a in page["artifacts"]}
     assert set(by_name) == {"descent", "reports/alpha", "reports/beta", "datasets/other"}
     alpha = by_name["reports/alpha"]
-    assert alpha["latest"] == 1 and alpha["metadata"]["title"] == "Alpha" and alpha["metadata"]["status"] == "active" and alpha["metadata"]["summary"].startswith("The first report")
+    assert (
+        alpha["latest"] == 1
+        and alpha["metadata"]["title"] == "Alpha"
+        and alpha["metadata"]["status"] == "active"
+        and alpha["metadata"]["summary"].startswith("The first report")
+    )
     assert by_name["datasets/other"]["aliases"]["best"] == 1 and alpha["updated"]
     # an artifact: summary, versions (without file lists), aliases; the name may be one encoded segment or several
     art = data(ui, "projects/study/artifacts/datasets%2Fother", cookie)
     assert art == data(ui, "projects/study/artifacts/datasets/other", cookie)
     assert art["summary"]["latest"] == 1 and art["aliases"] == {"latest": 1, "best": 1}
     row = art["versions"][0]
-    assert row["version"] == 1 and row["status"] == "completed" and row["file_count"] == 1 and row["size"] == 1 and "files" not in row and "created" in row
+    assert (
+        row["version"] == 1
+        and row["status"] == "completed"
+        and row["file_count"] == 1
+        and row["size"] == 1
+        and "files" not in row
+        and "created" in row
+    )
     # a version: the manifest with files, metadata, inputs and consumers; by number, v<n>, alias
     for selector in ("1", "v1", "best", "latest"):
         v = data(ui, f"projects/study/artifacts/datasets%2Fother/versions/{selector}", cookie)
-        assert v["version"]["version"] == 1 and [f["path"] for f in v["version"]["files"]] == ["a.txt"] and v["consumers"] == []
+        assert (
+            v["version"]["version"] == 1
+            and [f["path"] for f in v["version"]["files"]] == ["a.txt"]
+            and v["consumers"] == []
+        )
     descent = data(ui, "projects/study/artifacts/descent/versions/1", cookie)
     paths = {f["path"] for f in descent["version"]["files"]}
     assert "metrics.jsonl" in paths and descent["consumers"] == ["study:reports/alpha@v1"]
@@ -290,7 +364,12 @@ def test_api_returns_what_the_pages_need(ui, project, capsys):
     assert by_id["version"]["uid"] == descent_v1["uid"]
     assert any(f["path"].startswith("site/") for f in report["version"]["files"])
     # errors are JSON
-    for path in ("projects/study/artifacts/descent/versions/9", "projects/study/artifacts/nope", "projects/nope", "projects/study/artifacts/descent/versions/zzz"):
+    for path in (
+        "projects/study/artifacts/descent/versions/9",
+        "projects/study/artifacts/nope",
+        "projects/nope",
+        "projects/study/artifacts/descent/versions/zzz",
+    ):
         assert "error" in data(ui, path, cookie, expect=404), path
     assert data(ui, "lineage?ref=nope", cookie, expect=400)["error"]
     assert data(ui, "lineage?ref=study:descent@v1&depth=9", cookie, expect=400)["error"]
@@ -306,14 +385,22 @@ def test_lineage_levels(ui, tmp_path, env):
     one = data(ui, "lineage?ref=study:b@latest", cookie)  # depth 1, an alias resolves to the exact version
     assert one["ref"] == "study:b@v1" and one["depth"] == 1 and not one["truncated"]
     assert all(node["short_id"] for node in one["nodes"].values())
-    assert plain(one["nodes"]) == {"study:b@v1": {"inputs": ["study:a@v1"], "consumers": ["study:c@v1"]},
-                            "study:a@v1": {"inputs": None, "consumers": None}, "study:c@v1": {"inputs": None, "consumers": None}}
+    assert plain(one["nodes"]) == {
+        "study:b@v1": {"inputs": ["study:a@v1"], "consumers": ["study:c@v1"]},
+        "study:a@v1": {"inputs": None, "consumers": None},
+        "study:c@v1": {"inputs": None, "consumers": None},
+    }
     two = plain(data(ui, "lineage?ref=study:b@v1&depth=2", cookie)["nodes"])
-    assert two["study:a@v1"] == {"inputs": [], "consumers": None}  # ancestors expand through inputs, descendants through consumers
+    assert two["study:a@v1"] == {
+        "inputs": [],
+        "consumers": None,
+    }  # ancestors expand through inputs, descendants through consumers
     assert two["study:c@v1"] == {"inputs": None, "consumers": ["study:d@v1"]}
     assert two["study:d@v1"] == {"inputs": None, "consumers": None}
     deep = data(ui, "lineage?ref=study:d@v1&depth=3", cookie)["nodes"]
-    assert deep["study:a@v1"]["inputs"] is None and deep["study:b@v1"]["inputs"] == ["study:a@v1"]  # three levels reach a, not beyond
+    assert deep["study:a@v1"]["inputs"] is None and deep["study:b@v1"]["inputs"] == [
+        "study:a@v1"
+    ]  # three levels reach a, not beyond
 
 
 def test_lineage_is_capped(ui, env, monkeypatch):
@@ -347,10 +434,18 @@ def test_report_is_served_with_its_static_files(ui, project, capsys):
     assert get(ui, "/p/study/r/alpha@v1/", cookie)[0] == 200 and get(ui, "/p/study/r/alpha@v2/", cookie)[0] == 404
     site = json.loads(get(ui, "/p/study/r/site.json", cookie)[2])  # the page's navigation
     assert [item["key"] for item in site["reports"]] == ["alpha", "beta"] and site["reports"][0]["href"] == "alpha/"
-    assert site["title"] == "study" and site["reports"][0]["title"] == "Alpha" and site["reports"][0]["status"] == "active"
-    groups = {group["label"]: group["items"] for group in site["groups"]}  # the sections of the app's rail, for report.js
-    assert [i["href"] for i in groups["Reports"]] == ["/p/study/r/alpha/", "/p/study/r/beta/"] and groups["Projects"][0]["current"] is True
-    assert all(item["href"].startswith("/p/study/a/") for label in ("Artifacts", "Runs") for item in groups.get(label, []))
+    assert (
+        site["title"] == "study" and site["reports"][0]["title"] == "Alpha" and site["reports"][0]["status"] == "active"
+    )
+    groups = {
+        group["label"]: group["items"] for group in site["groups"]
+    }  # the sections of the app's rail, for report.js
+    assert [i["href"] for i in groups["Reports"]] == ["/p/study/r/alpha/", "/p/study/r/beta/"] and groups["Projects"][
+        0
+    ]["current"] is True
+    assert all(
+        item["href"].startswith("/p/study/a/") for label in ("Artifacts", "Runs") for item in groups.get(label, [])
+    )
     assert site["brand"] == "Cairn" and site["mark"] == "C"
     assert get(ui, "/p/study/r/", cookie)[0] == 303
     assert get(ui, "/p/study/r/_static/nope.js", cookie)[0] == 404
@@ -360,7 +455,9 @@ def test_report_is_served_with_its_static_files(ui, project, capsys):
 
 def test_static_files_need_the_session(ui, project, capsys):
     publish_reports(project, ui.server)
-    script = re.search(r'src="\.\./(_static/report\.[0-9a-f]+\.js)"', get(ui, "/p/study/r/alpha/", login(ui))[2].decode()).group(1)
+    script = re.search(
+        r'src="\.\./(_static/report\.[0-9a-f]+\.js)"', get(ui, "/p/study/r/alpha/", login(ui))[2].decode()
+    ).group(1)
     assert get(ui, f"/p/study/r/{script}", login(ui))[0] == 200
     assert get(ui, f"/p/study/r/{script}", {})[0] == 303
 
@@ -390,8 +487,12 @@ def test_data_panel_links_point_at_the_artifact_pages(ui, project, capsys):
     project_name = "study"  # from the page's own address
     name, version = exact.split("@")
     target = f"/p/{project_name}/a/{name}@{version}"  # what the script builds from the exact reference
-    assert get(ui, target, cookie)[2] == (Path(ui_server.__file__).parent / "static" / "index.html").read_bytes()  # an app route
-    detail = data(ui, f"projects/{project_name}/artifacts/{name}/versions/{version[1:]}", cookie)  # and the app's data for it
+    assert (
+        get(ui, target, cookie)[2] == (Path(ui_server.__file__).parent / "static" / "index.html").read_bytes()
+    )  # an app route
+    detail = data(
+        ui, f"projects/{project_name}/artifacts/{name}/versions/{version[1:]}", cookie
+    )  # and the app's data for it
     assert "metrics.jsonl" in {f["path"] for f in detail["version"]["files"]}
 
 
@@ -407,7 +508,12 @@ def test_files_passthrough_answers_range_etag_and_download(ui, env):
     assert status == 200 and len(whole) == 100 and "immutable" in headers["Cache-Control"] and headers["ETag"]
     assert headers["Accept-Ranges"] == "bytes" and headers["Content-Security-Policy"] == "sandbox"
     status, headers, data = get(ui, path, cookie, Range="bytes=5-14")
-    assert status == 206 and data == whole[5:15] and headers["Content-Range"] == "bytes 5-14/100" and headers["Content-Length"] == "10"
+    assert (
+        status == 206
+        and data == whole[5:15]
+        and headers["Content-Range"] == "bytes 5-14/100"
+        and headers["Content-Length"] == "10"
+    )
     assert get(ui, path, cookie, Range="bytes=90-")[2] == whole[90:]
     assert get(ui, path, cookie, Range="bytes=-5")[2] == whole[-5:]
     assert get(ui, path, cookie, Range="bytes=100-")[0] == 416
@@ -430,7 +536,11 @@ def test_files_passthrough_serves_large_ranges_exactly(ui, env):
     store.publish("video", root)
     cookie = login(ui)
     status, headers, data = get(ui, "/files/study/video@v1//movie.mp4", cookie, Range="bytes=1048000-1049999")
-    assert status == 206 and data == big[1048000:1050000] and headers["Content-Range"] == f"bytes 1048000-1049999/{len(big)}"
+    assert (
+        status == 206
+        and data == big[1048000:1050000]
+        and headers["Content-Range"] == f"bytes 1048000-1049999/{len(big)}"
+    )
     assert get(ui, "/files/study/video@v1//movie.mp4", cookie)[2] == big
 
 
@@ -443,10 +553,16 @@ def test_the_ui_uses_only_the_store_interface_and_the_server_has_no_ui_code():
         text = file.read_text()
         for forbidden in ("blob_path", "versions.jsonl", "aliases.jsonl", "consumers.jsonl", "project.json", "_blobs"):
             assert forbidden not in text, (file.name, forbidden)
-    store_files = [*(source / "store").glob("*.py"), *(source / "client").glob("*.py"), *(source / "server").glob("*.py")]
+    store_files = [
+        *(source / "store").glob("*.py"),
+        *(source / "client").glob("*.py"),
+        *(source / "server").glob("*.py"),
+    ]
     for file in store_files:
         text = file.read_text()
-        assert "import ui" not in text and "from ..ui" not in text and "from .pages" not in text and "cairn.ui" not in text, file.name
+        assert (
+            "import ui" not in text and "from ..ui" not in text and "from .pages" not in text and "cairn.ui" not in text
+        ), file.name
     assert not (source / "server" / "pages.py").exists()
     server_text = "".join(file.read_text() for file in (source / "server").glob("*.py"))
     for gone in ("text/html", "cookie", "Cookie", "is_report", "site.json", "_static", "/login"):
@@ -468,7 +584,11 @@ def test_ui_command_wires_the_project_repo(env, server, monkeypatch, capsys):
     assert isinstance(seen["backend"], LocalBackend) and seen["port"] == 9999
     write_config(env, "")
     main(["ui", "--no-auth"])
-    assert seen["backend"].root == (env / ".cairn").resolve() and seen["no_auth"] is True and seen["backend"].store.repo.url is None
+    assert (
+        seen["backend"].root == (env / ".cairn").resolve()
+        and seen["no_auth"] is True
+        and seen["backend"].store.repo.url is None
+    )
     assert seen["backend"].store.name == "study"  # without a remote: named after the project folder
     with pytest.raises(SystemExit, match="no repo folder"):
         main(["ui", "--repo", str(env / "missing")])
@@ -478,7 +598,9 @@ def test_serve_ui_prints_where_it_runs(server, capsys, monkeypatch):
     monkeypatch.setattr(ui_server.ThreadingHTTPServer, "serve_forever", lambda self: self.server_close())
     ui_server.serve_ui(RemoteBackend(server.url), port=0)
     out = capsys.readouterr().out
-    assert re.fullmatch(rf"Cairn UI +http://127\.0\.0\.1:\d+/\n  Repo +{re.escape(server.url)}\nServing; Ctrl-C stops it.\n", out), out
+    assert re.fullmatch(
+        rf"Cairn UI +http://127\.0\.0\.1:\d+/\n  Repo +{re.escape(server.url)}\nServing; Ctrl-C stops it.\n", out
+    ), out
     assert server.token not in out
 
 
@@ -503,27 +625,46 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
     # machine A: a plain script (no Hydra) pulls datasets/toy@v1 and writes outputs; CAIRN_INPUTS points at them
     out = a / "outputs"
     out.mkdir()
-    script = ("import pathlib, sys; import cairn as store; src = store.pull('datasets/toy@v1'); "
-              "pathlib.Path(sys.argv[1], 'result.txt').write_text('fit of ' + (src / 'x.csv').read_text().strip())")
-    subprocess.run([sys.executable, "-c", script, str(out)], check=True, cwd=a,
-                   env=os.environ | {"CAIRN_INPUTS": str(out / ".cairn-inputs.jsonl")})
+    script = (
+        "import pathlib, sys; import cairn as store; src = store.pull('datasets/toy@v1'); "
+        "pathlib.Path(sys.argv[1], 'result.txt').write_text('fit of ' + (src / 'x.csv').read_text().strip())"
+    )
+    subprocess.run(
+        [sys.executable, "-c", script, str(out)],
+        check=True,
+        cwd=a,
+        env=os.environ | {"CAIRN_INPUTS": str(out / ".cairn-inputs.jsonl")},
+    )
     main(["publish", str(out), "toy-fit"])
     # machine B: a report with `inputs: fit: toy-fit@latest`
     b = machine("machine-b")
-    write(b / "reports" / "summary" / "report.md", (
-        "---\ntitle: Summary\nstatus: active\nsummary: Fit of the toy data.\ninputs:\n  fit: toy-fit@latest\n---\n\n"
-        "```python exec hide\nresult = (inputs.fit / 'result.txt').read_text()\n```\n\n## Result\n\nThe result is {{ result }}.\n"))
+    write(
+        b / "reports" / "summary" / "report.md",
+        (
+            "---\ntitle: Summary\nstatus: active\nsummary: Fit of the toy data.\ninputs:\n  fit: toy-fit@latest\n---\n\n"
+            "```python exec hide\nresult = (inputs.fit / 'result.txt').read_text()\n```\n\n## Result\n\nThe result is {{ result }}.\n"
+        ),
+    )
     main(["publish", "reports/summary"])
 
     inside = "datasets/toy@v1", "toy-fit@v1", "reports/summary@v1"  # the server's refs: inside the project
     lineage = api(server, "GET", "/api/v2/projects/study/lineage?ref=reports%2Fsummary@latest")
     assert plain(lineage["nodes"]) == {inside[2]: {"status": "completed"}, inside[1]: {"status": "completed"}}
-    assert {key: value for key, value in lineage.items() if key != "nodes"} == {"ref": inside[2], "inputs": [inside[1]],
-                                                                               "consumers": [], "deleted": []}
+    assert {key: value for key, value in lineage.items() if key != "nodes"} == {
+        "ref": inside[2],
+        "inputs": [inside[1]],
+        "consumers": [],
+        "deleted": [],
+    }
     middle = api(server, "GET", "/api/v2/projects/study/lineage?ref=toy-fit@v1")
-    assert middle["inputs"] == [inside[0]] and middle["consumers"] == [inside[2]]  # the script's parent heard of its pull
+    assert middle["inputs"] == [inside[0]] and middle["consumers"] == [
+        inside[2]
+    ]  # the script's parent heard of its pull
     script_run = "runs/interactive@v1"  # the script was a run too (python -c: "interactive"), completed at exit
-    assert api(server, "GET", "/api/v2/projects/study/lineage?ref=datasets%2Ftoy@v1")["consumers"] == [script_run, inside[1]]
+    assert api(server, "GET", "/api/v2/projects/study/lineage?ref=datasets%2Ftoy@v1")["consumers"] == [
+        script_run,
+        inside[1],
+    ]
     node = api(server, "GET", f"/api/v2/projects/study/lineage?ref={script_run}")["nodes"][script_run]
     assert plain({script_run: node})[script_run] == {"status": "completed", "kind": "run"}
     chain = tuple(f"study:{ref}" for ref in inside)  # the UI's: project:name@sel, as the app reads them
@@ -540,7 +681,9 @@ def test_end_to_end_two_machines_lineage_through_the_ui(ui, tmp_path, monkeypatc
     assert set(graph) == set(chain) and graph[chain[1]]["inputs"] == [chain[0]]
     assert b"fit of 1,2,3" in get(ui, "/p/study/r/summary/narrative.html", cookie)[2]
     # the report data records its exact input for the Data panel
-    assert json.loads(get(ui, "/p/study/r/summary/report-data.json", cookie)[2])["inputs"]["fit"]["resolved"] == inside[1]
+    assert (
+        json.loads(get(ui, "/p/study/r/summary/report-data.json", cookie)[2])["inputs"]["fit"]["resolved"] == inside[1]
+    )
     assert b"1,2,3" in get(ui, "/files/study/datasets/toy@v1//x.csv", cookie)[2]
 
 
@@ -584,7 +727,11 @@ def test_the_run_panel_data_of_a_running_and_a_completed_run(ui, env):
     assert [(row["step"], row["loss"]) for row in panel["metrics"]["rows"]] == [(0, 1.0), (1, 0.5)]
     assert panel["metrics"]["rows"][1]["acc"] == 0.9 and "note" not in panel["metrics"]["rows"][1]
     assert panel["system"]["rows"] and "disk_percent" in panel["system"]["rows"][0]
-    assert panel["stdout"]["truncated"] and panel["stdout"]["text"].endswith("line 19999\n") and len(panel["stdout"]["text"]) <= 64 * 1024
+    assert (
+        panel["stdout"]["truncated"]
+        and panel["stdout"]["text"].endswith("line 19999\n")
+        and len(panel["stdout"]["text"]) <= 64 * 1024
+    )
     assert panel["stderr"] == {"text": "a warning\n", "truncated": False, "size": 10} and panel["error"] is None
     assert panel["info"]["host"] and panel["info"]["run"] == run.ref
     running = data(ui, "projects/study/artifacts/runs%2Ftrain/versions/1", cookie)
@@ -594,9 +741,16 @@ def test_the_run_panel_data_of_a_running_and_a_completed_run(ui, env):
     run.finish()
     store.connect().sync()
     graph = data(ui, "lineage?ref=study:models/toy@v1", cookie)["nodes"]  # depth 1, but a run counts no level
-    assert graph["study:runs/train@v1"]["inputs"] == ["study:datasets/toy@v1"] and "status" not in graph["study:runs/train@v1"]
+    assert (
+        graph["study:runs/train@v1"]["inputs"] == ["study:datasets/toy@v1"]
+        and "status" not in graph["study:runs/train@v1"]
+    )
     assert data(ui, "projects/study/artifacts/runs%2Ftrain/versions/1/run", cookie)["status"] == "completed"
-    assert data(ui, "projects/study/artifacts/datasets%2Ftoy/versions/1/run", cookie)["metrics"] == {"rows": [], "total": 0, "truncated": False}
+    assert data(ui, "projects/study/artifacts/datasets%2Ftoy/versions/1/run", cookie)["metrics"] == {
+        "rows": [],
+        "total": 0,
+        "truncated": False,
+    }
 
 
 def test_a_version_downloads_as_a_zip(ui, env):
@@ -619,7 +773,9 @@ def test_a_version_downloads_as_a_zip(ui, env):
     assert names == sorted(f"datasets-zip-me-v1/{path}" for path in [*files, "big.bin", "link.txt"])
     for path, text in files.items():
         assert archive.read(f"datasets-zip-me-v1/{path}") == text.encode()
-    assert archive.read("datasets-zip-me-v1/big.bin") == big and archive.read("datasets-zip-me-v1/link.txt") == b"alpha\n"
+    assert (
+        archive.read("datasets-zip-me-v1/big.bin") == big and archive.read("datasets-zip-me-v1/link.txt") == b"alpha\n"
+    )
     assert archive.getinfo("datasets-zip-me-v1/img.png").compress_type == zipfile.ZIP_STORED
     assert archive.getinfo("datasets-zip-me-v1/a.txt").compress_type == zipfile.ZIP_DEFLATED
     assert get(ui, "/files/study/datasets/zip-me@latest.zip", cookie)[0] == 200

@@ -43,7 +43,7 @@ def publish_video(project):
 def test_video_becomes_a_figure_card(project):
     publish_video(project)
     alpha = project / "reports" / "alpha" / "report.md"
-    alpha.write_text(alpha.read_text() + "\n![Rollout](input:descent/videos/rollout.mp4 \"Twelve frames.\")\n")
+    alpha.write_text(alpha.read_text() + '\n![Rollout](input:descent/videos/rollout.mp4 "Twelve frames.")\n')
     build_all(load_config(project))
     narrative = (project / ".cairn" / "build" / "alpha" / "narrative.html").read_text()
     assert 'data-figure-type="video"' in narrative and "<video data-src=" in narrative
@@ -51,9 +51,18 @@ def test_video_becomes_a_figure_card(project):
     assert 'width="64" height="48"' in narrative  # the card's shape is known before the video loads
 
 
-@pytest.mark.parametrize("header, expected", [
-    ("bytes=0-99", (0, 99)), ("bytes=100-", (100, 999)), ("bytes=-10", (990, 999)),
-    ("bytes=500-5000", (500, 999)), ("bytes=1000-", False), ("bytes=0-1,5-9", None), (None, None)])
+@pytest.mark.parametrize(
+    "header, expected",
+    [
+        ("bytes=0-99", (0, 99)),
+        ("bytes=100-", (100, 999)),
+        ("bytes=-10", (990, 999)),
+        ("bytes=500-5000", (500, 999)),
+        ("bytes=1000-", False),
+        ("bytes=0-1,5-9", None),
+        (None, None),
+    ],
+)
 def test_byte_ranges(header, expected):
     assert byte_range(header, 1000) == expected
 
@@ -68,8 +77,9 @@ def test_served_video_answers_range_requests(project, monkeypatch):
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
         copied = next((project / ".cairn" / "build").rglob("*.mp4")).relative_to(project / ".cairn" / "build")
-        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}/{copied.as_posix()}",
-                                         headers={"Range": "bytes=10-19"})
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/{copied.as_posix()}", headers={"Range": "bytes=10-19"}
+        )
         with urllib.request.urlopen(request) as response:
             assert response.status == 206
             assert response.headers["Content-Range"] == f"bytes 10-19/{path.stat().st_size}"

@@ -27,7 +27,9 @@ def _overview(name: str, repo) -> dict:
     except NotFound:
         record = {"title": name, "description": "", "created": ""}
     summaries = repo.summaries()
-    record.update(name=name, title=record.get("title") or name, artifacts=sum(1 for item in summaries if item.get("versions")))
+    record.update(
+        name=name, title=record.get("title") or name, artifacts=sum(1 for item in summaries if item.get("versions"))
+    )
     record["updated"] = max([item.get("updated") or "" for item in summaries] + [record.get("created") or ""])
     return record
 
@@ -49,7 +51,11 @@ class OneProject:
         return self.repo
 
     def record(self, project: str) -> dict:
-        return {**self.get(project).record(), "name": self.name, "title": self.get(project).record().get("title") or self.name}
+        return {
+            **self.get(project).record(),
+            "name": self.name,
+            "title": self.get(project).record().get("title") or self.name,
+        }
 
 
 class FolderProjects:
@@ -117,7 +123,9 @@ class LocalBackend:
             self.owner = owner
         elif not no_auth:
             if not (root / "token").is_file():
-                raise SystemExit(f"cairn: {short_path(root)} has no owner token (not a repo?); --no-auth browses it without a login")
+                raise SystemExit(
+                    f"cairn: {short_path(root)} has no owner token (not a repo?); --no-auth browses it without a login"
+                )
             self.owner = read_token(root / "token")
 
     def anonymous(self) -> Session:
@@ -177,8 +185,9 @@ def _server_or_project(url: str) -> tuple[str, str | None]:
     return server, refs.valid_project(project)
 
 
-def open_backend(remote: str | None = None, repo: str | Path | None = None, config: Config | None = None,
-                 no_auth: bool = False) -> LocalBackend | RemoteBackend:
+def open_backend(
+    remote: str | None = None, repo: str | Path | None = None, config: Config | None = None, no_auth: bool = False
+) -> LocalBackend | RemoteBackend:
     """`--remote URL`, else `--repo FOLDER`, else the project's repo (created, with an owner token, if it is new; it
     reads through the project's remote when it has one, and shows its one project under the project folder's name, or
     the remote's project)."""

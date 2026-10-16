@@ -40,16 +40,28 @@ def request(port, token, method, path, body=None, headers=None, connection=None)
 def publish_small(port, token, connection, artifact, index):
     """The client's protocol for one publish of three small files: missing, PUT each, publish."""
     files = {f"f{k}.txt": f"{artifact} {index} {k} ".encode() * 30 for k in range(3)}
-    entries = [{"path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)} for path, data in files.items()]
-    status, _, data = request(port, token, "POST", "/api/v2/blobs/missing", {"sha256": [e["sha256"] for e in entries]},
-                              connection=connection)
+    entries = [
+        {"path": path, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)} for path, data in files.items()
+    ]
+    status, _, data = request(
+        port, token, "POST", "/api/v2/blobs/missing", {"sha256": [e["sha256"] for e in entries]}, connection=connection
+    )
     assert status == 200
     missing = set(json.loads(data)["missing"])
     for entry, body in zip(entries, files.values()):
         if entry["sha256"] in missing:
-            assert request(port, token, "PUT", f"/api/v2/blobs/{entry['sha256']}", body, connection=connection)[0] in (200, 201)
-    status, _, data = request(port, token, "POST", f"/api/v2/projects/perf/artifacts/{artifact.replace('/', '%2F')}/publish",
-                              {"entries": entries}, connection=connection)
+            assert request(port, token, "PUT", f"/api/v2/blobs/{entry['sha256']}", body, connection=connection)[0] in (
+                200,
+                201,
+            )
+    status, _, data = request(
+        port,
+        token,
+        "POST",
+        f"/api/v2/projects/perf/artifacts/{artifact.replace('/', '%2F')}/publish",
+        {"entries": entries},
+        connection=connection,
+    )
     assert status in (200, 201), data
     return json.loads(data)["version"]
 
@@ -63,7 +75,9 @@ def test_concurrent_small_publishes(server, same):
         if not hasattr(local, "connection"):
             local.connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=120)
             opened.append(local.connection)
-        return publish_small(server.port, server.token, local.connection, "shared" if same else f"a/n{index:03d}", index)
+        return publish_small(
+            server.port, server.token, local.connection, "shared" if same else f"a/n{index:03d}", index
+        )
 
     started = time.perf_counter()
     with ThreadPoolExecutor(16) as pool:
@@ -89,7 +103,12 @@ def seed_artifacts(root: Path, project: str, count: int) -> None:
     sha = hashlib.sha256(data).hexdigest()
     store.put_blob(sha, io.BytesIO(data), 1)
     for index in range(count):
-        store.publish(project, f"group{index % 10}/item{index:04d}", [{"path": "x", "sha256": sha, "size": 1}], metadata={"index": index})
+        store.publish(
+            project,
+            f"group{index % 10}/item{index:04d}",
+            [{"path": "x", "sha256": sha, "size": 1}],
+            metadata={"index": index},
+        )
 
 
 def test_listing_two_thousand_artifacts(server):
@@ -103,11 +122,19 @@ def test_listing_two_thousand_artifacts(server):
     times = []
     for _ in range(5):
         started = time.perf_counter()
-        assert request(server.port, server.token, "GET", "/api/v2/projects/big/artifacts", connection=connection)[0] == 200
+        assert (
+            request(server.port, server.token, "GET", "/api/v2/projects/big/artifacts", connection=connection)[0] == 200
+        )
         times.append(time.perf_counter() - started)
     assert sorted(times)[2] < 1.0, f"a warm listing of 2000 artifacts took {sorted(times)[2]:.2f} s"  # was about 4 s
-    status, again, _ = request(server.port, server.token, "GET", "/api/v2/projects/big/artifacts",
-                               headers={"If-None-Match": headers["ETag"]}, connection=connection)
+    status, again, _ = request(
+        server.port,
+        server.token,
+        "GET",
+        "/api/v2/projects/big/artifacts",
+        headers={"If-None-Match": headers["ETag"]},
+        connection=connection,
+    )
     assert status == 304 and again["ETag"] == headers["ETag"]
     connection.close()
     status, _, data = request(server.port, server.token, "GET", "/api/v2/projects")
@@ -138,8 +165,13 @@ def test_a_large_download_streams_without_loading_into_memory(tmp_path, sendfile
             digest.update(chunk)
     sha = digest.hexdigest()
     environment = {**os.environ, "CAIRN_SENDFILE": sendfile}
-    process = subprocess.Popen([sys.executable, "-m", "cairn", "server", str(root), "--port", str(port), "--no-ui"],
-                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=environment)
+    process = subprocess.Popen(
+        [sys.executable, "-m", "cairn", "server", str(root), "--port", str(port), "--no-ui"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env=environment,
+    )
     try:
         for line in process.stdout:
             if line.startswith("  Token "):
@@ -193,12 +225,17 @@ def test_writes_of_a_second_process_are_seen_at_once(tmp_path):
     assert [item["name"] for item in store.summaries("p")] == ["x"]  # the listing is cached now
     script = (
         "import sys; from cairn import LocalRepo; s = LocalRepo(sys.argv[1]); e = [{'path': 'a.txt', 'sha256': sys.argv[2], 'size': 3}]\n"
-        "s.publish('p', 'x', e, metadata={'n': 2}); s.publish('p', 'y/z', e); s.set_alias('p', 'x', 'best', 1)\n")
+        "s.publish('p', 'x', e, metadata={'n': 2}); s.publish('p', 'y/z', e); s.set_alias('p', 'x', 'best', 1)\n"
+    )
     subprocess.run([sys.executable, "-c", script, str(root), sha], check=True)
     assert [v["metadata"]["n"] for v in store.versions("p", "x")] == [1, 2]
     assert store.resolve("p", "x")[1]["version"] == 2 and store.resolve("p", "x@best")[1]["version"] == 1
     summaries = {item["name"]: item for item in store.summaries("p")}
-    assert set(summaries) == {"x", "y/z"} and summaries["x"]["versions"] == 2 and summaries["x"]["aliases"] == {"latest": 2, "best": 1}
+    assert (
+        set(summaries) == {"x", "y/z"}
+        and summaries["x"]["versions"] == 2
+        and summaries["x"]["aliases"] == {"latest": 2, "best": 1}
+    )
     assert summaries["x"]["metadata"] == {"n": 2}
 
 
@@ -238,11 +275,27 @@ def test_caching_headers(server):
     assert status == 200 and headers["Cache-Control"] == "no-cache"  # an alias moves
     status, headers, _ = request(server.port, server.token, "GET", "/api/v2/projects/perf/artifacts/c")
     assert status == 200 and headers["Cache-Control"] == "private, no-cache" and headers["ETag"]
-    assert request(server.port, server.token, "GET", "/api/v2/projects/perf/artifacts/c",
-                   headers={"If-None-Match": headers["ETag"]})[0] == 304
+    assert (
+        request(
+            server.port,
+            server.token,
+            "GET",
+            "/api/v2/projects/perf/artifacts/c",
+            headers={"If-None-Match": headers["ETag"]},
+        )[0]
+        == 304
+    )
     publish_small(server.port, server.token, connection, "c", 1)
-    assert request(server.port, server.token, "GET", "/api/v2/projects/perf/artifacts/c",
-                   headers={"If-None-Match": headers["ETag"]})[0] == 200  # changed: a new ETag
+    assert (
+        request(
+            server.port,
+            server.token,
+            "GET",
+            "/api/v2/projects/perf/artifacts/c",
+            headers={"If-None-Match": headers["ETag"]},
+        )[0]
+        == 200
+    )  # changed: a new ETag
     connection.close()
 
 
@@ -261,13 +314,21 @@ def test_downloads_use_sendfile_when_enabled(tmp_path, monkeypatch):
         sha = hashlib.sha256(data).hexdigest()
         request(port, token, "POST", "/api/v2/projects", {"name": "p"})
         assert request(port, token, "PUT", f"/api/v2/blobs/{sha}", data, {"Content-Length": str(len(data))})[0] == 201
-        request(port, token, "POST", "/api/v2/projects/p/artifacts/f/publish", {"entries": [{"path": "d.bin", "sha256": sha, "size": len(data)}]})
+        request(
+            port,
+            token,
+            "POST",
+            "/api/v2/projects/p/artifacts/f/publish",
+            {"entries": [{"path": "d.bin", "sha256": sha, "size": len(data)}]},
+        )
         for setting, zero_copy in (("1", 1), ("0", 0)):
             monkeypatch.setenv("CAIRN_SENDFILE", setting)
             before = httpd.app.zero_copy_sends
             status, headers, body = request(port, token, "GET", "/files/p/f@v1//d.bin")
             assert status == 200 and body == data and httpd.app.zero_copy_sends - before == zero_copy
-            status, _, body = request(port, token, "GET", "/files/p/f@v1//d.bin", headers={"Range": "bytes=1000000-2999999"})
+            status, _, body = request(
+                port, token, "GET", "/files/p/f@v1//d.bin", headers={"Range": "bytes=1000000-2999999"}
+            )
             assert status == 206 and body == data[1000000:3000000]
     finally:
         httpd.shutdown()

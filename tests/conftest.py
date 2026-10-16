@@ -94,15 +94,23 @@ def make_tree(project: Path) -> Path:
     config = load_config(project)
     store.publish("descent", make_data(project.parent), config=config)
     reports = project / "reports"
-    write(reports / "alpha" / "assets" / "strip.svg",
-          '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"><rect width="400" height="100" fill="#dcebe5"/></svg>')
-    write(reports / "alpha" / "report.md", (
-        "---\ntitle: Alpha\nstatus: active\nsummary: The first report, error {{ scores['rmse'] }}.\n"
-        "inputs:\n  descent: descent@latest\n---\n\n"
-        "```python exec hide\nscores = read_scalars(inputs.descent)\n```\n\n"
-        "## Result\n\n!!! finding promising \"It works with 3 numbers in 1.5 s\"\n    RMSE {{ scores['rmse'] }}.\n\n"
-        "![Histogram](input:descent/figures/hist.png)\n![Strip](assets/strip.svg)\n\nMore in [beta](report:beta#detail).\n"))
-    write(reports / "beta" / "report.md", "---\ntitle: Beta\n---\n\n## Detail\n\nBack to [alpha](report:alpha#result).\n")
+    write(
+        reports / "alpha" / "assets" / "strip.svg",
+        '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"><rect width="400" height="100" fill="#dcebe5"/></svg>',
+    )
+    write(
+        reports / "alpha" / "report.md",
+        (
+            "---\ntitle: Alpha\nstatus: active\nsummary: The first report, error {{ scores['rmse'] }}.\n"
+            "inputs:\n  descent: descent@latest\n---\n\n"
+            "```python exec hide\nscores = read_scalars(inputs.descent)\n```\n\n"
+            "## Result\n\n!!! finding promising \"It works with 3 numbers in 1.5 s\"\n    RMSE {{ scores['rmse'] }}.\n\n"
+            "![Histogram](input:descent/figures/hist.png)\n![Strip](assets/strip.svg)\n\nMore in [beta](report:beta#detail).\n"
+        ),
+    )
+    write(
+        reports / "beta" / "report.md", "---\ntitle: Beta\n---\n\n## Detail\n\nBack to [alpha](report:alpha#result).\n"
+    )
     return reports
 
 

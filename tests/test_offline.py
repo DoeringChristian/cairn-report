@@ -59,7 +59,12 @@ def test_publish_while_down_is_queued_and_synced_with_its_uid(down, env, capsys)
     assert version.number is None and version.status == "pending" and UID.fullmatch(version.uid)
     assert version.ref == f"data@{version.uid}" and "pending" in capsys.readouterr().err
     record = json.loads(record_file(env, version.uid).read_text())
-    assert (record["uid"], record["sync"], record["status"], record["aliases"]) == (version.uid, "pending", "completed", ["paper"])
+    assert (record["uid"], record["sync"], record["status"], record["aliases"]) == (
+        version.uid,
+        "pending",
+        "completed",
+        ["paper"],
+    )
 
     (data / "a.txt").write_text("changed after publishing")  # the pending version keeps what was published
     out, _ = run(capsys, "status")
@@ -139,14 +144,30 @@ def test_rejected_versions_are_kept_for_status_and_skipped(down, env, capsys):
 # ------------------------------------------------------------ publish --watch
 
 
-SCRIPT = ("import pathlib, sys, time; out = pathlib.Path(sys.argv[1]); out.mkdir(exist_ok=True); "
-          "(out / 'first.txt').write_text('1'); time.sleep(float(sys.argv[2])); (out / 'second.txt').write_text('2'); time.sleep(0.3)")
+SCRIPT = (
+    "import pathlib, sys, time; out = pathlib.Path(sys.argv[1]); out.mkdir(exist_ok=True); "
+    "(out / 'first.txt').write_text('1'); time.sleep(float(sys.argv[2])); (out / 'second.txt').write_text('2'); time.sleep(0.3)"
+)
 
 
 def test_watch_starts_while_down_and_ends_on_the_server_once_it_answers(down, env, capsys):
     out = env / "out"
     threading.Timer(1.0, down.start).start()  # the server comes up while the job runs
-    stdout, _ = run(capsys, "publish", str(out), "sweep", "--interval", "0.3", "--", sys.executable, "-c", SCRIPT, str(out), "2.5", code=0)
+    stdout, _ = run(
+        capsys,
+        "publish",
+        str(out),
+        "sweep",
+        "--interval",
+        "0.3",
+        "--",
+        sys.executable,
+        "-c",
+        SCRIPT,
+        str(out),
+        "2.5",
+        code=0,
+    )
     assert "running, pending" in stdout and re.search(r"published sweep@v1 \([0-9a-f]{7}, 2 files", stdout)
     [version] = down.versions("sweep")
     assert version["status"] == "completed" and [f["path"] for f in version["files"]] == ["first.txt", "second.txt"]
@@ -155,20 +176,50 @@ def test_watch_starts_while_down_and_ends_on_the_server_once_it_answers(down, en
 
 def test_watch_while_down_throughout_queues_the_completion(down, env, capsys):
     out = env / "out"
-    stdout, _ = run(capsys, "publish", str(out), "sweep", "--interval", "0.3", "--", sys.executable, "-c", SCRIPT, str(out), "0.2", code=0)
+    stdout, _ = run(
+        capsys,
+        "publish",
+        str(out),
+        "sweep",
+        "--interval",
+        "0.3",
+        "--",
+        sys.executable,
+        "-c",
+        SCRIPT,
+        str(out),
+        "0.2",
+        code=0,
+    )
     assert "pending sweep (" in stdout
     status = run(capsys, "status")[0]
     assert re.search(r"\npending +sweep +- +[0-9a-f]{7} +completed ", status), status
     down.start()
     assert "sent sweep@v1" in run(capsys, "sync")[0]
     [version] = down.versions("sweep")
-    assert version["status"] == "completed" and refs.default_short_id(version["uid"]) in status and len(version["files"]) == 2
+    assert (
+        version["status"] == "completed"
+        and refs.default_short_id(version["uid"]) in status
+        and len(version["files"]) == 2
+    )
 
 
 def test_watch_failure_while_down_is_queued_as_failed(down, env, capsys):
     out = env / "out"
-    run(capsys, "publish", str(out), "sweep", "--interval", "0.3", "--", sys.executable, "-c",
-        "import pathlib, sys; p = pathlib.Path(sys.argv[1]); p.mkdir(); (p / 'x.txt').write_text('x'); sys.exit(3)", str(out), code=3)
+    run(
+        capsys,
+        "publish",
+        str(out),
+        "sweep",
+        "--interval",
+        "0.3",
+        "--",
+        sys.executable,
+        "-c",
+        "import pathlib, sys; p = pathlib.Path(sys.argv[1]); p.mkdir(); (p / 'x.txt').write_text('x'); sys.exit(3)",
+        str(out),
+        code=3,
+    )
     down.start()
     run(capsys, "sync")
     assert [v["status"] for v in down.versions("sweep")] == ["failed"]
@@ -215,7 +266,8 @@ def test_offline_pulls_of_exact_and_alias_refs(down, env, capsys, monkeypatch):
     with monkeypatch.context() as other:  # another machine (its own repo) moves best
         other.setenv("CAIRN_DIR", str(env.parent / "other-repo"))
         cairn.connect(f"{down.url}/study", token=down.token).artifact("data").publish(
-            folder(env, "d2", {"a.txt": "two"}), aliases=["best"])
+            folder(env, "d2", {"a.txt": "two"}), aliases=["best"]
+        )
     capsys.readouterr()
     before = len(down.requests)
     out, err = run(capsys, "-C", str(env), "pull", "data@best", "--offline", "--no-record")
@@ -232,8 +284,10 @@ def test_report_inputs_fall_back_while_down(down, env, capsys):
     cairn.publish("data", folder(env, "d", {"n.txt": "41"}), aliases=["best"])
     report = env / "reports" / "r" / "report.md"
     report.parent.mkdir(parents=True)
-    report.write_text("---\ntitle: R\ninputs:\n  data: data@best\n---\n\n"
-                      "```python exec hide\nn = int((inputs.data / 'n.txt').read_text()) + 1\n```\n\nThe answer is {{ n }}.\n")
+    report.write_text(
+        "---\ntitle: R\ninputs:\n  data: data@best\n---\n\n"
+        "```python exec hide\nn = int((inputs.data / 'n.txt').read_text()) + 1\n```\n\nThe answer is {{ n }}.\n"
+    )
     build_all(load_config(env))
     down.stop()
     capsys.readouterr()

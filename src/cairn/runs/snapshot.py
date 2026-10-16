@@ -28,8 +28,20 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.experimental.callback import Callback
 from hydra.utils import get_original_cwd
 
-from ..client.code import (DENIED_PARTS, DENIED_PATTERNS, SAFE_ENVIRONMENT, SOURCE_NAMES, SOURCE_SUFFIXES,  # noqa: F401
-                           _denied, _git, _select, _source_type, _working_files, create_snapshot, packages)
+from ..client.code import (
+    DENIED_PARTS,
+    DENIED_PATTERNS,
+    SAFE_ENVIRONMENT,
+    SOURCE_NAMES,
+    SOURCE_SUFFIXES,  # noqa: F401
+    _denied,
+    _git,
+    _select,
+    _source_type,
+    _working_files,
+    create_snapshot,
+    packages,
+)
 
 
 def capture_environment(root: Path, destination: Path) -> None:
@@ -42,22 +54,16 @@ def capture_environment(root: Path, destination: Path) -> None:
         "platform": platform.platform(),
         "machine": platform.machine(),
         "processor": platform.processor(),
-        "selected_environment": {
-            key: os.environ[key] for key in SAFE_ENVIRONMENT if key in os.environ
-        },
+        "selected_environment": {key: os.environ[key] for key in SAFE_ENVIRONMENT if key in os.environ},
     }
-    (target / "runtime.json").write_text(
-        json.dumps(facts, indent=2) + "\n", encoding="utf-8"
-    )
+    (target / "runtime.json").write_text(json.dumps(facts, indent=2) + "\n", encoding="utf-8")
     # Installed distributions in `pip freeze` format, read from package metadata so pip is not required.
     (target / "pip-freeze.txt").write_text("\n".join(packages()) + "\n", encoding="utf-8")
     lock = root / "pixi.lock"
     if lock.is_file():
         shutil.copy2(lock, target / "pixi.lock")
     try:
-        (target / "git-status.txt").write_bytes(
-            _git(root, "status", "--short", "--branch")
-        )
+        (target / "git-status.txt").write_bytes(_git(root, "status", "--short", "--branch"))
     except (FileNotFoundError, subprocess.CalledProcessError):
         pass
 
@@ -66,9 +72,7 @@ def require_snapshot(output_dir: Path) -> Path:
     """Fail the job unless the callback wrote a complete snapshot (call from the entry point)."""
     manifest = Path(output_dir) / "provenance" / "manifest.json"
     if not manifest.is_file():
-        raise RuntimeError(
-            f"no source snapshot at {manifest.parent}; see the SourceSnapshotCallback warning above"
-        )
+        raise RuntimeError(f"no source snapshot at {manifest.parent}; see the SourceSnapshotCallback warning above")
     return manifest
 
 
@@ -92,14 +96,10 @@ class SourceSnapshotCallback(Callback):
         output = Path(HydraConfig.get().runtime.output_dir).resolve()
         destination = output / "provenance"
         if destination.exists():
-            raise RuntimeError(
-                f"refusing to replace existing provenance: {destination}"
-            )
+            raise RuntimeError(f"refusing to replace existing provenance: {destination}")
         temporary = Path(tempfile.mkdtemp(prefix=".provenance-", dir=output))
         try:
-            create_snapshot(
-                root, temporary, self.mode, self.max_file_bytes, self.max_total_bytes
-            )
+            create_snapshot(root, temporary, self.mode, self.max_file_bytes, self.max_total_bytes)
             if self.capture_runtime:
                 capture_environment(root, temporary)
             temporary.replace(destination)

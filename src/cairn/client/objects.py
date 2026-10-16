@@ -46,6 +46,7 @@ from .repo import ProjectRepo
 @dataclass(frozen=True)
 class File:
     """One file of a version (`sha256` None and `link` set for a stored symlink)."""
+
     path: str
     size: int
     sha256: str | None
@@ -87,7 +88,9 @@ class Repo:
     def artifacts(self, prefix: str | None = None) -> list["Artifact"]:
         """The artifacts (names starting with `prefix`, e.g. "reports/"), sorted by name."""
         found = [Artifact(self, item["name"], item) for item in self.backend.summaries()]
-        return sorted((item for item in found if not prefix or item.name.startswith(prefix)), key=lambda item: item.name)
+        return sorted(
+            (item for item in found if not prefix or item.name.startswith(prefix)), key=lambda item: item.name
+        )
 
     def artifact(self, name: str) -> "Artifact":
         """An artifact by name (lazy: it need not exist yet)."""
@@ -100,8 +103,10 @@ class Repo:
         name, manifest = self.backend.find(refs.parse(ref), offline)
         version = Version(self.artifact(name), manifest)
         if version.deleted:
-            raise Deleted(f"{version.ref} was deleted ({(manifest.get('deleted_at') or '')[:19]})"
-                          + (f": {manifest['reason']}" if manifest.get("reason") else ""))
+            raise Deleted(
+                f"{version.ref} was deleted ({(manifest.get('deleted_at') or '')[:19]})"
+                + (f": {manifest['reason']}" if manifest.get("reason") else "")
+            )
         return version
 
     def pull(self, ref: str, *, record: bool = True, offline: bool = False) -> Path:
@@ -129,8 +134,14 @@ class Repo:
     def retention(self, rules: list[dict]) -> None:
         self.backend.set_retention(rules)
 
-    def set_retention(self, prefix: str = "", *, keep_last: int | None = None, keep_days: float | None = None,
-                      keep_aliased: bool = True) -> list[dict]:
+    def set_retention(
+        self,
+        prefix: str = "",
+        *,
+        keep_last: int | None = None,
+        keep_days: float | None = None,
+        keep_aliased: bool = True,
+    ) -> list[dict]:
         """Add or replace the rule for one artifact-name prefix ("" for every artifact); returns every rule."""
         rules = [rule for rule in self.backend.retention() if rule["prefix"] != prefix]
         rules.append({"prefix": prefix, "keep_last": keep_last, "keep_days": keep_days, "keep_aliased": keep_aliased})
@@ -203,8 +214,10 @@ class Artifact:
         if not isinstance(version, Version):
             version = self.version(version)
         if version.number is None:
-            raise StoreError(f"{version.ref} is pending (the remote does not have it yet): alias it once it is sent"
-                             " (or pass aliases= to publish)")
+            raise StoreError(
+                f"{version.ref} is pending (the remote does not have it yet): alias it once it is sent"
+                " (or pass aliases= to publish)"
+            )
         self.backend.set_alias(self.name, name, version.number)
 
     def delete(self, *, force: bool = False, reason: str | None = None) -> dict:
@@ -219,9 +232,19 @@ class Artifact:
 
     # ------------------------------------------------------------ publishing
 
-    def publish(self, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                inputs=None, config: Config | None = None, allow_incomplete: bool = False, _link: bool = False,
-                _uid: str | None = None) -> "Version":
+    def publish(
+        self,
+        folder: Path | str,
+        *,
+        metadata: dict | None = None,
+        aliases=(),
+        label: str | None = None,
+        inputs=None,
+        config: Config | None = None,
+        allow_incomplete: bool = False,
+        _link: bool = False,
+        _uid: str | None = None,
+    ) -> "Version":
         """Store a folder as the next version; when nothing changed since the latest, that version is returned.
 
         A symlinked folder is followed (the label defaults to the resolved folder's name). The folder's
@@ -238,14 +261,26 @@ class Artifact:
         status = run_status(local)
         if status not in (None, "completed"):
             if not allow_incomplete:
-                raise IncompleteRun(f"{folder}/run.json says {status}; publish completed runs, or pass --allow-incomplete"
-                                    " (allow_incomplete=True)")
+                raise IncompleteRun(
+                    f"{folder}/run.json says {status}; publish completed runs, or pass --allow-incomplete"
+                    " (allow_incomplete=True)"
+                )
             metadata = {**(metadata or {}), "run_status": status}
         config = config or load_config()
         merged = [*read_inputs(local), *(str(item) for item in inputs or [])]
-        manifest = self.backend.publish_folder(self.name, local, exclude=config.repo.get("exclude", []),
-                                               project_root=config.project, link=_link, label=label or local.name,
-                                               metadata=metadata, inputs=merged, aliases=aliases, source=_source(local), uid=_uid)
+        manifest = self.backend.publish_folder(
+            self.name,
+            local,
+            exclude=config.repo.get("exclude", []),
+            project_root=config.project,
+            link=_link,
+            label=label or local.name,
+            metadata=metadata,
+            inputs=merged,
+            aliases=aliases,
+            source=_source(local),
+            uid=_uid,
+        )
         return Version(self, manifest)
 
     def draft(self, *, label: str | None = None, metadata: dict | None = None, aliases=(), watch: bool = False):
@@ -255,13 +290,15 @@ class Artifact:
 
         return Draft(self.name, label=label, metadata=metadata, aliases=aliases, watch=watch, _repo=self.repo)
 
-    def publishing(self, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                   inputs=None):
+    def publishing(
+        self, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None, inputs=None
+    ):
         """A running version that follows a folder while a job writes it (a `Publication`, a context manager)."""
         from .publishing import Publication
 
-        return Publication(self.name, folder, metadata=metadata, aliases=aliases, label=label, inputs=inputs,
-                           _repo=self.backend)
+        return Publication(
+            self.name, folder, metadata=metadata, aliases=aliases, label=label, inputs=inputs, _repo=self.backend
+        )
 
 
 @surface
@@ -297,7 +334,9 @@ class Version:
         artifact, selector = self.artifact, self._selector
         backend = artifact.backend
         if refs.VERSION.fullmatch(selector) or UID.fullmatch(selector):  # any status, like versions()
-            return backend.get_version(artifact.name, int(selector[1:]) if refs.VERSION.fullmatch(selector) else selector)
+            return backend.get_version(
+                artifact.name, int(selector[1:]) if refs.VERSION.fullmatch(selector) else selector
+            )
         return backend.find(Ref(artifact.name, selector))[1]
 
     def refresh(self) -> "Version":
@@ -359,11 +398,16 @@ class Version:
     metadata = property(lambda self: dict(self.manifest.get("metadata") or {}))
     inputs = property(lambda self: list(self.manifest.get("inputs") or []))
     source = property(lambda self: self.manifest.get("source"))
-    digest = property(lambda self: self.manifest.get("digest"))  # `sha256:<hex>` of the file list (store/digest.py); None while running
+    digest = property(
+        lambda self: self.manifest.get("digest")
+    )  # `sha256:<hex>` of the file list (store/digest.py); None while running
 
     @property
     def files(self) -> list[File]:
-        return [File(entry["path"], entry.get("size", 0), entry.get("sha256"), entry.get("link")) for entry in self.manifest["files"]]
+        return [
+            File(entry["path"], entry.get("size", 0), entry.get("sha256"), entry.get("link"))
+            for entry in self.manifest["files"]
+        ]
 
     @property
     def consumers(self) -> list[str]:

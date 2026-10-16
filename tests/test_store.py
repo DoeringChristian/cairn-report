@@ -35,14 +35,17 @@ def folder(base, name, files):
 # --------------------------------------------------------------------- refs
 
 
-@pytest.mark.parametrize("text,expected", [
-    ("descent", ("descent", None, None)),
-    ("descent@latest//figures/a.png", ("descent", "latest", "figures/a.png")),
-    ("datasets/crops@v3", ("datasets/crops", "v3", None)),
-    ("models/denoiser@best", ("models/denoiser", "best", None)),
-    ("a@2026-10-15_07-49-37", ("a", "2026-10-15_07-49-37", None)),
-    ("3f9a2c1", ("3f9a2c1", None, None)),
-])
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("descent", ("descent", None, None)),
+        ("descent@latest//figures/a.png", ("descent", "latest", "figures/a.png")),
+        ("datasets/crops@v3", ("datasets/crops", "v3", None)),
+        ("models/denoiser@best", ("models/denoiser", "best", None)),
+        ("a@2026-10-15_07-49-37", ("a", "2026-10-15_07-49-37", None)),
+        ("3f9a2c1", ("3f9a2c1", None, None)),
+    ],
+)
 def test_ref_roundtrip(text, expected):
     ref = refs.parse(text)
     assert (ref.name, ref.selector, ref.path) == expected
@@ -59,8 +62,30 @@ def test_ref_version_property():
     assert refs.parse("a@best").version is None
 
 
-@pytest.mark.parametrize("text", ["", " a", "A", "a/../b", "a//", "a//x/../y", "a/", "/a", "a b", "a@", "a@v03",
-                                  "a@v3x@y", "a@-x", "P:a", ":a", "a@b c", "a/.hidden", "a//x//y", "a..b/c/../d"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        " a",
+        "A",
+        "a/../b",
+        "a//",
+        "a//x/../y",
+        "a/",
+        "/a",
+        "a b",
+        "a@",
+        "a@v03",
+        "a@v3x@y",
+        "a@-x",
+        "P:a",
+        ":a",
+        "a@b c",
+        "a/.hidden",
+        "a//x//y",
+        "a..b/c/../d",
+    ],
+)
 def test_ref_rejects(text):
     with pytest.raises(ValueError):
         refs.parse(text)
@@ -118,9 +143,11 @@ def test_unchanged_publish_creates_no_version(local):
 
 def test_completed_versions_are_immutable(local):
     version = local.publish("p", "run", put(local, {"a.txt": "1"}))
-    for call in (lambda: local.add_files("p", "run", version, put(local, {"b.txt": "2"})),
-                 lambda: local.complete_version("p", "run", version),
-                 lambda: local.fail_version("p", "run", version)):
+    for call in (
+        lambda: local.add_files("p", "run", version, put(local, {"b.txt": "2"})),
+        lambda: local.complete_version("p", "run", version),
+        lambda: local.fail_version("p", "run", version),
+    ):
         with pytest.raises(StoreError):
             call()
     assert [f["path"] for f in local.resolve("p", "run@v1")[1]["files"]] == ["a.txt"]
@@ -216,8 +243,9 @@ def test_short_ids_are_fixed_per_project(local):
     assert state["short_id"] == hashlib.sha256(state["uid"].encode()).hexdigest()[:7]
     assert local.resolve("p", state["short_id"][:4])[1]["uid"] == state["uid"]
     assert local.resolve("p", f"run@{state['short_id']}")[1]["uid"] == state["uid"]
-    assert local.ids("p", state["short_id"]) == [{"name": "run", "version": 1, "uid": state["uid"],
-                                                 "short_id": state["short_id"], "status": "completed"}]
+    assert local.ids("p", state["short_id"]) == [
+        {"name": "run", "version": 1, "uid": state["uid"], "short_id": state["short_id"], "status": "completed"}
+    ]
     local.create_project("q")
     with pytest.raises(NotFound):
         local.resolve("q", state["short_id"])  # ids stay inside their project
@@ -280,7 +308,9 @@ def test_configured_store_pull_publish_lineage(env, tmp_path):
     work = env / "work"
     work.mkdir()
     os.chdir(work)
-    crops = store.connect().pull("datasets/crops@paper")  # the object API outside a run records in the working directory
+    crops = store.connect().pull(
+        "datasets/crops@paper"
+    )  # the object API outside a run records in the working directory
     out = folder(work, "out", {"res.txt": (crops / "a.txt").read_text() + "!"})
     (work / ".cairn-inputs.jsonl").rename(out / ".cairn-inputs.jsonl")
     assert store.publish("fit", out, metadata={"loss": 0.1}) == 1
@@ -327,8 +357,18 @@ def test_store_config_validation(env):
 
     write_config(env, '[remote]\nurl = "https://x.example.org/p"\n[repo]\ninterval = 5\n')
     assert load_config().repo == {"remote": "https://x.example.org/p", "interval": 5}
-    for bad in ('token = "x"', 'oops = 1', 'exclude = "a"', 'path = "s"', 'publish = []', 'interval = 0', 'url = "https://x"',
-                'project = "p"', 'remote = "https://x/p"', 'token_file = "t"'):
+    for bad in (
+        'token = "x"',
+        "oops = 1",
+        'exclude = "a"',
+        'path = "s"',
+        "publish = []",
+        "interval = 0",
+        'url = "https://x"',
+        'project = "p"',
+        'remote = "https://x/p"',
+        'token_file = "t"',
+    ):
         write_config(env, f"[repo]\n{bad}\n")
         with pytest.raises(ValueError):
             load_config()
@@ -338,18 +378,29 @@ def test_store_config_validation(env):
 
 
 def test_import_cairn_stays_light():
-    script = ("import sys, cairn; heavy = ['cairn.server', 'cairn.ui', 'cairn.reports', 'cairn.runs', 'matplotlib', 'plotly', 'hydra', 'imageio', 'yaml']; "
-              "print([name for name in heavy if name in sys.modules])")
+    script = (
+        "import sys, cairn; heavy = ['cairn.server', 'cairn.ui', 'cairn.reports', 'cairn.runs', 'matplotlib', 'plotly', 'hydra', 'imageio', 'yaml']; "
+        "print([name for name in heavy if name in sys.modules])"
+    )
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "[]"
-    assert subprocess.run([sys.executable, "-c", "import cairn; import cairn.client.publishing; assert callable(cairn.publish) and callable(cairn.pull) and cairn.Publication and cairn.__version__"]).returncode == 0
+    assert (
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import cairn; import cairn.client.publishing; assert callable(cairn.publish) and callable(cairn.pull) and cairn.Publication and cairn.__version__",
+            ]
+        ).returncode
+        == 0
+    )
 
 
 def test_config_file_is_the_repos_config_toml(tmp_path):
     from cairn import config
     from cairn.config import load_config
 
-    write_config(tmp_path, '[repo]\ninterval = 7\n')
+    write_config(tmp_path, "[repo]\ninterval = 7\n")
     assert load_config(tmp_path).repo["interval"] == 7
     nested = tmp_path / "a" / "b"
     nested.mkdir(parents=True)

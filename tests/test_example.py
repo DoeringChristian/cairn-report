@@ -29,7 +29,9 @@ def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
 
     def step(*args: str) -> str:
-        result = subprocess.run([sys.executable, *args], cwd=project, capture_output=True, text=True, env={**os.environ})
+        result = subprocess.run(
+            [sys.executable, *args], cwd=project, capture_output=True, text=True, env={**os.environ}
+        )
         assert result.returncode == 0, result.stderr
         return result.stdout
 
@@ -54,7 +56,9 @@ def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
     assert "data         datasets/quadratic@v1" in shown and "reports/descent-study@v1" in shown
     cairn("show", "runs/descent@latest")
     shown = capsys.readouterr().out
-    assert re.search(r'config\n  dataset += "datasets/quadratic@latest"\n  learning_rate += 0.15\n  steps += 60\n', shown), shown
+    assert re.search(
+        r'config\n  dataset += "datasets/quadratic@latest"\n  learning_rate += 0.15\n  steps += 60\n', shown
+    ), shown
     assert "inputs       datasets/quadratic@v1" in shown and "logs/stdout.txt" in shown
 
     built = (project / ".cairn" / "build" / "descent-study" / "narrative.html").read_text()

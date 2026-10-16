@@ -174,8 +174,16 @@ class Writer:
 
     # ---------------------------------------------------------------- figures
 
-    def add_figure(self, name: str, figure: Any, metadata: Mapping | None = None, *args, svg: bool = False,
-                   dpi: int = 160, **kwargs) -> Path:
+    def add_figure(
+        self,
+        name: str,
+        figure: Any,
+        metadata: Mapping | None = None,
+        *args,
+        svg: bool = False,
+        dpi: int = 160,
+        **kwargs,
+    ) -> Path:
         """Save a Matplotlib figure (figures/<name>.png, optional .svg) and close it.
 
         Pass the plotting function itself (`add_figure("hist", error_histogram, None, errors)`): it is called with
@@ -191,11 +199,15 @@ class Writer:
             raise TypeError(f"figure {name!r} is not a Matplotlib figure")
         buffer = io.BytesIO()
         figure.savefig(buffer, format="png", dpi=dpi, bbox_inches="tight")
-        path = self._write(name, "figure", f"figures/{name}.png", buffer.getvalue(), producer=producer, metadata=metadata)
+        path = self._write(
+            name, "figure", f"figures/{name}.png", buffer.getvalue(), producer=producer, metadata=metadata
+        )
         if svg:
             vector = io.BytesIO()
             figure.savefig(vector, format="svg", bbox_inches="tight")
-            self._write(f"{name}.svg", "figure", f"figures/{name}.svg", vector.getvalue(), producer=producer, metadata=metadata)
+            self._write(
+                f"{name}.svg", "figure", f"figures/{name}.svg", vector.getvalue(), producer=producer, metadata=metadata
+            )
         import matplotlib.pyplot as plt
 
         plt.close(figure)
@@ -214,7 +226,9 @@ class Writer:
         """Save an image array (H×W or H×W×C) or copy an existing image file (images/<name>.*)."""
         if isinstance(image, (str, Path)):
             source = Path(image)
-            return self._write(name, "image", f"images/{name}{source.suffix.lower()}", source.read_bytes(), metadata=metadata)
+            return self._write(
+                name, "image", f"images/{name}{source.suffix.lower()}", source.read_bytes(), metadata=metadata
+            )
         import matplotlib.pyplot as plt
 
         buffer = io.BytesIO()
@@ -226,12 +240,15 @@ class Writer:
         H.264 MP4 that browsers play and seek (videos/<name>.mp4; frames need `imageio[ffmpeg]`)."""
         if isinstance(video, (str, Path)):
             source = Path(video)
-            return self._write(name, "video", f"videos/{name}{source.suffix.lower()}", source.read_bytes(), metadata=metadata)
+            return self._write(
+                name, "video", f"videos/{name}{source.suffix.lower()}", source.read_bytes(), metadata=metadata
+            )
         try:
             import imageio.v3 as iio
         except ImportError as error:
-            raise ImportError("add_video with frames needs imageio and imageio-ffmpeg "
-                              "(`pip install 'cairn[video]'`)") from error
+            raise ImportError(
+                "add_video with frames needs imageio and imageio-ffmpeg " "(`pip install 'cairn[video]'`)"
+            ) from error
         import numpy as np
 
         frames = np.asarray(video)
@@ -242,9 +259,17 @@ class Writer:
         frames = frames[..., :3]
         # yuv420p (what every browser decodes) needs even sizes
         frames = np.pad(frames, ((0, 0), (0, frames.shape[1] % 2), (0, frames.shape[2] % 2), (0, 0)), mode="edge")
-        data = iio.imwrite("<bytes>", frames, extension=".mp4", plugin="FFMPEG", fps=fps, codec="libx264",
-                           pixelformat="yuv420p", macro_block_size=1,  # keep the frame size as given
-                           output_params=["-movflags", "+faststart"])  # seekable before fully loaded
+        data = iio.imwrite(
+            "<bytes>",
+            frames,
+            extension=".mp4",
+            plugin="FFMPEG",
+            fps=fps,
+            codec="libx264",
+            pixelformat="yuv420p",
+            macro_block_size=1,  # keep the frame size as given
+            output_params=["-movflags", "+faststart"],
+        )  # seekable before fully loaded
         return self._write(name, "video", f"videos/{name}.mp4", data, metadata=metadata)
 
     # ------------------------------------------------------- files and folders
@@ -292,12 +317,18 @@ class Writer:
 
     def _check(self, name: str) -> None:
         if not NAME.fullmatch(name):
-            raise ValueError(
-                f"log name {name!r} must match {NAME.pattern} (lowercase, no slashes)"
-            )
+            raise ValueError(f"log name {name!r} must match {NAME.pattern} (lowercase, no slashes)")
 
-    def _write(self, name: str, kind: str, relative: str, data: bytes, producer: dict | None = None,
-               metadata: Mapping | None = None, check: str | None = None) -> Path:
+    def _write(
+        self,
+        name: str,
+        kind: str,
+        relative: str,
+        data: bytes,
+        producer: dict | None = None,
+        metadata: Mapping | None = None,
+        check: str | None = None,
+    ) -> Path:
         self._check(check or name)
         entry = {"name": name, "kind": kind, "path": relative, "time": _now(), "origin": self._origin()}
         if producer:

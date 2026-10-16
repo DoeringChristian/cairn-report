@@ -1,9 +1,9 @@
 """Content-addressed blobs and the entry format every version manifest uses.
 
-    <repo>/blobs/<aa>/<sha256>     file contents, written once (a temporary file renamed into place) and verified;
-                                   shared by every version, the outbox, and the read-only folders `pull` makes;
-                                   removed only by `gc` (gc.py) and `cairn prune` (client/prune.py)
-    <repo>/tmp/                    uploads in progress
+<repo>/blobs/<aa>/<sha256>     file contents, written once (a temporary file renamed into place) and verified;
+                               shared by every version, the outbox, and the read-only folders `pull` makes;
+                               removed only by `gc` (gc.py) and `cairn prune` (client/prune.py)
+<repo>/tmp/                    uploads in progress
 """
 
 from __future__ import annotations
@@ -60,8 +60,14 @@ def clean_entries(entries) -> list[dict]:
         if not isinstance(sha, str) or not SHA256.fullmatch(sha) or not isinstance(size, int) or size < 0:
             raise ValueError(f"{entry['path']}: needs sha256 and size")
         mtime = entry.get("mtime")
-        clean.append({"path": entry["path"], "sha256": sha, "size": size,
-                      "mtime": mtime if isinstance(mtime, (int, float)) else None})
+        clean.append(
+            {
+                "path": entry["path"],
+                "sha256": sha,
+                "size": size,
+                "mtime": mtime if isinstance(mtime, (int, float)) else None,
+            }
+        )
     return clean
 
 
@@ -148,7 +154,7 @@ class BlobWriter:
         if self.handle is not None:
             view = memoryview(chunk)
             while view:
-                view = view[self.handle.write(view):]
+                view = view[self.handle.write(view) :]
 
     def finish(self) -> bool:
         """Verify and place the blob; False if it was already stored."""
@@ -247,7 +253,9 @@ class BlobStore:
                     digest.update(chunk)
                 os.fsync(handle.fileno())
             if digest.hexdigest() != sha:
-                raise ValueError(f"{source}: content does not match its SHA-256 (did the file change during publishing?)")
+                raise ValueError(
+                    f"{source}: content does not match its SHA-256 (did the file change during publishing?)"
+                )
             if target.is_file():
                 return False
             target.parent.mkdir(exist_ok=True)
@@ -261,10 +269,13 @@ class BlobStore:
         size} as hashed a moment ago): a copy-on-write clone where the filesystem allows, else a copy (`link`: a hard
         link, for a source deleted right after: a published draft). The copy is hashed again; when the file changed in
         between, `entry` is updated to what was kept (the version has what was staged). Blobs are read-only. Returns
-        False when the file is gone. Safe on a network filesystem: written under a temporary name, renamed into place."""
+        False when the file is gone. Safe on a network filesystem: written under a temporary name, renamed into place.
+        """
         target = self.blob_path(entry["sha256"])
         try:
-            entry["size"] = target.stat().st_size  # kept already (a file that grew while it was hashed: the hashed bytes)
+            entry["size"] = (
+                target.stat().st_size
+            )  # kept already (a file that grew while it was hashed: the hashed bytes)
             return True
         except FileNotFoundError:
             pass
@@ -280,7 +291,7 @@ class BlobStore:
                     size += len(chunk)
                 os.fsync(handle.fileno())
             if digest.hexdigest() != entry["sha256"] or size != entry.get("size"):  # changed since it was hashed (or
-                entry.update(sha256=digest.hexdigest(), size=size)                  # while): publish what was kept
+                entry.update(sha256=digest.hexdigest(), size=size)  # while): publish what was kept
                 target = self.blob_path(entry["sha256"])
             os.chmod(temporary, 0o444)
             if not target.is_file():

@@ -39,20 +39,25 @@ def sha(text: str) -> str:
 
 
 def entries_of(files: dict) -> list[dict]:
-    return [{"path": path, "sha256": sha(text), "size": len(text.encode()), "mtime": 123.0} for path, text in files.items()]
+    return [
+        {"path": path, "sha256": sha(text), "size": len(text.encode()), "mtime": 123.0} for path, text in files.items()
+    ]
 
 
 # --------------------------------------------------------------------- the digest
 
 
 def test_digest_canonical_form_golden_value():
-    entries = [{"path": "b/ü.txt", "sha256": sha("two"), "size": 3, "mtime": 5.0},
-               {"path": "a.txt", "sha256": sha("hi"), "size": 2},
-               {"path": "latest", "link": "a.txt"}]
+    entries = [
+        {"path": "b/ü.txt", "sha256": sha("two"), "size": 3, "mtime": 5.0},
+        {"path": "a.txt", "sha256": sha("hi"), "size": 2},
+        {"path": "latest", "link": "a.txt"},
+    ]
     assert canonical(entries) == (
         '[{"path":"a.txt","sha256":"8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4","size":2},'
         f'{{"path":"b/ü.txt","sha256":"{sha("two")}","size":3}},'
-        '{"link":"a.txt","path":"latest"}]').encode("utf-8")
+        '{"link":"a.txt","path":"latest"}]'
+    ).encode("utf-8")
     assert manifest_digest(entries) == "sha256:" + hashlib.sha256(canonical(entries)).hexdigest()
     assert manifest_digest(entries) == "sha256:8a186c75adc6d60b6de7608066077091572872de4e538e80fa784dbe09929af5"
     assert manifest_digest([]) == "sha256:" + hashlib.sha256(b"[]").hexdigest()
@@ -69,12 +74,16 @@ def test_local_digest_depends_on_files_only(env):
     c = local.publish("study", "c", entries_of({"x.txt": "2"}))
     digest_a, digest_b, digest_c = (local.get_version("study", name, 1)["digest"] for name in "abc")
     assert (a, b, c) == (1, 1, 1)
-    assert digest_a == digest_b == manifest_digest(entries_of({"x.txt": "1"}))  # same files: same digest, whatever the rest
+    assert (
+        digest_a == digest_b == manifest_digest(entries_of({"x.txt": "1"}))
+    )  # same files: same digest, whatever the rest
     assert digest_c != digest_a
     # a publish of the same files with other metadata is a new version with the same digest
     assert local.publish("study", "a", entries_of({"x.txt": "1"}), metadata={"n": 99}) == 2
     assert local.get_version("study", "a", 2)["digest"] == digest_a
-    assert local.publish("study", "a", entries_of({"x.txt": "1"}), metadata={"n": 99}) == 2  # unchanged: no third version
+    assert (
+        local.publish("study", "a", entries_of({"x.txt": "1"}), metadata={"n": 99}) == 2
+    )  # unchanged: no third version
     # a running version gets its digest when it completes
     number = local.start_version("study", "r")
     assert "digest" not in local.get_version("study", "r", number)
@@ -87,8 +96,13 @@ def test_object_api_cli_and_pull_see_the_digest(env, capsys):
     data = folder(env, "d", {"a.txt": "hi", "sub/b.txt": "two"})
     (data / "latest").symlink_to("sub")
     version = store.connect().artifact("data").publish(data)
-    expected = manifest_digest([{"path": "a.txt", "sha256": sha("hi"), "size": 2}, {"path": "sub/b.txt", "sha256": sha("two"), "size": 3},
-                                {"path": "latest", "link": "sub"}])
+    expected = manifest_digest(
+        [
+            {"path": "a.txt", "sha256": sha("hi"), "size": 2},
+            {"path": "sub/b.txt", "sha256": sha("two"), "size": 3},
+            {"path": "latest", "link": "sub"},
+        ]
+    )
     assert version.digest == expected
     out, _ = run(capsys, "show", "data@v1")
     assert f"digest       {expected}" in out
@@ -159,7 +173,10 @@ def test_existing_versions_get_digests_when_the_store_opens(tmp_path):
     connection.close()
     reopened = LocalRepo(root)
     assert [version.get("digest") for version in reopened.versions("study", "a")] == [
-        manifest_digest(entries_of({"x.txt": "hi"})), manifest_digest(entries_of({"y.txt": "hi"})), None]
+        manifest_digest(entries_of({"x.txt": "hi"})),
+        manifest_digest(entries_of({"y.txt": "hi"})),
+        None,
+    ]
     assert "digest" not in reopened.get_version("study", "a", running)
     connection = sqlite3.connect(root / "metadata.sqlite3")
     assert connection.execute("SELECT value FROM meta WHERE key = 'digests'").fetchone() == ("done",)
@@ -170,6 +187,7 @@ def test_existing_versions_get_digests_when_the_store_opens(tmp_path):
 
 def no_clone_no_link(monkeypatch):
     """The cache module sees a filesystem that can neither clone nor hard link (the rest of cairn is unaffected)."""
+
     class NoLinks:
         def __getattr__(self, name):
             return getattr(os, name)
@@ -216,7 +234,9 @@ def test_hard_links_are_the_read_only_fallback(env, monkeypatch):
     monkeypatch.setattr(cache_module, "clone", lambda source, target: False)
     backend, version = local_pull(env)
     pulled = version.pull() / "a.txt"
-    assert os.stat(pulled).st_ino == os.stat(backend.blob_path(sha("hello"))).st_ino  # shared: that is why it is read-only
+    assert (
+        os.stat(pulled).st_ino == os.stat(backend.blob_path(sha("hello"))).st_ino
+    )  # shared: that is why it is read-only
     assert not stat.S_IMODE(os.stat(pulled).st_mode) & 0o222
     assert not os.access(pulled, os.W_OK)
 
@@ -245,7 +265,9 @@ def test_a_wrong_manifest_digest_fails_the_pull(env):
     from cairn.store.folders import materialize_version
 
     with pytest.raises(StoreError, match="manifest digest"):
-        materialize_version(backend, "data", {**state, "digest": "sha256:" + "1" * 64, "uid": "0190" + state["uid"][4:]}, backend.root)
+        materialize_version(
+            backend, "data", {**state, "digest": "sha256:" + "1" * 64, "uid": "0190" + state["uid"][4:]}, backend.root
+        )
     assert not [p for p in (backend.root / "versions").iterdir()]
 
 
@@ -343,7 +365,11 @@ def test_verify_a_store_finds_corrupt_and_missing_blobs(tmp_path, capsys):
     report = local.verify()
     kinds = sorted((problem.kind, problem.path) for problem in report.problems)
     assert any(path == str(corrupt) for _, path in kinds)  # the blob does not match its name
-    assert any("b@v1 (project study)" in path and "missing" in problem.message for problem in report.problems for path in [problem.path])
+    assert any(
+        "b@v1 (project study)" in path and "missing" in problem.message
+        for problem in report.problems
+        for path in [problem.path]
+    )
     out, err = run(capsys, "verify", "--repo", str(root), code=1)
     assert str(corrupt) in out and "b@v1 (project study)" in out and "problems" in err
 

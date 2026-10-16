@@ -55,11 +55,40 @@ from typing import TYPE_CHECKING
 
 from ._version import __version__
 from .api import public
-from .store import (Ambiguous, BadRange, Conflict, Deleted, FileRead, Forbidden, InvalidRef, LocalRepo, MissingBlobs, NoRun, NotFound,
-                    Protected, Ref, StoreError, Unauthorized, Unreachable)
+from .store import (
+    Ambiguous,
+    BadRange,
+    Conflict,
+    Deleted,
+    FileRead,
+    Forbidden,
+    InvalidRef,
+    LocalRepo,
+    MissingBlobs,
+    NoRun,
+    NotFound,
+    Protected,
+    Ref,
+    StoreError,
+    Unauthorized,
+    Unreachable,
+)
 
-for _error in (Ambiguous, BadRange, Conflict, Deleted, Forbidden, InvalidRef, MissingBlobs, NoRun, NotFound, Protected,
-               StoreError, Unauthorized, Unreachable):
+for _error in (
+    Ambiguous,
+    BadRange,
+    Conflict,
+    Deleted,
+    Forbidden,
+    InvalidRef,
+    MissingBlobs,
+    NoRun,
+    NotFound,
+    Protected,
+    StoreError,
+    Unauthorized,
+    Unreachable,
+):
     _error.__module__ = __name__  # tracebacks name them as they are imported: cairn.NotFound
 del _error
 
@@ -69,14 +98,62 @@ if TYPE_CHECKING:
     from .client.objects import Artifact, File, Repo, Version
     from .client.remote import Remote
 
-__all__ = ["__version__", "Ambiguous", "Artifact", "BadRange", "Conflict", "Deleted", "Draft", "File", "FileRead", "Forbidden",
-           "InvalidRef", "LocalRepo", "MissingBlobs", "NoRun", "NotFound", "Protected", "Ref", "Remote", "Run", "Repo", "StoreError",
-           "Unauthorized", "Unreachable", "Version", "alias", "connect", "lineage", "Publication", "current_draft", "draft", "init",
-           "open_repo", "publish", "pull", "run", "use", "versions"]
+__all__ = [
+    "__version__",
+    "Ambiguous",
+    "Artifact",
+    "BadRange",
+    "Conflict",
+    "Deleted",
+    "Draft",
+    "File",
+    "FileRead",
+    "Forbidden",
+    "InvalidRef",
+    "LocalRepo",
+    "MissingBlobs",
+    "NoRun",
+    "NotFound",
+    "Protected",
+    "Ref",
+    "Remote",
+    "Run",
+    "Repo",
+    "StoreError",
+    "Unauthorized",
+    "Unreachable",
+    "Version",
+    "alias",
+    "connect",
+    "lineage",
+    "Publication",
+    "current_draft",
+    "draft",
+    "init",
+    "open_repo",
+    "publish",
+    "pull",
+    "run",
+    "use",
+    "versions",
+]
 
-_CLIENT = {"Remote": "remote", "open_repo": "open", "Publication": "publishing", "publish": "publishing",
-           "connect": "objects", "Repo": "objects", "Artifact": "objects", "Version": "objects",
-           "File": "objects", "Draft": "drafts", "draft": "drafts", "current_draft": "drafts", "Run": "runs", "init": "runs"}
+_CLIENT = {
+    "Remote": "remote",
+    "open_repo": "open",
+    "Publication": "publishing",
+    "publish": "publishing",
+    "connect": "objects",
+    "Repo": "objects",
+    "Artifact": "objects",
+    "Version": "objects",
+    "File": "objects",
+    "Draft": "drafts",
+    "draft": "drafts",
+    "current_draft": "drafts",
+    "Run": "runs",
+    "init": "runs",
+}
 
 
 def __getattr__(name: str):
@@ -132,7 +209,11 @@ class _CurrentRun:
         from .client import runs
 
         current = runs.current()
-        return current is (other._get() if isinstance(other, _CurrentRun) else other) if current is not None else other is None
+        return (
+            current is (other._get() if isinstance(other, _CurrentRun) else other)
+            if current is not None
+            else other is None
+        )
 
     __hash__ = object.__hash__
 

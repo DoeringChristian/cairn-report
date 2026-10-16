@@ -44,8 +44,12 @@ def test_export_metadata(tmp_path, capsys):
     out = capsys.readouterr().out
     assert re.search(r"versions.jsonl +4 rows", out) and re.search(r"aliases.jsonl +4 rows", out), out
     versions = [json.loads(line) for line in (tmp_path / "out" / "versions.jsonl").read_text().splitlines()]
-    assert [(v["project"], v["name"], v["version"]) for v in versions] == [("data", "fit", 1), ("data", "sets/crops", 1),
-                                                                        ("data", "sets/crops", 2), ("models", "fit", 1)]
+    assert [(v["project"], v["name"], v["version"]) for v in versions] == [
+        ("data", "fit", 1),
+        ("data", "sets/crops", 1),
+        ("data", "sets/crops", 2),
+        ("models", "fit", 1),
+    ]
     projects = [json.loads(line) for line in (tmp_path / "out" / "projects.jsonl").read_text().splitlines()]
     assert [p["name"] for p in projects] == ["data", "models"]
     consumers = [json.loads(line) for line in (tmp_path / "out" / "consumers.jsonl").read_text().splitlines()]
@@ -82,10 +86,12 @@ def test_a_failure_inside_a_publish_stores_none_of_it(tmp_path, monkeypatch):
 def test_a_process_killed_inside_a_publish_stores_none_of_it(tmp_path):
     store, entries = fresh(tmp_path)
     store.publish("p", "x", entries)
-    script = ("import os, sys, json; from cairn import LocalRepo\n"
-              "def die(*args, **kwargs): os._exit(3)  # killed: no rollback, no cleanup\n"
-              "LocalRepo._completed = die\n"
-              "LocalRepo(sys.argv[1]).publish('p', 'x', json.loads(sys.argv[2]), metadata={'n': 2})\n")
+    script = (
+        "import os, sys, json; from cairn import LocalRepo\n"
+        "def die(*args, **kwargs): os._exit(3)  # killed: no rollback, no cleanup\n"
+        "LocalRepo._completed = die\n"
+        "LocalRepo(sys.argv[1]).publish('p', 'x', json.loads(sys.argv[2]), metadata={'n': 2})\n"
+    )
     result = subprocess.run([sys.executable, "-c", script, str(store.root), json.dumps(entries)])
     assert result.returncode == 3
     again = LocalRepo(store.root)

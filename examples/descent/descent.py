@@ -33,8 +33,8 @@ def trajectory(points: np.ndarray, A: np.ndarray):
 
 
 def main(config: dict) -> "cairn.Version":
-    cairn.init(name="descent", config=config)                  # runs/descent@v<n>, running until the script exits
-    data = cairn.use(config["dataset"])                         # an input of the run, at its exact version
+    cairn.init(name="descent", config=config)  # runs/descent@v<n>, running until the script exits
+    data = cairn.use(config["dataset"])  # an input of the run, at its exact version
     problem = json.loads((data.path / "problem.json").read_text())
     A, x, rate = np.array(problem["A"]), np.array(problem["x0"]), config["learning_rate"]
     points = [x.copy()]
@@ -44,7 +44,7 @@ def main(config: dict) -> "cairn.Version":
         cairn.run.add({"loss": float(0.5 * x @ A @ x), "step": step})  # the loss curve, in the run's metrics.jsonl
     loss = float(0.5 * x @ A @ x)
     print(f"final loss {loss:.3e} after {config['steps']} steps")  # also in the run's logs/stdout.txt
-    with cairn.draft("descent") as result:                      # the result artifact: an output of the run
+    with cairn.draft("descent") as result:  # the result artifact: an output of the run
         result.add_json("final", {"loss": loss, "steps": config["steps"], "learning_rate": rate}, {"dataset": data.ref})
         result.add_figure("trajectory", trajectory, {"steps": config["steps"]}, np.array(points), A)
     print(f"published {result.version.ref} ({result.version.short_id}) from {data.ref}")  # the block published it

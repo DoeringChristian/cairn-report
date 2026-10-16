@@ -66,8 +66,17 @@ def _label() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
-def reserve(name: str, *, label: str | None = None, metadata: dict | None = None, aliases=(), watch: bool = False,
-            folder: Path | None = None, uid: str | None = None, **extra) -> tuple[Path, dict]:
+def reserve(
+    name: str,
+    *,
+    label: str | None = None,
+    metadata: dict | None = None,
+    aliases=(),
+    watch: bool = False,
+    folder: Path | None = None,
+    uid: str | None = None,
+    **extra,
+) -> tuple[Path, dict]:
     """Make a draft's folder (`folder`, default `<drafts root>/<name>/<uid>/`, fresh) and write its record."""
     target = refs.parse(name)
     if target.selector or target.path:
@@ -79,10 +88,18 @@ def reserve(name: str, *, label: str | None = None, metadata: dict | None = None
     given = folder is not None
     folder = Path(folder) if given else drafts_root() / target.name / uid
     folder.mkdir(parents=True, exist_ok=given)  # a given folder is a Hydra job's: Hydra made it
-    record = {"uid": uid, "name": target.name, "label": label,
-              "metadata": metadata, "aliases": list(aliases), "watch": bool(watch),
-              "created": datetime.now(timezone.utc).isoformat(), "owner": {"host": socket.gethostname(), "pid": os.getpid()},
-              "state": "open", **extra}
+    record = {
+        "uid": uid,
+        "name": target.name,
+        "label": label,
+        "metadata": metadata,
+        "aliases": list(aliases),
+        "watch": bool(watch),
+        "created": datetime.now(timezone.utc).isoformat(),
+        "owner": {"host": socket.gethostname(), "pid": os.getpid()},
+        "state": "open",
+        **extra,
+    }
     write_json(_record_path(folder), record)
     return folder.resolve(), record
 
@@ -98,8 +115,19 @@ class Draft(Writer):
 
     is_run = False
 
-    def __init__(self, name: str, *, label: str | None = None, metadata: dict | None = None, aliases=(), watch: bool = False,
-                 config: dict | None = None, interval: float | None = None, activate: bool = True, _repo=None):
+    def __init__(
+        self,
+        name: str,
+        *,
+        label: str | None = None,
+        metadata: dict | None = None,
+        aliases=(),
+        watch: bool = False,
+        config: dict | None = None,
+        interval: float | None = None,
+        activate: bool = True,
+        _repo=None,
+    ):
         if config is not None:
             metadata = {**(metadata or {}), "config": config}
         folder, record = reserve(name, label=label, metadata=metadata, aliases=aliases, watch=watch)
@@ -155,7 +183,12 @@ class Draft(Writer):
         """`open` (its owner may still write), `abandoned` (open, its process on this host is gone), or `kept`."""
         state = self.record.get("state", "open")
         owner = self.record.get("owner") or {}
-        if state == "open" and owner.get("host") == socket.gethostname() and owner.get("pid") and not _pid_alive(owner["pid"]):
+        if (
+            state == "open"
+            and owner.get("host") == socket.gethostname()
+            and owner.get("pid")
+            and not _pid_alive(owner["pid"])
+        ):
             return "abandoned"
         return state
 
@@ -299,9 +332,15 @@ class Draft(Writer):
         from .publishing import Publication
 
         target = self.target
-        self._pub = Publication(target.name, self.folder, metadata=self.record.get("metadata"),
-                                aliases=self.record.get("aliases") or (), label=self.label, _repo=self.store.backend,
-                                uid=self.uid)
+        self._pub = Publication(
+            target.name,
+            self.folder,
+            metadata=self.record.get("metadata"),
+            aliases=self.record.get("aliases") or (),
+            label=self.label,
+            _repo=self.store.backend,
+            uid=self.uid,
+        )
         self._pub.start()
         self.version = target.version(self._pub.uid)
         self.record["running"] = {"uid": self._pub.uid, "number": self._pub.version}
@@ -310,8 +349,9 @@ class Draft(Writer):
             return
         interval = float(self._interval if self._interval is not None else self._pub.config.repo.get("interval", 30))
         self._stop = threading.Event()
-        self._watcher = threading.Thread(target=self._follow, args=(self._stop, interval), name=f"cairn-draft {self.uid}",
-                                         daemon=True)
+        self._watcher = threading.Thread(
+            target=self._follow, args=(self._stop, interval), name=f"cairn-draft {self.uid}", daemon=True
+        )
         self._watcher.start()
 
     def _follow(self, stop: threading.Event, interval: float) -> None:
@@ -354,8 +394,10 @@ class Draft(Writer):
         if self._closed:
             raise StoreError(f"the draft {self.uid} was already published or discarded")
         if self.trial:
-            raise StoreError(f"{self.path} is a trial of the draft {self.folder}: the whole draft is published (the study"
-                             " completes), not one trial")
+            raise StoreError(
+                f"{self.path} is a trial of the draft {self.folder}: the whole draft is published (the study"
+                " completes), not one trial"
+            )
 
     def _save(self) -> None:
         write_json(_record_path(self.folder), self.record)
@@ -382,9 +424,16 @@ class Draft(Writer):
                 uid = None if record.get("running") or record.get("attempted") else self.uid
                 record["attempted"] = True
                 self._save()
-                version = self.target.publish(self.folder, metadata=record.get("metadata"), aliases=record.get("aliases") or (),
-                                              label=self.label, inputs=inputs, allow_incomplete=allow_incomplete,
-                                              _link=True, _uid=uid)
+                version = self.target.publish(
+                    self.folder,
+                    metadata=record.get("metadata"),
+                    aliases=record.get("aliases") or (),
+                    label=self.label,
+                    inputs=inputs,
+                    allow_incomplete=allow_incomplete,
+                    _link=True,
+                    _uid=uid,
+                )
         except BaseException as error:
             self._keep(error)
             raise
@@ -457,7 +506,9 @@ class Draft(Writer):
             root = None
         shutil.rmtree(self.folder, ignore_errors=True)
         _record_path(self.folder).unlink(missing_ok=True)
-        if root is None or find(self.folder.parent) is not None:  # a trial's folder inside its sweep's: the sweep's stays
+        if (
+            root is None or find(self.folder.parent) is not None
+        ):  # a trial's folder inside its sweep's: the sweep's stays
             return
         parent = self.folder.parent.resolve()
         while parent != root and root in parent.parents:
@@ -486,8 +537,15 @@ def _unshare(folder: Path) -> None:
 
 
 @public("cairn.draft")
-def draft(name: str, *, label: str | None = None, metadata: dict | None = None, aliases=(), watch: bool = False,
-          config: dict | None = None) -> Draft:
+def draft(
+    name: str,
+    *,
+    label: str | None = None,
+    metadata: dict | None = None,
+    aliases=(),
+    watch: bool = False,
+    config: dict | None = None,
+) -> Draft:
     """A fresh, empty folder managed by Cairn (`.path`) that becomes the next version of `name` when it closes.
 
         with cairn.draft("models/student") as model:
@@ -538,7 +596,9 @@ def load(where: Path | str) -> Draft:
         matches = [item for item in drafts() if item.uid.startswith(text)]
         if len(matches) == 1:
             return matches[0]
-        raise StoreError(f"no draft {text!r}" if not matches else f"{text!r} names {len(matches)} drafts: give more of the uid")
+        raise StoreError(
+            f"no draft {text!r}" if not matches else f"{text!r} names {len(matches)} drafts: give more of the uid"
+        )
     found = find(text)
     if found is None:
         raise StoreError(f"{text} is not inside a draft folder (`cairn drafts` lists them)")

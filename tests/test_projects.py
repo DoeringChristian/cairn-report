@@ -194,7 +194,16 @@ def test_another_repo_never_feeds_inputs_into_this_projects_run(study, tmp_path)
 def test_the_public_functions_take_no_store():
     import inspect
 
-    for function in (cairn.use, cairn.pull, cairn.publish, cairn.draft, cairn.alias, cairn.versions, cairn.lineage, cairn.init):
+    for function in (
+        cairn.use,
+        cairn.pull,
+        cairn.publish,
+        cairn.draft,
+        cairn.alias,
+        cairn.versions,
+        cairn.lineage,
+        cairn.init,
+    ):
         assert "store" not in inspect.signature(function).parameters, function
 
 
@@ -243,7 +252,9 @@ def test_projects_on_a_server_share_its_blobs_and_stay_apart(server, tmp_path, m
     monkeypatch.chdir(tmp_path / "beta")
     with pytest.raises(cairn.NotFound, match=f"on the remote {server.url}/beta"):
         cairn.use("nothing@latest")
-    assert cairn.connect().version(f"datasets/crops@{beta['short_id']}").short_id == beta["short_id"]  # the same id there
+    assert (
+        cairn.connect().version(f"datasets/crops@{beta['short_id']}").short_id == beta["short_id"]
+    )  # the same id there
 
 
 def test_the_token_creates_a_project_on_its_first_sync(server, tmp_path, monkeypatch):

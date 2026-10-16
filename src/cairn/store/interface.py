@@ -74,8 +74,14 @@ class Repository(Protocol):
 
     # ------------------------------------------------------------------ writing
 
-    def start_version(self, name: str, label: str | None = None, metadata: dict | None = None,
-                      source: dict | None = None, uid: str | None = None) -> int:
+    def start_version(
+        self,
+        name: str,
+        label: str | None = None,
+        metadata: dict | None = None,
+        source: dict | None = None,
+        uid: str | None = None,
+    ) -> int:
         """Start a running version (idempotent by uid); returns its number."""
 
     def add_files(self, name: str, version: int, entries: list[dict]) -> None: ...
@@ -86,14 +92,26 @@ class Repository(Protocol):
 
     def fail_version(self, name: str, version: int) -> None: ...
 
-    def publish(self, name: str, entries: list[dict], label: str | None = None, metadata: dict | None = None,
-                inputs=None, aliases=(), source: dict | None = None, uid: str | None = None, digest: str | None = None) -> int:
+    def publish(
+        self,
+        name: str,
+        entries: list[dict],
+        label: str | None = None,
+        metadata: dict | None = None,
+        inputs=None,
+        aliases=(),
+        source: dict | None = None,
+        uid: str | None = None,
+        digest: str | None = None,
+    ) -> int:
         """Start, fill, and complete a version in one step (idempotent by uid; no new version when nothing changed
         since the latest); returns its number."""
 
     def set_alias(self, name: str, alias: str, version: int) -> None: ...
 
-    def delete_version(self, name: str, version: int | str, *, reason: str | None = None, force: bool = False) -> dict: ...
+    def delete_version(
+        self, name: str, version: int | str, *, reason: str | None = None, force: bool = False
+    ) -> dict: ...
 
     def delete_artifact(self, name: str, *, reason: str | None = None, force: bool = False) -> dict: ...
 
@@ -105,4 +123,6 @@ class Repository(Protocol):
         """Retention rules and the blob sweep of the whole repo folder (on a remote: the server's, owner token only)."""
 
 
-METHODS = [name for name in Repository.__dict__ if not name.startswith("_") and callable(getattr(Repository, name))] + ["uid"]
+METHODS = [name for name in Repository.__dict__ if not name.startswith("_") and callable(getattr(Repository, name))] + [
+    "uid"
+]

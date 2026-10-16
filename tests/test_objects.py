@@ -34,7 +34,13 @@ def test_object_api_end_to_end(configured, env, monkeypatch):
     crops = store.artifact("datasets/crops")
     data = folder(env, "crops", {"a.txt": "one", "sub/b.txt": "two"})
     v1 = crops.publish(data, metadata={"n": 1}, aliases=["paper"], label="first")
-    assert (v1.number, v1.ref, v1.label, v1.status, v1.metadata) == (1, "datasets/crops@v1", "first", "completed", {"n": 1})
+    assert (v1.number, v1.ref, v1.label, v1.status, v1.metadata) == (
+        1,
+        "datasets/crops@v1",
+        "first",
+        "completed",
+        {"n": 1},
+    )
     assert UID.fullmatch(v1.uid) and v1.created and v1.source["folder"] == str(data.resolve())
     assert [(f.path, f.size) for f in v1.files] == [("a.txt", 3), ("sub/b.txt", 3)] and v1.files[0].sha256
     assert crops.publish(data, metadata={"n": 1}) == v1  # unchanged: the same version
@@ -70,7 +76,10 @@ def test_object_api_end_to_end(configured, env, monkeypatch):
     path = v1.pull()
     assert path.parent.name == v1.uid and path.name == "files" and (path / "a.txt").read_text() == "one"
     assert [json.loads(line)["ref"] for line in inputs.read_text().splitlines()] == [
-        "datasets/crops@v1", "datasets/crops@v2", "datasets/crops@v1"]
+        "datasets/crops@v1",
+        "datasets/crops@v2",
+        "datasets/crops@v1",
+    ]
 
     with crops.publishing(env / "live", label="running") as pub:
         (env / "live").mkdir(exist_ok=True)
@@ -122,7 +131,9 @@ def run(capsys, *argv):
 
 
 def test_cli_artifacts_versions_show(configured, env, capsys):
-    cairn.publish("datasets/crops", folder(env, "d", {"a.txt": "1", "b.txt": "22"}), metadata={"n": 2}, aliases=["paper"])
+    cairn.publish(
+        "datasets/crops", folder(env, "d", {"a.txt": "1", "b.txt": "22"}), metadata={"n": 2}, aliases=["paper"]
+    )
     cairn.publish("models/fit", folder(env, "m", {"w.bin": "w"}), inputs=["datasets/crops@v1"])
     lines = run(capsys, "artifacts").splitlines()[1:]  # under the header
     assert [line.split()[0] for line in lines] == ["datasets/crops", "models/fit"] and "paper->v1" in lines[0]

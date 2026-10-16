@@ -26,8 +26,8 @@ from .digest import manifest_digest, sha256_file
 
 @dataclass
 class Problem:
-    kind: str       # blob | file | link | digest | version
-    path: str       # the file or folder concerned (or `name@vN` for a repo's version)
+    kind: str  # blob | file | link | digest | version
+    path: str  # the file or folder concerned (or `name@vN` for a repo's version)
     message: str
     repaired: bool = False
 
@@ -39,6 +39,7 @@ class Problem:
 class Report:
     """What a verification found. `ok` is True when nothing is wrong any more (a problem that `repair` removed
     does not count); `checked` counts what was looked at."""
+
     problems: list[Problem] = field(default_factory=list)
     checked: dict[str, int] = field(default_factory=lambda: {"versions": 0, "files": 0, "blobs": 0})
 
@@ -66,11 +67,17 @@ class Report:
     def summary(self) -> str:
         counted = ", ".join(f"{value} {key}" for key, value in self.checked.items())
         fixed = sum(problem.repaired for problem in self.problems)
-        found = f"{len(self.problems)} problems" + (f", {fixed} repaired" if fixed else "") if self.problems else "no problems"
+        found = (
+            f"{len(self.problems)} problems" + (f", {fixed} repaired" if fixed else "")
+            if self.problems
+            else "no problems"
+        )
         return f"checked {counted}: {found}"
 
 
-def check_entries(folder: Path, entries: list[dict], report: Report, digest: str | None = None, label: str = "") -> bool:
+def check_entries(
+    folder: Path, entries: list[dict], report: Report, digest: str | None = None, label: str = ""
+) -> bool:
     """Compare a version's `files/` folder with the entries it was made from (contents, sizes, symlinks, extra
     files) and its manifest digest; True if all is well. Problems are added to `report`."""
     before = len(report.problems)
@@ -94,15 +101,26 @@ def check_entries(folder: Path, entries: list[dict], report: Report, digest: str
             report.add("file", path, f"cannot be read ({error.strerror or error})")
             continue
         if sha != entry["sha256"] or size != entry["size"]:
-            report.add("file", path, f"its contents hash to {sha[:16]}..., the manifest says {entry['sha256'][:16]}..." if sha != entry["sha256"]
-                       else f"is {size} bytes, the manifest says {entry['size']}")
+            report.add(
+                "file",
+                path,
+                (
+                    f"its contents hash to {sha[:16]}..., the manifest says {entry['sha256'][:16]}..."
+                    if sha != entry["sha256"]
+                    else f"is {size} bytes, the manifest says {entry['size']}"
+                ),
+            )
     for root, folders, names in os.walk(folder):
         for name in [*folders, *names]:
             relative = (Path(root) / name).relative_to(folder).as_posix()
             if relative not in wanted and not any(item.startswith(relative + "/") for item in wanted):
                 report.add("file", Path(root) / name, "is not in the manifest")
     if digest is not None and manifest_digest(entries) != digest:
-        report.add("digest", label or folder, f"the manifest's files hash to {manifest_digest(entries)}, not the recorded {digest}")
+        report.add(
+            "digest",
+            label or folder,
+            f"the manifest's files hash to {manifest_digest(entries)}, not the recorded {digest}",
+        )
     return len(report.problems) == before
 
 
@@ -194,13 +212,21 @@ def verify_store(store) -> Report:
                         report.add("blob", label, f"{entry['path']}: the blob {entry['sha256'][:16]}... is missing")
                         continue
                     if size != entry["size"]:
-                        report.add("blob", label, f"{entry['path']}: the blob is {size} bytes, the manifest says {entry['size']}")
+                        report.add(
+                            "blob",
+                            label,
+                            f"{entry['path']}: the blob is {size} bytes, the manifest says {entry['size']}",
+                        )
                 if version["status"] != "completed":
                     continue
                 if not version.get("digest"):
                     report.add("digest", label, "the version has no manifest digest")
                 elif manifest_digest(version["files"]) != version["digest"]:
-                    report.add("digest", label, f"its files hash to {manifest_digest(version['files'])}, not the recorded {version['digest']}")
+                    report.add(
+                        "digest",
+                        label,
+                        f"its files hash to {manifest_digest(version['files'])}, not the recorded {version['digest']}",
+                    )
     return report
 
 
@@ -213,12 +239,24 @@ def verify_outbox(outbox, root: Path) -> Report:
         label = f"{record['name']}@{record['uid']}"
         report.count("versions")
         entries = record.get("files") or []
-        if record.get("status") == "completed" and record.get("digest") and manifest_digest(entries) != record["digest"]:
-            report.add("digest", label, f"the entry's files hash to {manifest_digest(entries)}, not the recorded {record['digest']}")
+        if (
+            record.get("status") == "completed"
+            and record.get("digest")
+            and manifest_digest(entries) != record["digest"]
+        ):
+            report.add(
+                "digest",
+                label,
+                f"the entry's files hash to {manifest_digest(entries)}, not the recorded {record['digest']}",
+            )
         for entry in entries:
             if "sha256" in entry and not blob_path(root, entry["sha256"]).is_file():
-                report.add("blob", label, f"{entry['path']}: the blob {entry['sha256'][:16]}... is missing from the repo: this "
-                           "pending version cannot be sent")
+                report.add(
+                    "blob",
+                    label,
+                    f"{entry['path']}: the blob {entry['sha256'][:16]}... is missing from the repo: this "
+                    "pending version cannot be sent",
+                )
     return report
 
 
@@ -228,9 +266,16 @@ def verify_copies(copies: list[tuple[str, dict]]) -> Report:
     report = Report()
     for name, state in copies:
         report.count("versions")
-        if state["status"] == "completed" and state.get("digest") and manifest_digest(state["files"]) != state["digest"]:
-            report.add("digest", f"{name}@v{state['version']}",
-                       f"its files hash to {manifest_digest(state['files'])}, not the recorded {state['digest']}")
+        if (
+            state["status"] == "completed"
+            and state.get("digest")
+            and manifest_digest(state["files"]) != state["digest"]
+        ):
+            report.add(
+                "digest",
+                f"{name}@v{state['version']}",
+                f"its files hash to {manifest_digest(state['files'])}, not the recorded {state['digest']}",
+            )
     return report
 
 
@@ -245,7 +290,9 @@ def verify_version(root: Path | None, label: str, version: dict, own: bool, repa
     report.count("versions")
     entries, digest = version["files"], version.get("digest")
     if digest is not None and manifest_digest(entries) != digest:
-        report.add("digest", label, f"the manifest's files hash to {manifest_digest(entries)}, not the recorded {digest}")
+        report.add(
+            "digest", label, f"the manifest's files hash to {manifest_digest(entries)}, not the recorded {digest}"
+        )
     elif digest is None and version.get("status") == "completed":
         report.add("digest", label, "the version has no manifest digest")
     if root is None:
@@ -259,7 +306,9 @@ def verify_version(root: Path | None, label: str, version: dict, own: bool, repa
         blob = blob_path(root, entry["sha256"])
         if not blob.is_file():
             if own:
-                report.add("blob", label, f"{entry['path']}: the blob {entry['sha256'][:16]}... is missing from the repo")
+                report.add(
+                    "blob", label, f"{entry['path']}: the blob {entry['sha256'][:16]}... is missing from the repo"
+                )
             continue
         report.count("blobs")
         sha, _ = sha256_file(blob)

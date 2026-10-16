@@ -49,8 +49,12 @@ from pathlib import Path
 CONFIG_FILE = "config.toml"  # inside the repo
 BASE_ENV = "CAIRN_DIR"
 BASE_NAME = ".cairn"
-SECTIONS = {"remote": {"url"}, "repo": {"interval", "heartbeat_timeout", "allow_network_fs", "exclude"},
-            "reports": {"dir", "output_dir"}, "style": {"css", "template_dir"}}
+SECTIONS = {
+    "remote": {"url"},
+    "repo": {"interval", "heartbeat_timeout", "allow_network_fs", "exclude"},
+    "reports": {"dir", "output_dir"},
+    "style": {"css", "template_dir"},
+}
 TEMPLATE = """\
 # Cairn settings for this project; paths are relative to the project folder (the one holding .cairn/).
 # Every key is optional. The token never goes here: CAIRN_TOKEN, .cairn/token, or ~/.config/cairn/token.
@@ -73,7 +77,9 @@ class Config:
     template_dir: Path | None = None
     repo: dict = field(default_factory=dict)  # the [repo] table, and `remote`: [remote] url
     found: bool = True  # False: nothing was found, so the repo is the working directory's `.cairn`, made when opened
-    located: str = ""  # how the repo was found, for messages ("found from the working directory", "named by $CAIRN_DIR")
+    located: str = (
+        ""  # how the repo was found, for messages ("found from the working directory", "named by $CAIRN_DIR")
+    )
 
     @property
     def source(self) -> Path:
@@ -86,6 +92,7 @@ class Location:
     """Where the repo is: `root` the project root, `repo` the repo folder, `marked` whether the walk found a project
     root, `found` whether there is a repo to use without creating one in the working directory (found by the walk, or
     named by $CAIRN_DIR), `how` how it was found (for messages)."""
+
     root: Path
     repo: Path
     marked: bool
@@ -107,8 +114,11 @@ def locate(start: Path | str | None = None, root: Path | str | None = None) -> L
     else:
         folder = next((candidate for candidate in [start, *start.parents] if _marked(candidate)), None)
         marked = folder is not None
-        how = ("found from the working directory" if here else f"found from {start}") if marked else \
-            "the working directory's: no project above it"
+        how = (
+            ("found from the working directory" if here else f"found from {start}")
+            if marked
+            else "the working directory's: no project above it"
+        )
         folder = folder or start
     if os.environ.get(BASE_ENV):
         return Location(folder, Path(os.environ[BASE_ENV]).expanduser().resolve(), marked, True, "named by $CAIRN_DIR")
@@ -140,6 +150,7 @@ def write_template(repo: Path) -> None:
     except OSError:
         pass
 
+
 def protect(base: Path | None, *paths: Path) -> None:
     """Make the base folder and write its `.gitignore` (`*`) if it lacks one; does nothing unless every given
     path lies inside the base. Called wherever a folder inside the base is about to be used. Never raises."""
@@ -167,19 +178,25 @@ def load_config(project: Path | str | None = None) -> Config:
     data = tomllib.loads(source.read_text()) if source.is_file() else {}
     for name, value in data.items():
         if name not in SECTIONS:
-            raise ValueError(f"{source}: unknown key {name!r} (it takes the tables {', '.join(f'[{key}]' for key in SECTIONS)})")
+            raise ValueError(
+                f"{source}: unknown key {name!r} (it takes the tables {', '.join(f'[{key}]' for key in SECTIONS)})"
+            )
         if not isinstance(value, dict):
             raise ValueError(f"{source}: {name} must be a table, [{name}]")
         unknown = set(value) - SECTIONS[name]
         if unknown:
-            raise ValueError(f"{source}: unknown [{name}] keys {sorted(unknown)} (it takes {', '.join(sorted(SECTIONS[name]))})")
+            raise ValueError(
+                f"{source}: unknown [{name}] keys {sorted(unknown)} (it takes {', '.join(sorted(SECTIONS[name]))})"
+            )
     remote, table = data.get("remote", {}), data.get("repo", {})
     reports, style = data.get("reports", {}), data.get("style", {})
     if not isinstance(remote.get("url", ""), str):
         raise ValueError(f"{source}: [remote] url must be text")
     if not isinstance(table.get("allow_network_fs", False), bool):
         raise ValueError(f"{source}: [repo] allow_network_fs must be true or false")
-    if not isinstance(table.get("exclude", []), list) or not all(isinstance(item, str) for item in table.get("exclude", [])):
+    if not isinstance(table.get("exclude", []), list) or not all(
+        isinstance(item, str) for item in table.get("exclude", [])
+    ):
         raise ValueError(f"{source}: [repo] exclude must be a list of glob patterns")
     for key, default in (("interval", 30), ("heartbeat_timeout", 600)):
         value = table.get(key, default)
@@ -230,7 +247,9 @@ def set_remote(file: Path, url: str | None) -> None:
     comments stay as they are. A commented `# [remote]` of the template becomes the table."""
     file = Path(file)
     lines = file.read_text().splitlines() if file.is_file() else []
-    start = next((index for index, line in enumerate(lines) if (m := _TABLE.match(line)) and m.group(1) == "remote"), None)
+    start = next(
+        (index for index, line in enumerate(lines) if (m := _TABLE.match(line)) and m.group(1) == "remote"), None
+    )
     if start is None:
         if url is not None:
             commented = next((index for index, line in enumerate(lines) if re.match(r"^#\s*\[remote\]", line)), None)
@@ -255,7 +274,7 @@ def set_remote(file: Path, url: str | None) -> None:
             for index in reversed(keys):
                 del lines[index]
                 end -= 1
-            if all(not line.strip() or line.lstrip().startswith("#") for line in lines[start + 1:end]):
+            if all(not line.strip() or line.lstrip().startswith("#") for line in lines[start + 1 : end]):
                 del lines[start]
     tidy: list[str] = []
     for line in lines:  # no runs of blank lines where a table was taken out

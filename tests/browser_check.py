@@ -34,13 +34,26 @@ from conftest import make_data, write, write_config  # noqa: E402
 
 def png(path: Path, width: int, height: int) -> None:
     """A gradient PNG of the given size, written without any imaging library (a picture worth zooming into)."""
+
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-    rows = b"".join(b"\0" + bytes(v for x in range(width) for v in ((x * 255) // width, (y * 255) // height, 128 + ((x // 40 + y // 40) % 2) * 90))
-                    for y in range(height))
+
+    rows = b"".join(
+        b"\0"
+        + bytes(
+            v
+            for x in range(width)
+            for v in ((x * 255) // width, (y * 255) // height, 128 + ((x // 40 + y // 40) % 2) * 90)
+        )
+        for y in range(height)
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-                     + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows, 6))
+        + chunk(b"IEND", b"")
+    )
 
 
 def build_data(base: Path, url: str) -> None:
@@ -57,15 +70,25 @@ def build_data(base: Path, url: str) -> None:
     # a run folder with inputs: a script pulls the dataset and writes results
     out = project / "outputs"
     out.mkdir()
-    script = ("import pathlib, sys, json; import cairn as store; src = store.pull('datasets/toy@v2'); "
-              "pathlib.Path(sys.argv[1], 'result.json').write_text(json.dumps({'rmse': 0.25, 'steps': 40}, indent=2)); "
-              "pathlib.Path(sys.argv[1], 'log.txt').write_text('fit done\\n' * 20)")
-    subprocess.run([sys.executable, "-c", script, str(out)], check=True, env=os.environ | {"CAIRN_INPUTS": str(out / ".cairn-inputs.jsonl")})
+    script = (
+        "import pathlib, sys, json; import cairn as store; src = store.pull('datasets/toy@v2'); "
+        "pathlib.Path(sys.argv[1], 'result.json').write_text(json.dumps({'rmse': 0.25, 'steps': 40}, indent=2)); "
+        "pathlib.Path(sys.argv[1], 'log.txt').write_text('fit done\\n' * 20)"
+    )
+    subprocess.run(
+        [sys.executable, "-c", script, str(out)],
+        check=True,
+        env=os.environ | {"CAIRN_INPUTS": str(out / ".cairn-inputs.jsonl")},
+    )
     main(["publish", str(out), "toy-fit"])
-    write(project / "reports" / "summary" / "report.md", (
-        "---\ntitle: Toy fit summary\nstatus: active\nsummary: The fit of the toy data.\ninputs:\n  fit: toy-fit@latest\n  toy: datasets/toy@v2\n---\n\n"
-        "```python exec hide\nresult = (inputs.fit / 'result.json').read_text()\n```\n\n"
-        "## Result\n\nThe fit finished: {{ len(result) }} characters.\n\n![Histogram](input:toy/figures/hist.png)\n"))
+    write(
+        project / "reports" / "summary" / "report.md",
+        (
+            "---\ntitle: Toy fit summary\nstatus: active\nsummary: The fit of the toy data.\ninputs:\n  fit: toy-fit@latest\n  toy: datasets/toy@v2\n---\n\n"
+            "```python exec hide\nresult = (inputs.fit / 'result.json').read_text()\n```\n\n"
+            "## Result\n\nThe fit finished: {{ len(result) }} characters.\n\n![Histogram](input:toy/figures/hist.png)\n"
+        ),
+    )
     main(["publish", "reports/summary"])
     main(["publish", "reports/summary"])  # an unchanged report adds no version; edit it for a second one
     report = project / "reports" / "summary" / "report.md"
@@ -76,8 +99,10 @@ def build_data(base: Path, url: str) -> None:
     for i in range(10):
         (long / f"part-{i:02d}.txt").write_text(f"part {i}\n" * 5)
     png(long / "figures" / "wide.png", 1200, 400)  # three images: a gallery to page through in the lightbox
-    (long / "figures" / "tall.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="600" viewBox="0 0 300 600">'
-                                               '<rect width="300" height="600" fill="#dcebe5"/><circle cx="150" cy="300" r="120" fill="#176b5b"/></svg>')
+    (long / "figures" / "tall.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="600" viewBox="0 0 300 600">'
+        '<rect width="300" height="600" fill="#dcebe5"/><circle cx="150" cy="300" r="120" fill="#176b5b"/></svg>'
+    )
     store.publish("datasets/long-set", long)
     store.publish("models/denoiser", toy, inputs=["toy-fit@v1"], aliases=["best"])
     # a run: a script that uses the dataset, logs a curve, and publishes a model (the run is its one input)
@@ -90,13 +115,16 @@ def build_data(base: Path, url: str) -> None:
         "print('training done')\n"
         "time.sleep(0.6)\n"
         "with cairn.draft('models/student') as model:\n"
-        "    model.add_text('weights', 'w')\n")
+        "    model.add_text('weights', 'w')\n"
+    )
     subprocess.run([sys.executable, "train.py"], check=True, cwd=project, env=os.environ)
 
 
 def check_no_overflow(page, label: str) -> None:
     """The files table must not be wider than its card (a long preview line once pushed the file names out of view)."""
-    m = page.evaluate("() => { const w = document.querySelector('.table-wrap'); return w ? [w.scrollWidth, w.clientWidth] : [0, 0]; }")
+    m = page.evaluate(
+        "() => { const w = document.querySelector('.table-wrap'); return w ? [w.scrollWidth, w.clientWidth] : [0, 0]; }"
+    )
     assert m[0] <= m[1] + 1, f"{label}: table scrolls sideways {m}"
 
 
@@ -111,33 +139,44 @@ def check_preview(page) -> None:
     for fig in page.locator(".app-figures img").all():
         assert fig.evaluate("e => getComputedStyle(e).objectFit") == "contain", "figure thumbnails show the whole image"
     for i in range(imgs.count()):
-        m = imgs.nth(i).evaluate("""e => { const c = e.closest('td').getBoundingClientRect(), r = e.getBoundingClientRect();
-            return {nw: e.naturalWidth, nh: e.naturalHeight, w: r.width, h: r.height, cw: c.width, fit: getComputedStyle(e).objectFit}; }""")
+        m = imgs.nth(i).evaluate(
+            """e => { const c = e.closest('td').getBoundingClientRect(), r = e.getBoundingClientRect();
+            return {nw: e.naturalWidth, nh: e.naturalHeight, w: r.width, h: r.height, cw: c.width, fit: getComputedStyle(e).objectFit}; }"""
+        )
         assert m["nw"] > 0, "the preview image loaded"
         assert m["w"] <= m["cw"] + 0.5, f"preview wider than its cell: {m}"
-        assert abs(m["w"] / m["h"] - m["nw"] / m["nh"]) < 0.02 or m["fit"] == "contain", f"preview aspect distorted: {m}"
+        assert (
+            abs(m["w"] / m["h"] - m["nw"] / m["nh"]) < 0.02 or m["fit"] == "contain"
+        ), f"preview aspect distorted: {m}"
         assert m["fit"] == "contain", f"preview must use object-fit contain: {m}"
+
 
 LIGHTBOX = "dialog.app-lightbox"
 
 
 def lightbox_state(page) -> dict:
-    return page.evaluate("""() => { const d = document.querySelector('dialog.app-lightbox'), img = d && d.querySelector('.stage img');
+    return page.evaluate(
+        """() => { const d = document.querySelector('dialog.app-lightbox'), img = d && d.querySelector('.stage img');
         return {open: !!(d && d.open), title: d?.querySelector('.lightbox-path')?.textContent ?? null, zoom: d?.querySelector('.zoom span')?.textContent ?? null,
                 meta: d?.querySelector('.lightbox-meta')?.textContent ?? null, x: img ? parseFloat(img.style.getPropertyValue('--pan-x')) : null,
                 y: img ? parseFloat(img.style.getPropertyValue('--pan-y')) : null, loaded: !!(img && img.complete && img.naturalWidth > 0),
                 overflow: document.documentElement.style.overflow, focusInside: !!(d && d.contains(document.activeElement)),
-                download: d?.querySelector('.lightbox-download')?.getAttribute('href') ?? null}; }""")
+                download: d?.querySelector('.lightbox-download')?.getAttribute('href') ?? null}; }"""
+    )
 
 
 def wait_image(page) -> None:
-    page.wait_for_function("() => { const i = document.querySelector('dialog.app-lightbox .stage img'); return i && i.complete && i.naturalWidth > 0 && !i.classList.contains('is-loading'); }")
+    page.wait_for_function(
+        "() => { const i = document.querySelector('dialog.app-lightbox .stage img'); return i && i.complete && i.naturalWidth > 0 && !i.classList.contains('is-loading'); }"
+    )
 
 
 def check_lightbox(page, shots: Path) -> None:
     """The lightbox from the inline preview and from the file list: one gallery in list order, arrows, zoom (keys,
     buttons, wheel), mouse panning, reset on a new image, focus kept inside and given back, no page scroll behind."""
-    images = page.evaluate("() => [...document.querySelectorAll('.table-card tbody tr td:first-child')].filter(td => td.querySelector('.thumb:not(.thumb-spacer)')).map(td => td.querySelector('a:not(.thumb)').textContent)")
+    images = page.evaluate(
+        "() => [...document.querySelectorAll('.table-card tbody tr td:first-child')].filter(td => td.querySelector('.thumb:not(.thumb-spacer)')).map(td => td.querySelector('a:not(.thumb)').textContent)"
+    )
     assert images == ["figures/hist.png", "figures/tall.svg", "figures/wide.png"], images
     # (a) from the inline preview of the second image
     opener = page.locator(".preview-row .preview-open").nth(1)
@@ -185,7 +224,9 @@ def check_lightbox(page, shots: Path) -> None:
     page.mouse.move(cx + 60, cy + 40, steps=5)
     page.mouse.up()
     after = lightbox_state(page)
-    assert abs(after["x"] - before["x"] - 60) < 2 and abs(after["y"] - before["y"] - 40) < 2, f"panning moves the image: {before} -> {after}"
+    assert (
+        abs(after["x"] - before["x"] - 60) < 2 and abs(after["y"] - before["y"] - 40) < 2
+    ), f"panning moves the image: {before} -> {after}"
     page.get_by_role("button", name="Reset").click()
     state = lightbox_state(page)
     assert state["zoom"] == "100%" and state["x"] == 0 and state["y"] == 0, state
@@ -225,7 +266,9 @@ def check_lightbox(page, shots: Path) -> None:
 
 def check_touch_lightbox(browser, ui: str, token: str, shots: Path, problems: list[str]) -> None:
     """On a touch phone: a thumbnail opens the lightbox, a pinch zooms, one finger pans, a swipe pages."""
-    context = browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True, device_scale_factor=2)
+    context = browser.new_context(
+        viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True, device_scale_factor=2
+    )
     page = context.new_page()
     page.on("pageerror", lambda error: problems.append(f"page error: {error}"))
     page.on("console", lambda m: m.type == "error" and problems.append(f"console error: {m.text}"))
@@ -249,7 +292,10 @@ def check_touch_lightbox(browser, ui: str, token: str, shots: Path, problems: li
     cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 
     def touch(kind: str, points: list[tuple[float, float]]) -> None:
-        cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [{"x": x, "y": y, "id": i} for i, (x, y) in enumerate(points)]})
+        cdp.send(
+            "Input.dispatchTouchEvent",
+            {"type": kind, "touchPoints": [{"x": x, "y": y, "id": i} for i, (x, y) in enumerate(points)]},
+        )
 
     touch("touchStart", [(cx - 30, cy), (cx + 30, cy)])
     for step in range(1, 6):
@@ -279,7 +325,9 @@ def check_palette(page, shots: Path, tag: str) -> None:
     page.locator(".rail-note").get_by_role("link", name="Components").click()
     page.wait_for_url("**/palette")
     page.get_by_role("heading", name="Components", exact=True).wait_for()
-    for y in range(0, page.evaluate("document.documentElement.scrollHeight"), 600):  # the lazy images load as they come near
+    for y in range(
+        0, page.evaluate("document.documentElement.scrollHeight"), 600
+    ):  # the lazy images load as they come near
         page.evaluate(f"window.scrollTo(0, {y})")
         page.wait_for_timeout(60)
     page.wait_for_function("[...document.querySelectorAll('main img')].every(i => i.complete && i.naturalWidth > 0)")
@@ -296,8 +344,10 @@ def check_palette(page, shots: Path, tag: str) -> None:
     page.wait_for_timeout(300)
     sw = page.evaluate("[document.documentElement.scrollWidth, window.innerWidth]")
     assert sw[0] <= sw[1], f"{tag} palette at phone width: horizontal page scroll {sw}"
-    wide = page.evaluate("""() => [...document.querySelectorAll('main *')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1
-        && !e.closest('.table-wrap, .tabs, pre, svg, table'); }).map(e => e.tagName + '.' + e.className).slice(0, 5)""")
+    wide = page.evaluate(
+        """() => [...document.querySelectorAll('main *')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1
+        && !e.closest('.table-wrap, .tabs, pre, svg, table'); }).map(e => e.tagName + '.' + e.className).slice(0, 5)"""
+    )
     assert not wide, f"{tag} palette at phone width: elements stick out: {wide}"
     page.screenshot(path=str(shots / f"{tag}-palette-phone.png"), full_page=True)
     page.set_viewport_size({"width": 1280, "height": 900})
@@ -328,9 +378,16 @@ def run(keep: bool) -> int:
         context = browser.new_context(viewport={"width": 1280, "height": 900}, color_scheme="light")
         page = context.new_page()
         page.on("pageerror", lambda error: problems.append(f"page error: {error}"))
-        page.on("console", lambda m: m.type == "error" and "favicon.ico" not in (m.location.get("url") or "") and problems.append(f"console error: {m.text} ({m.location.get('url')})"))
+        page.on(
+            "console",
+            lambda m: m.type == "error"
+            and "favicon.ico" not in (m.location.get("url") or "")
+            and problems.append(f"console error: {m.text} ({m.location.get('url')})"),
+        )
         page.on("requestfailed", lambda r: problems.append(f"request failed: {r.url}"))
-        context.on("response", lambda r: r.status >= 400 and r.status != 401 and problems.append(f"HTTP {r.status}: {r.url}"))
+        context.on(
+            "response", lambda r: r.status >= 400 and r.status != 401 and problems.append(f"HTTP {r.status}: {r.url}")
+        )
 
         def view(name: str) -> None:  # a viewport screenshot: what the window shows, so sticky elements are true
             page.wait_for_load_state("networkidle")
@@ -339,7 +396,9 @@ def run(keep: bool) -> int:
         def check_rail(label: str) -> None:
             vh = page.evaluate("window.innerHeight")
             box = page.locator(".rail").bounding_box()
-            assert box and abs(box["y"]) < 1 and abs(box["x"]) < 1 and abs(box["height"] - vh) < 1.5, f"{label}: rail at {box}, viewport height {vh}"
+            assert (
+                box and abs(box["y"]) < 1 and abs(box["x"]) < 1 and abs(box["height"] - vh) < 1.5
+            ), f"{label}: rail at {box}, viewport height {vh}"
 
         def scroll_check(label: str) -> None:
             height = page.evaluate("document.documentElement.scrollHeight")
@@ -364,7 +423,9 @@ def run(keep: bool) -> int:
         page.get_by_label("Token").fill("w" * 40)
         page.get_by_role("button", name="Open repo").click()
         page.get_by_role("alert").wait_for()
-        problems[:] = [x for x in problems if "401" not in x and "Failed to load resource" not in x]  # the wrong token's 401
+        problems[:] = [
+            x for x in problems if "401" not in x and "Failed to load resource" not in x
+        ]  # the wrong token's 401
         page.get_by_label("Token").fill(token)
         page.get_by_role("button", name="Open repo").click()
         page.wait_for_url("**/p/study/")
@@ -437,9 +498,16 @@ def run(keep: bool) -> int:
         page.wait_for_function("document.querySelector('#title').textContent.length > 0")
         shot("11-report")
         # reports keep only copy-location: no comment controls; selecting text offers the copy button
-        assert page.locator("#comment-popover, #selection-comment, .image-comment, #copy-comments, #clear-comments").count() == 0
-        page.evaluate("""() => { const p = document.querySelector('#report-prose p'); const range = document.createRange();
-            range.selectNodeContents(p); const s = getSelection(); s.removeAllRanges(); s.addRange(range); }""")
+        assert (
+            page.locator(
+                "#comment-popover, #selection-comment, .image-comment, #copy-comments, #clear-comments"
+            ).count()
+            == 0
+        )
+        page.evaluate(
+            """() => { const p = document.querySelector('#report-prose p'); const range = document.createRange();
+            range.selectNodeContents(p); const s = getSelection(); s.removeAllRanges(); s.addRange(range); }"""
+        )
         page.locator("#report-prose p").first.dispatch_event("mouseup")
         page.locator("#selection-copy").wait_for(state="visible")
         page.locator("#selection-copy").click()
@@ -449,8 +517,12 @@ def run(keep: bool) -> int:
         page.keyboard.press("Escape")
         back = page.locator("#back-link")  # came from the report artifact's page: back goes there
         back.wait_for()
-        assert back.inner_text() == "← Back" and back.get_attribute("href") == "/p/study/a/reports/summary", back.get_attribute("href")
-        labels = page.locator(".rail section:not([hidden]) .rail-label").all_inner_texts()  # the rail lists the app's own sections
+        assert (
+            back.inner_text() == "← Back" and back.get_attribute("href") == "/p/study/a/reports/summary"
+        ), back.get_attribute("href")
+        labels = page.locator(
+            ".rail section:not([hidden]) .rail-label"
+        ).all_inner_texts()  # the rail lists the app's own sections
         assert [x.split(" · ")[0].title() for x in labels] == ["Projects", "Reports", "Artifacts", "Runs"], labels
         assert page.locator(".rail a[aria-current=page]").all_inner_texts() == ["study", "Toy fit summary"]
         page.keyboard.press("Tab")
@@ -459,7 +531,10 @@ def run(keep: bool) -> int:
         page.wait_for_url("**/p/study/a/reports/summary")
         page.goto(ui + "/p/study/r/summary/")  # opened directly: back goes to the project page
         page.locator("#back-link").wait_for()
-        assert page.locator("#back-link").inner_text() == "← study" and page.locator("#back-link").get_attribute("href") == "/p/study/"
+        assert (
+            page.locator("#back-link").inner_text() == "← study"
+            and page.locator("#back-link").get_attribute("href") == "/p/study/"
+        )
         page.goto(ui + "/p/study/a/reports/summary")
         page.get_by_role("link", name="Open report v").click()
         page.wait_for_url("**/p/study/r/summary@v*/")
@@ -493,18 +568,25 @@ def run(keep: bool) -> int:
         sort = page.get_by_role("button", name="Sort")
         sort.wait_for()
         assert page.locator("main select").count() == 0, "no native selects"
-        assert sort.evaluate("e => e.offsetHeight") == page.get_by_label("Search").evaluate("e => e.offsetHeight"), "select and search are the same height"
+        assert sort.evaluate("e => e.offsetHeight") == page.get_by_label("Search").evaluate(
+            "e => e.offsetHeight"
+        ), "select and search are the same height"
         sort.click()
         page.get_by_role("listbox", name="Sort").wait_for()
         shot("22-desktop-selects")
         page.get_by_role("option", name="Sort: name").click()
         page.wait_for_url("**sort=name**")
         assert sort.inner_text() == "Sort: name" and page.get_by_role("listbox").count() == 0
-        sort.focus(); page.keyboard.press("ArrowDown"); page.keyboard.press("Home"); page.keyboard.press("Enter")
+        sort.focus()
+        page.keyboard.press("ArrowDown")
+        page.keyboard.press("Home")
+        page.keyboard.press("Enter")
         page.wait_for_function("!location.search.includes('sort=name')")
-        sort.click(); page.keyboard.press("Escape")
+        sort.click()
+        page.keyboard.press("Escape")
         assert page.get_by_role("listbox").count() == 0, "Escape closes the list"
-        sort.click(); page.mouse.click(5, 5)
+        sort.click()
+        page.mouse.click(5, 5)
         assert page.get_by_role("listbox").count() == 0, "an outside click closes the list"
         page.goto(ui + "/p/study/a/toy-fit")
         version = page.get_by_role("button", name="Version", exact=True)
@@ -516,9 +598,15 @@ def run(keep: bool) -> int:
         # phone (390x844) and tablet (820x1180): every page, no sideways page scroll, tap targets, collapsed rail
         def responsive(tag: str, width: int, height: int) -> None:
             page.set_viewport_size({"width": width, "height": height})
-            pages = [("projects", "/", "h1"), ("project", "/p/study/", ".tabs"), ("project-artifacts", "/p/study/?tab=artifacts", ".table-card"),
-                     ("artifact", "/p/study/a/toy-fit", ".graph-node"), ("dataset", "/p/study/a/datasets/toy@v2", ".graph-node"),
-                     ("run", "/p/study/a/runs/train", ".run-chart"), ("report", "/p/study/r/summary/", "#report-prose h2")]
+            pages = [
+                ("projects", "/", "h1"),
+                ("project", "/p/study/", ".tabs"),
+                ("project-artifacts", "/p/study/?tab=artifacts", ".table-card"),
+                ("artifact", "/p/study/a/toy-fit", ".graph-node"),
+                ("dataset", "/p/study/a/datasets/toy@v2", ".graph-node"),
+                ("run", "/p/study/a/runs/train", ".run-chart"),
+                ("report", "/p/study/r/summary/", "#report-prose h2"),
+            ]
             for name, path, ready in pages:
                 page.goto(ui + path)
                 page.locator(ready).first.wait_for()
@@ -526,15 +614,22 @@ def run(keep: bool) -> int:
                 page.wait_for_timeout(300)
                 sw = page.evaluate("[document.documentElement.scrollWidth, window.innerWidth]")
                 assert sw[0] <= sw[1], f"{tag} {name}: horizontal page scroll {sw}"
-                wide = page.evaluate("""() => [...document.querySelectorAll('main *')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1
-                    && !e.closest('.table-wrap, .graph-scroll, .tabs, pre, .raw-html, .math, svg, table, .plotly-card'); }).map(e => e.tagName + '.' + e.className).slice(0, 5)""")
+                wide = page.evaluate(
+                    """() => [...document.querySelectorAll('main *')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1
+                    && !e.closest('.table-wrap, .graph-scroll, .tabs, pre, .raw-html, .math, svg, table, .plotly-card'); }).map(e => e.tagName + '.' + e.className).slice(0, 5)"""
+                )
                 assert not wide, f"{tag} {name}: elements stick out of the window: {wide}"
-                small = page.evaluate("""() => [...document.querySelectorAll('.tabs button, .action-button, .select-button, input, .rail-toggle, .back-link, .image-copy, .graph-toggle button, .report-list a')]
+                small = page.evaluate(
+                    """() => [...document.querySelectorAll('.tabs button, .action-button, .select-button, input, .rail-toggle, .back-link, .image-copy, .graph-toggle button, .report-list a')]
                     .filter(e => e.offsetParent !== null || getComputedStyle(e).position === 'fixed')
-                    .map(e => [e.tagName + '.' + e.className, e.getBoundingClientRect()]).filter(([, r]) => r.height > 0 && r.height < 39.5).map(([n, r]) => n + ' ' + Math.round(r.height)).slice(0, 5)""")
+                    .map(e => [e.tagName + '.' + e.className, e.getBoundingClientRect()]).filter(([, r]) => r.height > 0 && r.height < 39.5).map(([n, r]) => n + ' ' + Math.round(r.height)).slice(0, 5)"""
+                )
                 if width < 600:
                     assert not small, f"{tag} {name}: tap targets under 40px: {small}"
-                    assert page.locator(".rail .report-list:not([hidden])").first.is_hidden() or not page.locator(".rail .report-list").count(), f"{tag} {name}: rail lists start collapsed"
+                    assert (
+                        page.locator(".rail .report-list:not([hidden])").first.is_hidden()
+                        or not page.locator(".rail .report-list").count()
+                    ), f"{tag} {name}: rail lists start collapsed"
                     rail_h = page.locator(".rail").bounding_box()["height"]
                     assert rail_h < 70, f"{tag} {name}: collapsed rail is {rail_h}px tall"
                 page.screenshot(path=str(shots / f"{tag}-{name}.png"), full_page=True)
@@ -544,10 +639,14 @@ def run(keep: bool) -> int:
                     page.screenshot(path=str(shots / f"{tag}-{name}-viewport.png"))
                 if name in ("project", "report") and width < 760:
                     page.locator(".rail-toggle").click()
-                    assert page.locator(".rail .report-list:not([hidden])").first.is_visible(), "Browse opens the rail lists"
+                    assert page.locator(
+                        ".rail .report-list:not([hidden])"
+                    ).first.is_visible(), "Browse opens the rail lists"
                     page.screenshot(path=str(shots / f"{tag}-{name}-browse.png"))
                     page.locator(".rail-toggle").click()
-                    assert page.locator(".rail .report-list:not([hidden])").first.is_hidden(), "Browse closes them again"
+                    assert page.locator(
+                        ".rail .report-list:not([hidden])"
+                    ).first.is_hidden(), "Browse closes them again"
 
         page.goto(ui + "/")
         check_palette(page, shots, "light")
@@ -558,7 +657,9 @@ def run(keep: bool) -> int:
         dark = browser.new_context(viewport={"width": 1280, "height": 900}, color_scheme="dark")
         page = dark.new_page()
         page.on("pageerror", lambda error: problems.append(f"page error: {error}"))
-        page.on("response", lambda r: r.status >= 400 and r.status != 401 and problems.append(f"HTTP {r.status}: {r.url}"))
+        page.on(
+            "response", lambda r: r.status >= 400 and r.status != 401 and problems.append(f"HTTP {r.status}: {r.url}")
+        )
         page.goto(ui + "/login")
         page.get_by_label("Token").fill(token)
         page.get_by_role("button", name="Open repo").click()

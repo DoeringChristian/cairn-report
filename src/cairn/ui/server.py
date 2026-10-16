@@ -69,8 +69,36 @@ MAX_LOGIN_BODY = 4096
 RUN_TAIL = 64 * 1024  # bytes of logs/stdout.txt and stderr.txt the run panel shows
 RUN_ROWS_BYTES = 8 * 1024 * 1024  # the most of a metrics file the run panel reads (its end)
 RUN_POINTS = 2000  # rows per chart, at most (evenly thinned)
-STORED = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".mp4", ".webm", ".mov", ".m4v", ".mkv", ".zip", ".gz", ".tgz",
-          ".bz2", ".xz", ".zst", ".7z", ".npz", ".pt", ".pth", ".safetensors", ".h5", ".parquet", ".jxl", ".heic", ".mp3", ".ogg"}
+STORED = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".avif",
+    ".mp4",
+    ".webm",
+    ".mov",
+    ".m4v",
+    ".mkv",
+    ".zip",
+    ".gz",
+    ".tgz",
+    ".bz2",
+    ".xz",
+    ".zst",
+    ".7z",
+    ".npz",
+    ".pt",
+    ".pth",
+    ".safetensors",
+    ".h5",
+    ".parquet",
+    ".jxl",
+    ".heic",
+    ".mp3",
+    ".ogg",
+}
 
 
 class NoSession(Unauthorized):
@@ -99,7 +127,7 @@ def message_page(title: str, text: str) -> bytes:
     """A plain page for errors outside the app (the app shows its own for API errors)."""
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-        f"<title>{html.escape(title)}</title></head><body style=\"font:16px/1.5 system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem\">"
+        f'<title>{html.escape(title)}</title></head><body style="font:16px/1.5 system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem">'
         f'<h1>{html.escape(title)}</h1><p>{html.escape(text)}</p><p><a href="/">Back to the repo</a></p></body></html>'
     ).encode()
 
@@ -108,7 +136,11 @@ def app_route(segments: list[str]) -> bool:
     """Whether a path (split on `/`) is a client-side route of the app."""
     if segments in (["", ""], ["", "login"], ["", "palette"]):
         return True
-    return len(segments) >= 4 and segments[1] == "p" and (segments[3] == "" and len(segments) == 4 or segments[3] == "a" and len(segments) > 4)
+    return (
+        len(segments) >= 4
+        and segments[1] == "p"
+        and (segments[3] == "" and len(segments) == 4 or segments[3] == "a" and len(segments) > 4)
+    )
 
 
 def selector_of(version: dict) -> str:
@@ -216,13 +248,23 @@ class UIHandler(BaseHTTPRequestHandler):
             self._error(403, str(error))
         except Unauthorized as error:
             if self.no_auth:
-                return self._error(401, "the remote rejected the token from CAIRN_TOKEN, <repo>/token, or ~/.config/cairn/token")
+                return self._error(
+                    401, "the remote rejected the token from CAIRN_TOKEN, <repo>/token, or ~/.config/cairn/token"
+                )
             if not isinstance(error, NoSession):  # the remote refused the token itself
                 self._forget()
             if self._is_api() or urlparse(self.path).path.startswith("/files/"):
-                return self._send(401, json.dumps({"error": "log in first"}).encode(), "application/json",
-                                  {"Set-Cookie": self._cookie_header("", 0), "Cache-Control": "no-store"})
-            self._send(303, b"", headers={"Location": "/login?next=" + quote(self.path), "Set-Cookie": self._cookie_header("", 0)})
+                return self._send(
+                    401,
+                    json.dumps({"error": "log in first"}).encode(),
+                    "application/json",
+                    {"Set-Cookie": self._cookie_header("", 0), "Cache-Control": "no-store"},
+                )
+            self._send(
+                303,
+                b"",
+                headers={"Location": "/login?next=" + quote(self.path), "Set-Cookie": self._cookie_header("", 0)},
+            )
         except (StoreError, ValueError) as error:
             self._error(400, str(error))
         except OSError as error:
@@ -251,7 +293,7 @@ class UIHandler(BaseHTTPRequestHandler):
         path, query = url.path, parse_qs(url.query)
         segments = self._segments(path)
         if path.startswith("/assets/"):
-            return self._asset(path[len("/assets/"):])
+            return self._asset(path[len("/assets/") :])
         if path == "/login":
             if self.no_auth:
                 raise HttpError(404, "no such page")
@@ -262,14 +304,25 @@ class UIHandler(BaseHTTPRequestHandler):
                 token = self.state.get("login", "") if known else ""
                 session = self.backend.login(token) if token else None
                 if session is not None:
-                    return self._send(303, b"", headers={"Location": "/", "Set-Cookie": self._start(token, session),
-                                                         "Cache-Control": "no-store"})
+                    return self._send(
+                        303,
+                        b"",
+                        headers={
+                            "Location": "/",
+                            "Set-Cookie": self._start(token, session),
+                            "Cache-Control": "no-store",
+                        },
+                    )
                 return self._send(303, b"", headers={"Location": "/login"})  # used already: the token form
             if self._session() is not None:
                 return self._send(303, b"", headers={"Location": safe_target(query.get("next", ["/"])[0])})
             return self._app()
         if path == "/logout":
-            return self._send(303, b"", headers={"Location": "/" if self.no_auth else "/login", "Set-Cookie": self._cookie_header("", 0)})
+            return self._send(
+                303,
+                b"",
+                headers={"Location": "/" if self.no_auth else "/login", "Set-Cookie": self._cookie_header("", 0)},
+            )
         if self._is_api():
             return self._api(url, query)
         session = self._session()
@@ -293,8 +346,14 @@ class UIHandler(BaseHTTPRequestHandler):
     def _app(self) -> None:
         index = STATIC / "index.html"
         if not index.is_file():
-            return self._send(503, message_page("The UI is not built", "Run `npm ci && npm run build` in web/ (a released package ships the built app)."),
-                              "text/html; charset=utf-8")
+            return self._send(
+                503,
+                message_page(
+                    "The UI is not built",
+                    "Run `npm ci && npm run build` in web/ (a released package ships the built app).",
+                ),
+                "text/html; charset=utf-8",
+            )
         self._send(200, index.read_bytes(), "text/html; charset=utf-8", {"Cache-Control": "no-cache"})
 
     def _asset(self, name: str) -> None:
@@ -315,7 +374,9 @@ class UIHandler(BaseHTTPRequestHandler):
         store = session.store
         match [unquote(part) for part in url.path.split("/")[2:]]:
             case ["me"]:
-                return self._json(200, {"auth": not self.no_auth, "mode": store.mode, "home": getattr(store, "name", None)})
+                return self._json(
+                    200, {"auth": not self.no_auth, "mode": store.mode, "home": getattr(store, "name", None)}
+                )
             case ["projects"]:
                 found = list(store.overviews())
                 return self._json(200, sorted(found, key=lambda item: item["updated"], reverse=True))
@@ -342,8 +403,13 @@ class UIHandler(BaseHTTPRequestHandler):
         versions = repo.versions(name)
         if not versions:
             raise NotFound(f"no artifact {name} in the project {project}")
-        return {"project": project, "name": name, "summary": repo.summary(name),
-                "versions": [summarize_version(version) for version in versions], "aliases": repo.aliases(name)}
+        return {
+            "project": project,
+            "name": name,
+            "summary": repo.summary(name),
+            "versions": [summarize_version(version) for version in versions],
+            "aliases": repo.aliases(name),
+        }
 
     def _version_api(self, repo, project: str, name: str, selector: str) -> dict:
         """One manifest (files, metadata, inputs) with its consumers; `selector` is a number, `v<n>`, a uid, a short id,
@@ -351,12 +417,22 @@ class UIHandler(BaseHTTPRequestHandler):
         chosen = f"v{selector}" if selector.isdigit() else selector
         version = self._version(repo, name, chosen)
         consumers, deleted, nodes = [], [], {}
-        if version["status"] in ("completed", "deleted", "running", "failed"):  # a deleted version keeps its edges, a running run has some
+        if version["status"] in (
+            "completed",
+            "deleted",
+            "running",
+            "failed",
+        ):  # a deleted version keeps its edges, a running run has some
             found = repo.lineage(exact_ref(name, version), marks=True)
             consumers, deleted, nodes = found["consumers"], found.get("deleted", []), found.get("nodes", {})
-        return {"project": project, "name": name, "version": shown(project, version),
-                "consumers": [qualified(project, item) for item in consumers], "deleted": [qualified(project, item) for item in deleted],
-                "nodes": {qualified(project, item): mark for item, mark in nodes.items()}}
+        return {
+            "project": project,
+            "name": name,
+            "version": shown(project, version),
+            "consumers": [qualified(project, item) for item in consumers],
+            "deleted": [qualified(project, item) for item in deleted],
+            "nodes": {qualified(project, item): mark for item, mark in nodes.items()},
+        }
 
     def _run_api(self, store, project: str, name: str, selector: str) -> dict:
         """What the app's Run panel shows of a run version: its metrics.jsonl and system/metrics.jsonl rows (numbers
@@ -403,9 +479,21 @@ class UIHandler(BaseHTTPRequestHandler):
                     continue
                 if not isinstance(row, dict):
                     continue
-                if isinstance(row.get("name"), str) and "value" in row and set(row) <= {"name", "value", "step", "time", "origin", "nonfinite"}:
-                    row = {row["name"]: row["value"], "step": row.get("step"), "time": row.get("time")}  # an earlier release's line
-                keep = {key: value for key, value in row.items() if key == "time" or (isinstance(value, (int, float)) and not isinstance(value, bool))}
+                if (
+                    isinstance(row.get("name"), str)
+                    and "value" in row
+                    and set(row) <= {"name", "value", "step", "time", "origin", "nonfinite"}
+                ):
+                    row = {
+                        row["name"]: row["value"],
+                        "step": row.get("step"),
+                        "time": row.get("time"),
+                    }  # an earlier release's line
+                keep = {
+                    key: value
+                    for key, value in row.items()
+                    if key == "time" or (isinstance(value, (int, float)) and not isinstance(value, bool))
+                }
                 if len(keep) > 1 or (keep and "time" not in keep):
                     found.append(keep)
             total = len(found)
@@ -422,11 +510,21 @@ class UIHandler(BaseHTTPRequestHandler):
             except ValueError:
                 info = None
         metadata = version.get("metadata") or {}
-        return {"project": project, "name": name, "version": version["version"], "short_id": refs.short_of(version),
-                "status": version["status"],
-                "metrics": rows("metrics.jsonl"), "system": rows("system/metrics.jsonl"), "stdout": text("logs/stdout.txt"),
-                "stderr": text("logs/stderr.txt"), "error": text("logs/error.txt"), "info": info,
-                "config": metadata.get("config"), "sweep": metadata.get("sweep")}
+        return {
+            "project": project,
+            "name": name,
+            "version": version["version"],
+            "short_id": refs.short_of(version),
+            "status": version["status"],
+            "metrics": rows("metrics.jsonl"),
+            "system": rows("system/metrics.jsonl"),
+            "stdout": text("logs/stdout.txt"),
+            "stderr": text("logs/stderr.txt"),
+            "error": text("logs/error.txt"),
+            "info": info,
+            "config": metadata.get("config"),
+            "sweep": metadata.get("sweep"),
+        }
 
     def _lineage_api(self, store, project: str, ref: Ref, depth: int) -> dict:
         """Inputs to the left and consumers to the right of a version, `depth` levels each way, from one-level lineage calls.
@@ -490,16 +588,26 @@ class UIHandler(BaseHTTPRequestHandler):
                 node["short_id"] = mark["short_id"]
 
         def outward(node: dict) -> dict:
-            return {key: [qualified(project, item) for item in value] if key in ("inputs", "consumers") and value is not None else value
-                    for key, value in node.items()}
+            return {
+                key: (
+                    [qualified(project, item) for item in value]
+                    if key in ("inputs", "consumers") and value is not None
+                    else value
+                )
+                for key, value in node.items()
+            }
 
-        return {"ref": qualified(project, root), "depth": depth, "nodes": {qualified(project, item): outward(node) for item, node in nodes.items()},
-                "truncated": truncated}
+        return {
+            "ref": qualified(project, root),
+            "depth": depth,
+            "nodes": {qualified(project, item): outward(node) for item, node in nodes.items()},
+            "truncated": truncated,
+        }
 
     # ------------------------------------------------------------------ files
 
     def _files(self, session: Session, path: str, query: dict) -> None:
-        rest = unquote(path)[len("/files/"):]
+        rest = unquote(path)[len("/files/") :]
         project, _, remainder = rest.partition("/")
         head, separator, inner = remainder.partition("//")
         if not separator and head.endswith(".zip") and "@" in head:
@@ -531,7 +639,9 @@ class UIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/zip")
         self.send_header("Content-Disposition", f'attachment; filename="{top}.zip"')
         self.send_header("Transfer-Encoding", "chunked")
-        self.send_header("Cache-Control", "private, max-age=31536000, immutable" if version["status"] == "completed" else "no-cache")
+        self.send_header(
+            "Cache-Control", "private, max-age=31536000, immutable" if version["status"] == "completed" else "no-cache"
+        )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         sink = _ChunkedSink(self.wfile)
@@ -555,21 +665,32 @@ class UIHandler(BaseHTTPRequestHandler):
                 except (NotFound, StoreError):
                     continue  # a link to a file the version does not have
                 info = zipfile.ZipInfo(f"{top}/{entry['path']}", date_time=max(stamp, (1980, 1, 1, 0, 0, 0)))
-                info.compress_type = zipfile.ZIP_STORED if Path(entry["path"]).suffix.lower() in STORED else zipfile.ZIP_DEFLATED
+                info.compress_type = (
+                    zipfile.ZIP_STORED if Path(entry["path"]).suffix.lower() in STORED else zipfile.ZIP_DEFLATED
+                )
                 info.external_attr = 0o644 << 16
                 try:
                     with archive.open(info, "w", force_zip64=True) as target:
                         for chunk in read.chunks:
                             view = memoryview(chunk)
-                            for start in range(0, len(view), 1 << 20):  # small pieces: the compressor's output stays small
-                                target.write(view[start:start + (1 << 20)])
+                            for start in range(
+                                0, len(view), 1 << 20
+                            ):  # small pieces: the compressor's output stays small
+                                target.write(view[start : start + (1 << 20)])
                 finally:
                     read.close()
 
-    def _stream(self, read: FileRead, kind: str, immutable: bool, extra: dict | None = None, encoding: str | None = None) -> None:
+    def _stream(
+        self, read: FileRead, kind: str, immutable: bool, extra: dict | None = None, encoding: str | None = None
+    ) -> None:
         etag = f'"{read.sha256}"'
-        headers = {"ETag": etag, "X-Content-Type-Options": "nosniff", "Vary": "Accept-Encoding",
-                   "Cache-Control": "private, max-age=31536000, immutable" if immutable else "no-cache", **(extra or {})}
+        headers = {
+            "ETag": etag,
+            "X-Content-Type-Options": "nosniff",
+            "Vary": "Accept-Encoding",
+            "Cache-Control": "private, max-age=31536000, immutable" if immutable else "no-cache",
+            **(extra or {}),
+        }
         if encoding:
             headers["Content-Encoding"] = encoding
         else:
@@ -652,22 +773,31 @@ class UIHandler(BaseHTTPRequestHandler):
                 name = summary["name"]
                 for version in reversed(store.versions(name)) if is_report(name) else ():
                     if version["status"] == "completed" and resolve_entry(version["files"], f"site/_static/{file}"):
-                        found = (name, selector_of(version), resolve_entry(version["files"], f"site/_static/{file}.gz") is not None)
+                        found = (
+                            name,
+                            selector_of(version),
+                            resolve_entry(version["files"], f"site/_static/{file}.gz") is not None,
+                        )
                         break
                 if found:
                     break
             if found is None:
                 raise HttpError(404, "no such file")
-            self.static_cache[key] = found  # where it lives, not its bytes: every read still goes to the store with the session's token
+            self.static_cache[key] = (
+                found  # where it lives, not its bytes: every read still goes to the store with the session's token
+            )
         name, number, compressed = self.static_cache[key]
         if compressed and "gzip" in self.headers.get("Accept-Encoding", ""):
-            return self._stream(store.read_file(name, number, f"site/_static/{file}.gz"), entry_type(file), True, encoding="gzip")
+            return self._stream(
+                store.read_file(name, number, f"site/_static/{file}.gz"), entry_type(file), True, encoding="gzip"
+            )
         self._stream(store.read_file(name, number, f"site/_static/{file}"), entry_type(file), True)
 
     @staticmethod
     def _site(session: Session, project: str) -> dict:
         """What a report page's navigation reads (site.json): the project's reports, latest versions, and `groups`,
-        the sections of the app's own rail (Projects, then this project's Reports, Artifacts, Runs), as the app lists them."""
+        the sections of the app's own rail (Projects, then this project's Reports, Artifacts, Runs), as the app lists them.
+        """
         projects_, base = session.store, f"/p/{quote(project)}/"
         store = projects_.get(project)
         reports, artifacts, runs = [], [], []
@@ -676,21 +806,50 @@ class UIHandler(BaseHTTPRequestHandler):
             if is_report(name):
                 if summary["latest"]:
                     slug, meta = name.split("/", 1)[1], summary["metadata"]
-                    reports.append({"key": slug, "title": meta.get("title") or slug, "subtitle": "", "status": meta.get("status", ""),
-                                    "summary": meta.get("summary", ""), "href": f"{slug}/", "updated": summary["updated"]})
+                    reports.append(
+                        {
+                            "key": slug,
+                            "title": meta.get("title") or slug,
+                            "subtitle": "",
+                            "status": meta.get("status", ""),
+                            "summary": meta.get("summary", ""),
+                            "href": f"{slug}/",
+                            "updated": summary["updated"],
+                        }
+                    )
             elif name.startswith("runs/"):
                 last = f"@v{summary['versions']}" if summary["versions"] else ""
-                runs.append({"title": name[len("runs/"):], "href": f"{base}a/{quote(name)}{last}", "plain": True})
+                runs.append({"title": name[len("runs/") :], "href": f"{base}a/{quote(name)}{last}", "plain": True})
             else:
                 artifacts.append({"title": name, "href": f"{base}a/{quote(name)}", "plain": True})
         reports.sort(key=lambda item: (item["title"].lower(), item["key"]))
-        projects = [{"title": item["title"] or item["name"], "href": f"/p/{quote(item['name'])}/", "plain": True, "current": item["name"] == project}
-                    for item in sorted(projects_.overviews(), key=lambda item: item["updated"], reverse=True)]
-        groups = [{"label": "Projects", "items": projects},
-                  {"label": "Reports", "items": [{"key": r["key"], "title": r["title"], "href": f"{base}r/{quote(r['key'])}/"} for r in reports]},
-                  {"label": "Artifacts", "items": artifacts}, {"label": "Runs", "items": runs}]
-        return {"title": projects_.record(project)["title"], "brand": "Cairn", "mark": "C", "reports": reports,
-                "groups": [g for g in groups if g["items"]]}
+        projects = [
+            {
+                "title": item["title"] or item["name"],
+                "href": f"/p/{quote(item['name'])}/",
+                "plain": True,
+                "current": item["name"] == project,
+            }
+            for item in sorted(projects_.overviews(), key=lambda item: item["updated"], reverse=True)
+        ]
+        groups = [
+            {"label": "Projects", "items": projects},
+            {
+                "label": "Reports",
+                "items": [
+                    {"key": r["key"], "title": r["title"], "href": f"{base}r/{quote(r['key'])}/"} for r in reports
+                ],
+            },
+            {"label": "Artifacts", "items": artifacts},
+            {"label": "Runs", "items": runs},
+        ]
+        return {
+            "title": projects_.record(project)["title"],
+            "brand": "Cairn",
+            "mark": "C",
+            "reports": reports,
+            "groups": [g for g in groups if g["items"]],
+        }
 
     # ------------------------------------------------------------------ login
 
@@ -707,7 +866,12 @@ class UIHandler(BaseHTTPRequestHandler):
         if session is None:
             time.sleep(LOGIN_DELAY)
             return self._json(401, {"error": "That token is not valid."})
-        self._send(200, b'{"ok":true}', "application/json", {"Set-Cookie": self._start(given, session), "Cache-Control": "no-store"})
+        self._send(
+            200,
+            b'{"ok":true}',
+            "application/json",
+            {"Set-Cookie": self._start(given, session), "Cache-Control": "no-store"},
+        )
 
     def _start(self, token: str, session: Session) -> str:
         """Act with `token` from now on; returns the Set-Cookie header that hands its session id to the browser."""
@@ -754,7 +918,9 @@ class UIHandler(BaseHTTPRequestHandler):
 
     def log_request(self, code="-", size="-"):  # the request log's line, the same as the API's
         status = getattr(code, "value", code)
-        sys.stderr.write(request_line(self.address_string(), self.command or "-", (self.path or "").split("?")[0], status) + "\n")
+        sys.stderr.write(
+            request_line(self.address_string(), self.command or "-", (self.path or "").split("?")[0], status) + "\n"
+        )
 
 
 class _ChunkedSink(io.RawIOBase):
@@ -800,18 +966,31 @@ class _ChunkedSink(io.RawIOBase):
         self.wfile.write(b"0\r\n\r\n")
 
 
-def make_ui_server(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", port: int = 8801,
-                   no_auth: bool = False, login_token: str = "") -> ThreadingHTTPServer:
+def make_ui_server(
+    backend: LocalBackend | RemoteBackend,
+    host: str = "127.0.0.1",
+    port: int = 8801,
+    no_auth: bool = False,
+    login_token: str = "",
+) -> ThreadingHTTPServer:
     """A bound UI server (not yet serving). `login_token`: the token the login link logs in with, and whose session id
     a browser's cookie from an earlier launch carries. With no_auth there is no login and every request uses the
     backend's own access, so it is refused on any address but this machine's loopback."""
     if no_auth and host not in LOCAL_HOSTS:
         raise SystemExit("cairn: --no-auth needs a loopback --host (it shows the repo to anyone)")
-    handler = type("Handler", (UIHandler,), {
-        "backend": backend, "state": {"token": login_token, "login": login_token, "session": None}, "login_codes": set(),
-        "lock": threading.Lock(), "no_auth": no_auth,
-        "static_cache": {}, "fixed": backend.anonymous() if no_auth else None,
-    })
+    handler = type(
+        "Handler",
+        (UIHandler,),
+        {
+            "backend": backend,
+            "state": {"token": login_token, "login": login_token, "session": None},
+            "login_codes": set(),
+            "lock": threading.Lock(),
+            "no_auth": no_auth,
+            "static_cache": {},
+            "fixed": backend.anonymous() if no_auth else None,
+        },
+    )
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     return server
@@ -843,8 +1022,15 @@ def login_link(server: ThreadingHTTPServer, base: str) -> str:
 
 PLAIN_HTTP_WARNING = "plain HTTP: use a VPN (Tailscale), an SSH tunnel, or an HTTPS proxy"
 
-def serve_ui(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", port: int = 8801, no_auth: bool = False,
-             login_token: str = "", open_browser: bool = False) -> None:
+
+def serve_ui(
+    backend: LocalBackend | RemoteBackend,
+    host: str = "127.0.0.1",
+    port: int = 8801,
+    no_auth: bool = False,
+    login_token: str = "",
+    open_browser: bool = False,
+) -> None:
     """Serve the UI. With `login_token`, print a one-time login link for it (and open it with `open_browser`).
     Beside `cairn server` (CAIRN_UI_PARENT set) it prints only its lines of the server's startup block."""
     try:
