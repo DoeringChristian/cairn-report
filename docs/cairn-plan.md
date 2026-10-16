@@ -1,5 +1,10 @@
 # Cairn: the product
 
+> **This plan predates 0.15.** 0.15 replaced the version uids (UUIDv7) and the stored short ids with one
+> id per version (64 hex digits; a short id is a prefix of it, computed when shown) and one reference syntax
+> (`<id>`, `<name>`, `<name>@v<n>`, `<name>@<alias or label>`); see [architecture.md](architecture.md),
+> "Identity and references". Where the text below says uid, read id; `name@<uid>` is now the id alone.
+
 > **Since 0.14 the storage design is [architecture.md](architecture.md)** (a repo, an optional remote,
 > automatic sync; fixed). Where this plan describes the store folder, the data and cache roots, the
 > replica, or `[store]`, the architecture document and the README win: the repo is `.cairn/` itself, the

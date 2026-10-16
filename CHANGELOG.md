@@ -1,21 +1,70 @@
 # Changelog
 
-## 0.14.1
+## 0.15.0: one id per version, one reference syntax
 
-- **A running version mirrors its folder.** A file that leaves the folder of a run, a draft or a `cairn publish
-  --watch` (deleted, renamed, or excluded since) now leaves the running version at the next live sync, and
-  always when it ends: a completed version equals the folder's final content. Before, a running version's file
-  list only grew, so a run that wrote a video, copied it into a result draft and deleted it still listed it,
-  and a file caught mid-write and deleted later stayed at the size it was caught with. A file caught mid-write
-  and kept was and is replaced by its final content. The files of a running version (`POST
-  .../versions/<n>/files`, `LocalRepo.add_files`) take removal entries `{"path": p, "removed": true}`, applied
-  in order (a path the version does not have is no change); a publish refuses them. A pending run carries its
-  removals in its outbox entry, so `cairn sync` ends it with the right files on the remote. Clients of 0.14.1
-  need a 0.14.1 server: a 0.14.0 server refuses removal entries.
-- **UI:** the lineage graph is drawn even when it has one node ("Data only" no longer ends in a dead end), and
-  an empty image file is shown as empty instead of as an image that cannot be loaded.
-- **A short id made of decimal digits** (about 4% of them, such as `4381209`) opened in the UI as that version
-  number and was not found; a bare number of 4 or more digits is now tried as a short id first.
+A version's **id** is now its only identity, as a commit's hash is in git, and every reference is read by one parser
+(`docs/architecture.md`, "Identity and references" and "Invariants"). Repos made by 0.14 are converted once with
+`cairn upgrade`; a server and its clients upgrade together.
+
+- **The id is the identity.** Every version has an `id`: 64 lowercase hex digits, 256 random bits made where the
+  version is made (`secrets.token_hex(32)`). It replaces the UUIDv7 uid and the stored short id everywhere: the
+  database, manifests, inputs and lineage, `.cairn-inputs.jsonl`, the consumers table, aliases (they point at ids),
+  the outbox (`outbox/<id>/`), read-only folders (`versions/<id>/`), heartbeats, drafts (`drafts/<name>/<id>/`), the
+  HTTP API (request and response fields named `id`), the UI's JSON and URLs, report manifests, and the CLI. There is
+  no `uid` field any more; `Version.id` is the id (`Version.uid`, `Repo.uid`, `cairn.store.new_uid` are gone).
+- **A short id is a prefix of the id,** computed when it is shown (never stored): the shortest prefix of at least 7
+  digits that no other id of the project starts with. Any unique prefix of 4 or more digits names the version; one
+  that matches several is `cairn.Ambiguous`, listing each as `name@v<n> (short id)`. `cairn show` prints the whole
+  id and the short id.
+- **One reference syntax with four forms, told apart by their shape:** `<id>` (4 to 64 hex digits), `<name>`
+  (latest), `<name>@v<n>`, `<name>@<alias or label>`, each optionally followed by `//<path>`. Artifact names,
+  aliases, and labels that are 4 or more hex digits alone (`cafe`, `1234`, `DEADBEEF`) are refused when they are
+  made (publish, draft, run names, aliases, labels; matched case-insensitively), and an alias and a label never
+  share a word, so nothing is matched "first" any more: `name@<short id>` is refused (write the id alone). One
+  parser, `store/refs.py`, reads every reference (the CLI, the Python API, report `inputs:`, the inputs file, the
+  server, the UI), and a boundary test fails on selector parsing anywhere else; the web app has one module
+  (`web/src/refs.ts`) that mirrors it. The UI's `_numbered` shortcut, which read an all-digit short id as a version
+  number, is gone with every other `isdigit` rewriting. Report `inputs:` must be text: an unquoted `1234567` (a
+  number to YAML) is refused with a hint to quote it.
+- **Order never comes from ids.** `@latest` is the highest completed number (a version that started first and
+  completed last no longer takes `latest` from a newer one); with a remote, a pending version of the repo is
+  `@latest` (it arrives last, so it gets the highest number), and among pending ones the one sent last. The outbox is
+  sent in the order versions became final (`completed`, then `created`, stamps strictly increasing in a process),
+  every entry after the pending versions it names as inputs (a run's outputs after their run). Listings go by
+  number, adoption and `cairn prune` by `created` and last access.
+- **Stored references are whole ids:** inputs (a reference given in any form is resolved to the id it names when the
+  version is recorded, offline from the repo, else refused), the inputs file, lineage, aliases, report manifests
+  (`inputs.<name>.id`, with `name` and `version`), Hydra sweeps (`metadata.sweep.id`, trial rows by id).
+- **The HTTP API is v3** (`/api/v3/...`): `GET /api/v3/repo` is the handshake (`{id, cairn, api}`); a 0.15 client
+  refuses a 0.14 server and a 0.15 server answers every `/api/v2/` request with 400 and a message, so a server and
+  its clients upgrade together. Versions in paths are `v<n>` or a whole id (`.../versions/v3`, `.../versions/<id>`);
+  references travel as text (`resolve`, `find`, `lineage`, `/files/<project>/<reference>//<path>`) and the server
+  parses them; `ids?prefix=` lists the versions of a prefix and `POST .../short-ids` computes short ids.
+- **The UI's URLs** are `/p/<project>/a/<name>[@v<n>|@<alias or label>]` and `/p/<project>/v/<id>`; its JSON names
+  versions by id, with `nodes` giving each one's name, number, and short id.
+- **`cairn upgrade [repo]`** converts a repo made by 0.14 (a project's `.cairn/`, or a server's repo folder with
+  many projects) in place, once. It refuses while the repo is in use (a `cairn server` holds `server.lock`, a
+  running version has a live heartbeat, a draft is open), backs the database up to `metadata.sqlite3.0.14.bak`
+  (SQLite's backup API), rewrites every table and manifest that named a uid in one transaction, renames
+  `outbox/`, `versions/`, `heartbeats/`, and the drafts to the ids, sets layout 2 in `repo.json`, runs `verify`,
+  and reports what it converted. A 0.14 version's id is the SHA-256 of its uid, so a server and its clients,
+  upgraded one by one, agree on every id, and every short id 0.14 printed still names the same version. Every other
+  command refuses a 0.14 repo: `this repo was made by Cairn 0.14: run \`cairn upgrade\``.
+- **The 0.14.1 fixes** (never released on their own) are part of this release:
+  - **A running version mirrors its folder.** A file that leaves the folder of a run, a draft or a `cairn publish
+    --watch` (deleted, renamed, or excluded since) now leaves the running version at the next live sync, and
+    always when it ends: a completed version equals the folder's final content. Before, a running version's file
+    list only grew, so a run that wrote a video, copied it into a result draft and deleted it still listed it, and a
+    file caught mid-write and deleted later stayed at the size it was caught with. A file caught mid-write and kept
+    was and is replaced by its final content. The files of a running version (`POST .../versions/<sel>/files`,
+    `LocalRepo.add_files`) take removal entries `{"path": p, "removed": true}`, applied in order (a path the version
+    does not have is no change); a publish refuses them. A pending run carries its removals in its outbox entry, so
+    `cairn sync` ends it with the right files on the remote.
+  - **UI:** the lineage graph is drawn even when it has one node ("Data only" no longer ends in a dead end), and an
+    empty image file is shown as empty instead of as an image that cannot be loaded.
+  - **A short id made of decimal digits** (about 4% of them, such as `4381209`) opened in the UI as that version
+    number and was not found. 0.14.1 tried a bare number of 4 or more digits as a short id first; 0.15 removes the
+    cause instead (one parser, disjoint forms).
 
 ## 0.14.0: the repo, an optional remote, automatic sync
 

@@ -90,17 +90,18 @@ The design is fixed in [`docs/architecture.md`](docs/architecture.md); in short:
   pull command to remember and no switching between modes: the same code runs with and without a remote,
   online and offline.
 - **One source of truth for numbers, aliases, and deletions:** the remote if there is one, else the repo.
-  A version's **uid** (a UUIDv7) is its identity everywhere; `vN` is the source of truth's name for it, and
-  its **short id** (`3f9a2c1`: the first hex digits of the SHA-256 of the uid) names it too.
-  A version made while the remote does not answer is **pending**: it has its uid and no number, is
-  usable at once by its uid (and as `@latest`), waits in the repo's **outbox**, and gets the remote's
+  A version's **id** (64 hex digits, random, made where the version is made) is its only identity
+  everywhere; `vN` is the source of truth's name for it, and its **short id** (`3f9a2c1`: a prefix of the
+  id) names it too.
+  A version made while the remote does not answer is **pending**: it has its id and no number, is
+  usable at once by its id (and as `@latest`), waits in the repo's **outbox**, and gets the remote's
   number when the remote takes it. Versions used from the remote are copied into the repo, so the repo
   answers when the remote does not.
 - **Sync is automatic:** at the start and end of every `cairn` command, in the background of a process
   that left something pending (and once more as it exits), while a run runs (its live version, every
   `[repo] interval` seconds), and with `cairn sync` (`--watch` keeps going, for a cluster's login node).
   Each attempt fails quickly when the remote does not answer; nothing blocks a run. Sending is
-  idempotent by uid: an interrupted or repeated sync never makes a second version. `cairn status` lists
+  idempotent by id: an interrupted or repeated sync never makes a second version. `cairn status` lists
   what waits: pending, running, and rejected versions.
 - **On a network filesystem there is no repo database.** On NFS, Lustre, GPFS, SMB and the like (a
   cluster's shared home or project space), SQLite and file locks are unreliable across nodes. There a
@@ -119,8 +120,55 @@ The design is fixed in [`docs/architecture.md`](docs/architecture.md); in short:
 ```
 
 A repo that numbered versions itself (it had no remote) and then gets one sends them at its first sync,
-oldest first; the remote numbers them, and the repo takes the numbers over (uids, lineage, and the
+oldest first; the remote numbers them, and the repo takes the numbers over (ids, lineage, and the
 reports that recorded them stay valid).
+
+### New in 0.15: one id per version, one reference syntax
+
+- **The id is the identity.** Every version has an `id`: 64 lowercase hex digits, 256 random bits made
+  where the version is made. The database, manifests, inputs and lineage, aliases, the outbox, read-only
+  folders, heartbeats, drafts, the HTTP API, the UI, report manifests, and the CLI name a version by it.
+  There is no second identifier.
+- **A short id is a prefix of the id,** computed when it is shown, never stored: the shortest prefix of at
+  least 7 digits that no other id of the project starts with. Any unique prefix of 4 or more digits names
+  the version; one that matches several is an error (`cairn.Ambiguous`) that lists them.
+- **A reference has one of four forms,** told apart by their shape: `<id>` (4 to 64 hex digits),
+  `<name>` (latest), `<name>@v<n>`, and `<name>@<alias or label>`, each optionally followed by
+  `//<path>`. Names, aliases, and labels of 4 or more hex digits alone (`cafe`, `1234`) are refused when
+  they are made, and an alias and a label of an artifact never share a word, so nothing is matched
+  "first". `name@<short id>` is refused: write the id alone. One parser, `cairn.store.refs`, reads every
+  reference.
+- **Order never comes from ids.** `@latest` is the highest completed number; with a remote, a pending
+  version is `@latest` (it arrives last). The outbox is sent in the order versions became final.
+- **Stored references are whole ids:** inputs, `.cairn-inputs.jsonl`, lineage, aliases, report manifests,
+  Hydra sweeps.
+- **The HTTP API is v3** (`/api/v3/`), and the UI's URLs are `/p/<project>/a/<name>@v<n>` and
+  `/p/<project>/v/<id>`.
+- A repo made by 0.14 is converted once with `cairn upgrade` (see "Upgrading from 0.14").
+
+### Upgrading from 0.14
+
+```bash
+cairn upgrade             # the project's repo, .cairn/
+cairn upgrade /srv/cairn  # a server's repo folder, with all its projects
+```
+
+Stop the server first, then upgrade the server's repo folder and every project's `.cairn/`, in any order.
+`cairn upgrade [repo]` converts the repo in place, once. It refuses while the repo is in use (a `cairn
+server` holds `server.lock`, a running version has a live heartbeat, a draft is open). It backs the
+database up to `metadata.sqlite3.0.14.bak`, rewrites every table and manifest that named a uid in one
+transaction, renames the folders named by uid (`outbox/`, `versions/`, `heartbeats/`, `drafts/`) to the
+ids, sets layout 2 in `repo.json`, runs `cairn verify`, and reports what it converted. Numbers, labels,
+aliases, files, and blobs stay as they were. An interrupted upgrade picks up where it ended when it is run
+again.
+
+A 0.14 version's id is the SHA-256 of its uid (the 0.14 short id was the start of that hash), so a server
+and its clients, upgraded one by one, agree on every id, and every short id 0.14 printed still names the
+same version. A `.cairn-inputs.jsonl` row written by 0.14 (with a `uid`) is still read, as that id.
+Every other command refuses a 0.14 repo with "this repo was made by Cairn 0.14: run `cairn
+upgrade`". Clients and servers of 0.14 and 0.15 refuse each other: a 0.15 server answers every
+`/api/v2/` request (a 0.14 client's) with 400 and a message, and a 0.15 client refuses a 0.14 server. So
+a server and its clients upgrade together.
 
 ### New in 0.14: the repo layout
 
@@ -140,7 +188,7 @@ In a pixi project:
 graphviz = "*"   # only needed for Graphviz diagram fences
 
 [pypi-dependencies]
-cairn = { git = "https://github.com/DoeringChristian/cairn.git", tag = "v0.14.0" }
+cairn = { git = "https://github.com/DoeringChristian/cairn.git", tag = "v0.15.0" }
 
 [tasks]
 report-build = "cairn build"
@@ -226,14 +274,17 @@ A report declares the artifacts it reads in its front matter, by local name:
 ---
 title: Descent
 inputs:
-  descent: descent@latest          # name[@vN|@<short id>|@alias|@label], as in `cairn.pull`
+  descent: descent@latest          # name[@vN|@alias|@label], or an id, as in `cairn.pull`
   crops: datasets/crops@v3
+  base: "3f9a2c1"                  # an id (or 4+ of its first digits): quote it
 ---
 ```
 
-Local names are lower-case identifiers (`[a-z_][a-z0-9_]*`). At build time each
-reference is resolved to an exact version (`name@vN`, or `name@<uid>`
-for a version of this repo that is still pending; aliases only resolve
+Local names are lower-case identifiers (`[a-z_][a-z0-9_]*`). Every value must be
+text: YAML reads an unquoted `1234567` as a number, and the build refuses it with a
+hint to quote it. At build time each
+reference is resolved to an exact version (`name@vN`, or the whole id
+of a version of this repo that is still pending; aliases only resolve
 completed versions), materialized read-only in the repo,
 and exposed in `python exec` blocks as `inputs`, an object whose attributes and
 items are `Path`s:
@@ -264,7 +315,8 @@ elsewhere is watched, other locations are not), and imports of project modules
 (importing is not reading data).
 
 The manifest (`.cairn/build/<slug>/manifest.json`) and `report-data.json`
-record `inputs: {name: {requested, resolved, uid, files}}`; the manifest also lists
+record `inputs: {name: {requested, resolved, id, name, version, files}}` (`resolved`
+is the exact reference, `id` the version's whole id); the manifest also lists
 every file read with its hash, links, typed numbers in prose, and the tooling
 versions.
 
@@ -359,7 +411,7 @@ with cairn.draft("models/student") as model:      # an output of the run
   running run adds them to its metadata (in the repo too), whoever started it. `run.finish()` ends it
   early (a Hydra job does).
 - **Its version exists from the start** (running), so the outputs published while it runs can name it
-  by its uid. With a remote it is synced every `[repo] interval` seconds with a heartbeat
+  by its id. With a remote it is synced every `[repo] interval` seconds with a heartbeat
   (`watch`, the default there), so the remote's UI shows it live; without one it is written when it
   ends (`watch=True` to follow it).
 - **It ends with the process:** its open drafts are published, then the run completes. An unhandled
@@ -371,7 +423,7 @@ with cairn.draft("models/student") as model:      # an output of the run
   kept (`cairn drafts`). A `SystemExit` that the script catches does not count. (Before Python 3.12
   only `sys.exit` is noticed, not a bare `raise SystemExit`.)
 - **A run killed outright** (SIGKILL, the OOM killer, a node failure) leaves no trace of its own, so
-  its running version carries a heartbeat (`<repo>/heartbeats/<uid>`, or its outbox entry's with a remote).
+  its running version carries a heartbeat (`<repo>/heartbeats/<id>`, or its outbox entry's with a remote).
   Opening the repo (any `cairn` command, `cairn.connect()`, the UI) and `cairn status` fail every running
   version whose process is gone on this host, or whose heartbeat is older than `[repo] heartbeat_timeout`
   (600 s by default), with the error "the process died (no heartbeat since ...)". With a remote the next
@@ -381,7 +433,7 @@ with cairn.draft("models/student") as model:      # an output of the run
   file). `cairn.pull(ref)` does the same and returns the folder. A subprocess sees the run's inputs file
   as `$CAIRN_INPUTS` (so `cairn pull` in a shell script is recorded too) and the run as `$CAIRN_RUN`: a
   Python subprocess does not start a run of its own, its pulls and drafts belong to the parent's run.
-- **`cairn.draft(name)`** is a fresh, empty folder (`.path`, in `.cairn/drafts/<name>/<uid>/`, git-ignored)
+- **`cairn.draft(name)`** is a fresh, empty folder (`.path`, in `.cairn/drafts/<name>/<id>/`, git-ignored)
   that becomes the next version of `name` when the block ends: published exactly like `cairn.publish`
   (the unchanged check, the digest, `aliases=`, `label=`, default the start time), then removed (its
   blobs are copy-on-write clones, or hard links where the filesystem cannot clone). An
@@ -392,10 +444,10 @@ with cairn.draft("models/student") as model:      # an output of the run
 - `cairn.current_draft()` returns the innermost open draft (or the one the working directory lies in).
 
 ```bash
-cairn drafts                                  # open, abandoned, and kept drafts and runs: name, uid, state, age, size, path
-cairn drafts publish <uid|path>               # publish a kept one (refused if its run.json says failed,
-                                              #   unless --allow-incomplete)
-cairn drafts discard <uid|path>               # delete it
+cairn drafts                                  # open, abandoned, and kept drafts and runs: name, short id, id, state, age, size, folder
+cairn drafts publish <id prefix|path>         # publish a kept one (refused if its run.json says failed,
+                                              #   unless --allow-incomplete); a unique prefix of 4+ digits
+cairn drafts discard <id prefix|path>         # delete it
 ```
 
 ### The run folder
@@ -426,12 +478,14 @@ record. System metrics come from psutil when it is installed, else `/proc` and t
 ### Lineage through runs
 
 A run's inputs are every version the process used or pulled; every draft it published has exactly one
-input, the run (named by its uid while the run runs; the repo accepts a running version as an input
-only by its exact uid, and still refuses unknown, failed, and deleted ones). So the repo records
+input, the run (named by its id while the run runs; the repo accepts a running version as an input
+only by its whole id, and still refuses unknown, failed, and deleted ones). Inputs are stored as whole ids:
+a reference given in any form is resolved to the id it names when the version is recorded. So the repo records
 `datasets/crops@v3 -> runs/train@v7 -> models/student@v2`. `Version.inputs` and `consumers` are those
-direct edges; `Version.run` is the run an output came from; `Version.upstream()` and `downstream()`
+direct edges, as ids; `Version.run` is the run an output came from; `Version.upstream()` and `downstream()`
 look through runs (the data an output came from, the outputs made from a dataset), and so does
-`cairn.lineage(ref)` (`through_runs=False` for the direct edges); `cairn show` prints the run and the
+`cairn.lineage(ref)` (`through_runs=False` for the direct edges; it answers exact references, `name@v<n>`
+or the id of a pending version); `cairn show` prints the run and the
 data behind it. A run with outputs is protected from deletion as their input, like any input. The UI
 draws runs as their own nodes (a `run` pill; failed and running ones marked) and has a "Data only"
 toggle that leaves them out.
@@ -501,7 +555,7 @@ hydra:
   job folder is the run's, so `.hydra/`, `provenance/` (the snapshot, which then replaces `code/`), the
   job's files, and the run's logs and system metrics are one version of `runs/<run.name>`.
 - **A sweep:** each trial (`<sweep>/<n>`) is a run of its own, a version of `runs/<run.name>` labelled
-  `<sweep label>/<n>` with `metadata.sweep` = {uid, label, num, ref}, published when the trial ends (its
+  `<sweep label>/<n>` with `metadata.sweep` = {id, label, num, ref} (`id` and `ref`: the sweep's summary run), published when the trial ends (its
   folder then leaves the sweep's; trials.jsonl lists it). `StudyCompletion` (and `cairn finalize-study
   <sweep folder>`, for a launcher that died) publishes the sweep folder (multirun.yaml, trials.jsonl) as
   the summary: a run of its own whose inputs are the trial runs, with `metadata.sweep.trials` and the
@@ -524,24 +578,38 @@ The repo holds the project's **artifacts**: named, versioned folders. A name is 
 slash path (`descent`, `datasets/crops`); reports are the artifacts `reports/<slug>`. A
 version is immutable once completed (until it is deleted: see below) and records its files (by content hash), metadata,
 the exact versions it consumed (`inputs`), and where it was published from. Aliases
-(`latest` moves by itself; `best`, `paper` by hand) and labels select versions:
-`name[@v3|@uid|@<short id>|@alias|@label][//file]`, or a bare short id. A reference never names a
-project: it is always one of the project the repo (or the remote, `<server>/<project>`) holds.
+(`latest` moves by itself; `best`, `paper` by hand) and labels select versions. A reference has
+exactly one of four forms, told apart by its shape alone, each optionally followed by `//<file>`:
 
-Every version also has a **uid**, a UUIDv7 made where the version is created and kept everywhere:
-`datasets/crops@0192f3a4-5b6c-7d8e-9f01-23456789abcd` names that version as exactly as `@v3`. A selector in
-the canonical lowercase UUIDv7 form is always a uid, so no alias or label may take that form (nor `v<n>`).
-`v<n>` is the source of truth's readable name; the uid is the identity, so it also names a pending version
-(one the remote has not numbered yet). Every repo has a uid too (`repo.json`).
+| form | names |
+| --- | --- |
+| `<id>` | one version: 4 to 64 hex digits, a prefix of its id (`3f9a2c1`) |
+| `<name>` | the artifact's latest version (`descent`) |
+| `<name>@v<n>` | version n of the artifact (`descent@v3`) |
+| `<name>@<word>` | the version an alias or a label names (`datasets/crops@best`) |
 
-Every version also has a **short id**: the first 7 hex digits of the SHA-256 of its uid, more when needed to
-tell it apart from the project's other versions, fixed when the version is made and the same in the repo and
-on the remote. `cairn versions`, `cairn show`, the messages that print published versions (`published
-descent@v3 (3f9a2c1; ...)`), and the UI show it. `name@<id>` and a bare `<id>` name a version by any unique
-prefix of 4 or more digits (`cairn show 3f9a`, `cairn.use("descent@3f9a2c1")`), also a running or pending one;
-the full uid works too. Names, numbers, aliases, and labels are matched first (a label `abcd` wins over the
-id prefix `abcd`; a bare `abcd` names the artifact `abcd` if there is one), and an ambiguous prefix is an
-error that lists the candidates (name, `vN`, short id).
+A reference never names a project: it is always one of the project the repo (or the remote,
+`<server>/<project>`) holds.
+
+Every version has an **id**: 64 lowercase hex digits, 256 random bits made where the version is created,
+never changed and never reused. It is the version's only identity, as a commit's hash is in git, so it
+also names a pending version (one the remote has not numbered yet). `v<n>` is the source of truth's
+readable name for it. Every repo has an id too (`repo.json`).
+
+A version's **short id** is a prefix of its id: the shortest prefix of at least 7 digits that no other id
+of the project starts with, computed when it is shown (never stored). `cairn versions`, `cairn show`, the
+messages that print published versions (`published descent@v3 (3f9a2c1, ...)`), and the UI show it;
+`cairn show` and the version's page also show the whole id. Any unique prefix of 4 or more digits names
+the version (`cairn show 3f9a`, `cairn.use("3f9a2c1")`), also a running or pending one; a prefix that
+matches several versions is an error that lists them (`name@vN (short id)`). The forms cannot overlap:
+an artifact name, an alias, or a label of 4 or more hex digits alone (`cafe`, `1234`, `DEADBEEF`) is
+refused when it is made, `v<n>` is never an alias or a label, and an alias and a label of an artifact
+never share a word. So a bare hex word is always an id, and `name@<short id>` is refused: write the id
+alone. Every reference is read by one parser, `cairn.store.refs`.
+
+`@latest` is the highest completed number, never the newest clock: a version that started first and
+completed last does not take `latest` from a newer one. With a remote, a pending version of the repo is
+`@latest` (it arrives last, so it gets the highest number), and among pending ones the one sent last.
 
 The repo's SQLite database (`metadata.sqlite3`: versions, aliases and every alias move, who
 consumed which version) and its file contents, named by their SHA-256 (`blobs/`), live side by side. Every
@@ -652,8 +720,8 @@ cairn pull x@latest --into DIR [--no-record]               # copy it into DIR in
 cairn init [FOLDER]                                        # create a repo (see "Finding the repo")
 cairn remote [set URL | remove]                            # the remote: show, set, or drop it
 cairn artifacts [--prefix reports/]                        # latest version, version count, aliases
-cairn versions datasets/crops                              # number (or pending), short id, status, label, created, uid, size
-cairn show datasets/crops@paper                            # short id, metadata, files, inputs, consumers
+cairn versions datasets/crops                              # number (or pending), short id, status, label, created, files, size
+cairn show datasets/crops@paper                            # short id, the whole id, metadata, files, inputs, consumers
 cairn show 3f9a2c1                                         # a version by its short id (any unique 4+ digits)
 cairn status                                               # what waits for the remote: pending, running, rejected
 cairn sync [--watch]                                       # send it now (and mirror the remote's aliases)
@@ -670,7 +738,8 @@ truth, so with a remote they are made there (and then mirrored into the repo); w
 answer they fail with a message that says so.
 
 **Lineage.** `pull` appends the exact version it returned to `.cairn-inputs.jsonl` in the working
-directory (or the file `$CAIRN_INPUTS` names). Publishing a folder merges every `.cairn-inputs.jsonl`
+directory (or the file `$CAIRN_INPUTS` names): one row `{"id": <whole id>, "ref": "name@v3", "time"}`
+per pull, the id being what counts. Publishing a folder merges every `.cairn-inputs.jsonl`
 found anywhere inside it, one per Hydra multirun trial for example, into the new version's `inputs`
 (deduplicated); none of them becomes a file of the version.
 
@@ -692,14 +761,14 @@ import cairn
 
 repo = cairn.connect()
 crops = repo.artifact("datasets/crops")         # repo.artifacts(prefix="datasets/")
-repo.version("3f9a2c1")                         # any reference, also a bare short id
+repo.version("3f9a2c1")                         # any reference, also an id (or 4+ of its first digits)
 
-v3 = crops.version(3)                           # or "v3", an alias, a label, a uid, a short id; crops.latest, crops.versions()
-v3.ref, v3.short_id, v3.uid, v3.label, v3.status, v3.created, v3.metadata, v3.inputs, v3.consumers
+v3 = crops.version(3)                           # or "v3", an alias, a label, an id; crops.latest, crops.versions()
+v3.ref, v3.id, v3.short_id, v3.label, v3.status, v3.created, v3.metadata, v3.inputs, v3.consumers
 [(f.path, f.size, f.sha256) for f in v3.files]
 with v3.open("tables/cases.csv") as handle:     # streams one file without pulling the version; recorded as an input
     header = handle.readline()
-folder = v3.pull()                              # <repo>/versions/<uid>/files/, read-only; recorded as an input
+folder = v3.pull()                              # <repo>/versions/<id>/files/, read-only; recorded as an input
 
 fit = repo.artifact("models/fit")
 v = fit.publish("runs/fit", metadata={"loss": 0.1}, aliases=["best"], inputs=[v3.ref])   # -> Version
@@ -746,16 +815,16 @@ nothing names them any more. With a remote, deletions happen there (the source o
 into the repo; they need the remote to answer.
 
 ```bash
-cairn delete datasets/crops@v3 --reason "wrong crop size"   # one version (also @uid, @alias, @label)
+cairn delete datasets/crops@v3 --reason "wrong crop size"   # one version (also an id, @alias, @label)
 cairn delete --artifact scratch/tmp                          # every version of an artifact (all or none)
 cairn delete datasets/crops@v1 --force                       # a protected version too
 ```
 
 A deleted version becomes a **tombstone**: it stays in the version list (status `deleted`, with
 `deleted_at`, `deleted_by`, and the reason; the UI shows it greyed with a `deleted` pill), keeps its
-label, metadata, and inputs, and loses its files. Its number and uid are never used again: the next
-publish gets the next number, and a repo that sends the same uid again is refused. Any reference to
-it (`@v3`, `@<uid>`, as an input, a file URL) fails with "was deleted" (410 on the server). Lineage
+label, metadata, and inputs, and loses its files. Its number and id are never used again: the next
+publish gets the next number, and a repo that sends the same id again is refused. Any reference to
+it (`@v3`, its id, as an input, a file URL) fails with "was deleted" (410 on the server). Lineage
 keeps its edges, and marks the node deleted. `latest` moves back to the newest completed version left.
 
 Some versions are **protected**, and a deletion that touches one is refused (409) unless forced:
@@ -797,9 +866,10 @@ The same in Python: `version.delete(reason=..., force=False)`, `artifact.delete(
 `repo.retention = [{"prefix": "runs/", "keep_last": 5}]` (or `repo.set_retention("runs/",
 keep_last=5)`), and `repo.gc(dry_run=True, grace="24h")`, which returns what was (or would be)
 deleted, the protected versions it skipped, and the blobs and bytes freed. The API routes are
-`DELETE /api/v2/projects/<p>/artifacts/<name>/versions/<n>` (`?force=1&reason=...`),
-`DELETE .../artifacts/<name>`, `DELETE /api/v2/projects/<p>` (a server admin's), `GET`/`PUT /api/v2/projects/<p>/retention`,
-and `POST /api/v2/gc {dry_run, grace}`.
+`DELETE /api/v3/projects/<p>/artifacts/<name>/versions/<sel>` (`<sel>`: `v<n>` or a whole id;
+`?force=1&reason=...`; it answers `{deleted: [refs], ids, skipped}`),
+`DELETE .../artifacts/<name>`, `DELETE /api/v3/projects/<p>` (a server admin's), `GET`/`PUT /api/v3/projects/<p>/retention`,
+and `POST /api/v3/gc {dry_run, grace}`.
 
 After `cairn delete` here, the repo holds the tombstone too, so exact references to it fail here as
 well; another machine's repo learns of the deletion the next time it reads that version from the remote.
@@ -810,9 +880,9 @@ With a remote, the remote numbers versions; the repo keeps what is on its way th
 it used:
 
 ```text
-<repo>/outbox/<uid>/manifest.json      a version the remote does not have yet: everything the remote needs, and its
-                                       sync state (pending, running, rejected)
-<repo>/outbox/<uid>/heartbeat          a running version's owner: time, host, pid (rewritten while it runs)
+<repo>/outbox/<id>/manifest.json       a version the remote does not have yet: everything the remote needs (its
+                                       "id" among it), and its sync state (pending, running, rejected)
+<repo>/outbox/<id>/heartbeat           a running version's owner: time, host, pid (rewritten while it runs)
 <repo>/blobs/<aa>/<sha256>             the contents (shared with everything else in the repo)
 <repo>/metadata.sqlite3                copies of the remote's versions this repo used or sent, with the remote's
                                        numbers and its aliases (none on a network filesystem)
@@ -823,19 +893,21 @@ inputs, aliases) and the contents it needs, cloned (copy-on-write where the file
 into `blobs/`, so the upload never reads the source folder again: a file changed after `publish` returns
 does not change the version. Then it is sent. If the remote answers, the version gets its number at once
 (a running version is created on the remote as soon as it starts). If not, `publish` returns a
-**pending** version (its uid is set, its number is None) that is usable at once: `cairn.pull`,
-`Version.open`, and a report's `inputs:` resolve it by uid, by an alias it was published with, by its
-label, or as `latest` (when it is newer than what the remote has), with a warning that it is pending.
-Its uid-exact reference `name@<uid>` is what lineage records until the remote numbers it; its short id names it too.
+**pending** version (its id is set, its number is None) that is usable at once: `cairn.pull`,
+`Version.open`, and a report's `inputs:` resolve it by its id (or a unique prefix of it), by an alias it
+was published with, by its label, or as `latest` (a pending version is `@latest`: it arrives last, so it
+gets the highest number), with a warning that it is pending. Lineage records its id, as for every
+version; its exact reference (`Version.ref`) is the whole id until the remote numbers it.
 
 **Sending** (any `cairn` command at its start and end, a process that left something pending in the
-background and at exit, `cairn sync`): for each outbox entry, in dependency order (an entry after the
-pending entries it names as inputs, else oldest first), the blobs the remote lacks, then the manifest;
+background and at exit, `cairn sync`): for each outbox entry, in the order the versions became final
+(`completed`, then `created`), every entry after the pending entries it names as inputs (a run's outputs
+after their run), the blobs the remote lacks, then the manifest;
 the remote's answer (the version, with its number) is written into the repo as a copy, the artifact's
-aliases are mirrored, and only then is the entry removed. Every request carries the version's uid and
-the remote answers a uid it already has with that version, so a sync killed at any point, or two senders
+aliases are mirrored, and only then is the entry removed. Every request carries the version's id and
+the remote answers an id it already has with that version, so a sync killed at any point, or two senders
 on one outbox, never make a second version; senders claim an entry (`.flushing-<host>-<pid>`) to avoid
-double work. The remote turns uid inputs into `@v<n>`; when it finds a pending version unchanged and keeps
+double work. Inputs travel and stay as ids; when the remote finds a pending version unchanged and keeps
 its own, the entries that consumed the pending one name the remote's version instead. A version the remote
 refuses for good (its own content: an unknown input, a name it does not allow) stays as `rejected` with the
 reason (`cairn status` shows it; delete its folder to drop it). Everything else waits: a remote that is down
@@ -850,9 +922,9 @@ being sent), and it gives up only when nothing moved for 10 s. Whatever did not 
 uploader, the next command, or `cairn sync` sends it. A process keeps its connections to the remote alive.
 
 **Reading** asks the remote and copies what it gets into the repo; an exact reference the repo has
-(`@v<n>` of a copy, `@<uid>`) never asks the remote. While the remote does not answer, the repo answers
-from its copies and mirrored aliases (`latest` is the newest completed version it knows: a copy or a
-pending one), with a warning naming what it used; `--offline` (`offline=True`) never asks the remote.
+(`@v<n>` of a copy, a whole id) never asks the remote. While the remote does not answer, the repo answers
+from its copies and mirrored aliases (`latest` is a pending version if there is one, else the copy with
+the highest completed number), with a warning naming what it used; `--offline` (`offline=True`) never asks the remote.
 
 **Running versions** (a run, `cairn publish --watch`) are outbox entries of their own process, synced
 every `[repo] interval` seconds while they run; their owner rewrites `heartbeat` every few seconds. A job
@@ -866,9 +938,9 @@ the remote has everything. `cairn sync` sends them and mirrors the remote's alia
 repo has versions of; `cairn sync --watch` keeps doing so every `[repo] interval` seconds.
 
 **A remote added later.** A repo that had no remote numbered its versions itself. At its first sync with
-a remote, it hands them to the outbox (oldest first, their inputs named by uid, their aliases along) and
+a remote, it hands them to the outbox (oldest first, their inputs named by id, their aliases along) and
 they leave its database; the remote numbers them as they are sent, and they come back as copies with the
-remote's numbers. Until then they count as pending (uids, no numbers). A repo has one remote: if
+remote's numbers. Until then they count as pending (ids, no numbers). A repo has one remote: if
 `cairn remote set` later names a different one, sync stops with a message.
 
 ### Integrity
@@ -949,10 +1021,15 @@ cd /work/my-group/me/my-study && cairn sync --watch
 `exclude` takes gitignore-style globs on project paths: `*` and `?` stay within a folder, `**`
 spans folders, a leading `/` anchors to the project root.
 
-The server's API lives under `/api/v2/` (`GET /api/v2/repo` answers its uid and version) and its
-files under `/files/<project>/<name>@vN//<path>` (or `@<uid>`)
-(ETag, Range, `Content-Security-Policy: sandbox`); the routes are listed in
-`cairn/server/app.py`. Besides publishing and resolving it answers what a viewer needs:
+The server's API lives under `/api/v3/`. `GET /api/v3/repo` is the handshake: it answers `{id, cairn,
+api}` (the repo's id, the server's release, the API version 3), and a client refuses a server that does
+not speak v3; anything under `/api/v2/` is answered with 400 and a message. A version in a path is `v<n>`
+or a whole id (`.../versions/v3`, `.../versions/<id>`); a reference in a query (`resolve?ref=`,
+`find?ref=`, `lineage?ref=`) is text in any of the four forms, parsed by the server. Request and response
+fields name a version by `id` (a publish answers `{version, id, created}`); `ids?prefix=` lists the
+versions an id prefix names and `POST .../short-ids` computes short ids. Files are served at
+`/files/<project>/<reference>//<path>` (`descent@v3//figures/a.png`, `<id>//figures/a.png`; ETag, Range,
+`Content-Security-Policy: sandbox`); the routes are listed in `cairn/server/app.py`. Besides publishing and resolving it answers what a viewer needs:
 the projects with their artifact count and last update, an artifact's summary with its latest version and
 aliases, a version's file list, and lineage. Tokens are bearer tokens only: the server has no
 cookies, no login page and no HTML. It never runs pushed code.
@@ -970,7 +1047,7 @@ cairn ui --no-browser                      # print the login link without openin
 For the project's repo, `cairn ui` creates it if it is new and opens it directly (it writes no `token`, which
 is a client's token for the remote: without one it logs in with `.cairn/ui-token`, made once),
 whether a `cairn server` serves it or not; with a remote it reads through the remote and shows the
-versions still waiting for it as **pending** (a `pending` badge, their uid instead of `vN`). It prints a
+versions still waiting for it as **pending** (a `pending` badge, their short id instead of `vN`). It prints a
 one-time `Log in:` link and opens it in the browser, so there is no token to paste; for a remote the link
 logs in with the token a client finds (see "The token"), if any. A taken port (a server's own UI on 8801) moves
 it to a free one.
@@ -985,7 +1062,8 @@ needed) in the look of the reports (their stylesheet, tokens and class names):
   "Reports" (title, status, summary, latest version, an Open report link), "Artifacts" (latest,
   aliases, versions, updated), and "Runs" (the `runs/` artifacts: latest completed version, config
   keys, versions), sorted by update;
-- `/p/<project>/a/<name>[@vN|@alias]` an artifact: its versions (status, label, aliases, source
+- `/p/<project>/a/<name>[@v<n>|@<alias or label>]` an artifact, and `/p/<project>/v/<id>` a version by
+  its id (or a unique prefix of it): its versions (status, label, aliases, source
   host) with a version picker, and for the chosen version a copyable reference and `cairn pull`
   command, the files (download, inline preview of images, video, text and JSON, a file
   reference to copy), the metadata, the inputs and the consumers, and the lineage graph (inputs on
@@ -1001,21 +1079,23 @@ needed) in the look of the reports (their stylesheet, tokens and class names):
 - `/p/<project>/r/<slug>[@vN]/` a report version's built page, as before (a report is an artifact
   `reports/<slug>` with `site/` and `source/`); its Data panel links each input to the artifact page
   of the exact version, and its brand link returns to the project in the app;
-- `/files/<project>/<name>@vN//<path>` (or `@<uid>`) the repo's files, with Range (videos seek);
-  `/files/<project>/<name>@vN.zip` a whole version as a zip (folders kept under `<name>-v<n>/`, a
+- `/files/<project>/<reference>//<path>` (`<name>@v<n>//<path>`, `<id>//<path>`) the repo's files, with
+  Range (videos seek); `/files/<project>/<reference>.zip` a whole version as a zip (folders kept under `<name>-v<n>/`, a
   stored symlink as its target's file, compressed types stored and the rest deflated, ZIP64), written
   while it is sent: nothing is held in memory or written to disk.
 
 The app talks to the UI process through `/ui-api/` (GET unless noted), a session-scoped passthrough
 to the repo interface: `me` (`auth`; `mode`: `local`
 for one project, named `home`, or `server` for many),
-`projects`, `projects/<p>`, `projects/<p>/artifacts/<name>` (summary, versions, aliases),
-`projects/<p>/artifacts/<name>/versions/<n>` (manifest with files, consumers; `<n>` may also be a uid,
-a short id, an alias, or a label; a pending version has `version: null` and `pending: true`; every version
-has its `short_id`; inputs, consumers and lineage references read `project:name@sel`), `projects/<p>/artifacts/<name>/versions/<n>/run` (the Run panel's data: metrics and
+`projects`, `projects/<p>`, `projects/<p>/artifacts/<name>` (summary, versions with their `id` and
+`short_id`, aliases), `projects/<p>/version?ref=<ref>` (any of the four forms: `project`, `name`, the exact
+`ref`, `version` (the manifest with files, inputs as ids, and its `short_id`; a pending version has
+`version: null` and `pending: true`), `consumers` and `deleted` (ids), and `nodes`, which give each id's
+name, number, status, and short id), `projects/<p>/run?ref=<ref>` (the Run panel's data: metrics and
 system rows, numbers only, thinned to 2000; the last 64 KB of the logs; info.json; config),
-`lineage?ref=<project:name@sel>[&depth=1..3]` (inputs and consumers, assembled from
-one-level lookups, capped at 200 nodes), and `POST login`. Every call needs the session and the
+`projects/<p>/lineage?ref=<ref>[&depth=1..3]` (`{ref: <the root's id>, depth, truncated, nodes}`: each
+node's inputs and consumers as ids, its name, number, and short id; assembled from one-level lookups,
+capped at 200 nodes), and `POST login`. Every call needs the session and the
 header `X-Cairn: 1` (a cross-site request cannot send it); a name may be one URL-encoded segment.
 
 **Login.** The one-time link works once and does not expire (every launch prints a new one). The UI also
@@ -1057,17 +1137,17 @@ never edited. The repo is private to its owner (mode 700).
 ```text
 <project>/.cairn/                the repo
 ├── .gitignore                   "*"
-├── repo.json                    the repo's uid, its layout version, and its remote's uid once learned
+├── repo.json                    the repo's id, its layout version (2), and its remote's id once learned
 ├── config.toml                  the project's settings (see "Configuration")
 ├── metadata.sqlite3             versions, aliases, lineage (WAL); not on a network filesystem
 ├── blobs/<aa>/<sha256>          file contents, written once (temporary file, then rename), shared by all versions
-├── outbox/<uid>/                versions on their way to the remote (manifest, state, heartbeat); only with a remote
-├── versions/<uid>/files/        read-only folders that pulls return (made from the blobs; `cairn prune` trims them)
-├── drafts/                      open and kept drafts and runs: <name>/<uid>/ and <name>/<uid>.draft.json (`cairn drafts`)
+├── outbox/<id>/                 versions on their way to the remote (manifest, state, heartbeat); only with a remote
+├── versions/<id>/files/         read-only folders that pulls return (made from the blobs; `cairn prune` trims them)
+├── drafts/                      open and kept drafts and runs: <name>/<id>/ and <name>/<id>.draft.json (`cairn drafts`)
 ├── build/  share/               built report pages, `cairn share` pages
 ├── token                        the owner token (`cairn server`), or a client's token for the remote
 ├── ui-token                     the login of the project's own `cairn ui` when there is no `token`
-├── heartbeats/<uid>             running versions' heartbeats (without a remote)
+├── heartbeats/<id>              running versions' heartbeats (without a remote)
 ├── server.lock                  held by the one `cairn server` serving this repo
 └── tmp/                         uploads in progress, the hash cache
 ```

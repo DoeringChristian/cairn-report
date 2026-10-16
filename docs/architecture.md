@@ -37,7 +37,7 @@ version, git-like, and one parser). Fixed: later work fits this design; it does 
 
 ```text
 .cairn/                      the repo (self-ignoring: .gitignore = "*")
-├── repo.json                uid of this repo, layout version
+├── repo.json                id of this repo, layout version
 ├── config.toml              the project's settings (see Configuration)
 ├── metadata.sqlite3         versions, aliases, lineage (WAL)   — not on a network filesystem
 ├── blobs/<aa>/<sha256>      content-addressed files, written once (temp + rename), shared by all versions
