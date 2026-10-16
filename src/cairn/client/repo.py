@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import atexit
 import sqlite3
+from contextlib import contextmanager
 import sys
 import threading
 import time
@@ -54,7 +55,7 @@ from ..store.prune import prune as prune_folders
 from ..store.refs import Ref
 from ..store.uids import UID, new_uid
 from ..store.verify import Report, check_blobs, verify_copies, verify_folders, verify_outbox, verify_store, verify_version
-from .http import entries_for, scan
+from .http import budget, entries_for, scan
 from .remote import Remote
 from .sync import NotRecorded, Sync, Waiting
 
@@ -846,9 +847,23 @@ class SyncedRepo(ProjectRepo):
         if time.monotonic() - began >= SLOW:
             self._down_until = _DOWN[self.url] = time.monotonic() + DOWN_FOR
 
+    @contextmanager
+    def _waiting(self):
+        """What a process sends or reads now waits for the remote at most SEND_BUDGET seconds in all (unless the command
+        or the run's phase set a budget already, `http.budget`); a remote that took SLOW seconds or more, even if it
+        answered, is left to the background for DOWN_FOR seconds (`_failed`): a slow remote never slows a run."""
+        began = time.monotonic()
+        with budget(SEND_BUDGET, default=True):
+            yield
+        self._failed(began)
+
     def _send_now(self, record: dict) -> dict:
         """Send an entry that is final now; when the remote does not answer it stays pending (a warning says so, and a
         background uploader keeps trying). Returns the version's manifest."""
+        with self._waiting():
+            return self._send(record)
+
+    def _send(self, record: dict) -> dict:
         began = time.monotonic()
         try:
             self.reach()
@@ -873,13 +888,14 @@ class SyncedRepo(ProjectRepo):
                        uid: str | None = None) -> dict:
         """Stage the folder, commit it to the outbox, and send it now if the remote answers (else it is pending)."""
         entries, sources = self.stage(folder, exclude, project_root, link)
-        same = None if aliases else self._unchanged(project, name, entries, metadata, inputs)
-        if same is not None:  # like a repo without a remote: nothing changed since the latest, so no new version
-            return same
-        record = self._new_entry("publish", project, name, files=entries, label=label, metadata=metadata, inputs=inputs,
-                                 aliases=aliases, source=source, uid=uid)
-        self.restage(entries, sources)
-        return self._send_now(record)
+        with self._waiting():
+            same = None if aliases else self._unchanged(project, name, entries, metadata, inputs)
+            if same is not None:  # like a repo without a remote: nothing changed since the latest, so no new version
+                return same
+            record = self._new_entry("publish", project, name, files=entries, label=label, metadata=metadata, inputs=inputs,
+                                     aliases=aliases, source=source, uid=uid)
+            self.restage(entries, sources)
+            return self._send(record)
 
     def _unchanged(self, project: str, name: str, entries: list[dict], metadata, inputs) -> dict | None:
         """The latest version (the remote's, else what the repo knows) when it has these files, metadata, and inputs."""
@@ -904,14 +920,12 @@ class SyncedRepo(ProjectRepo):
 
     def _try(self, record: dict) -> None:
         """Send what is new of a running entry now; while the remote does not answer, it waits in the outbox."""
-        began = time.monotonic()
-        try:
-            self.reach()
-            self.quick.engine.send(record, claim=False)
-        except NotRecorded:
-            pass
-        except Unreachable:
-            self._failed(began)
+        with self._waiting():
+            try:
+                self.reach()
+                self.quick.engine.send(record, claim=False)
+            except Unreachable:  # also NotRecorded: the next attempt records it
+                pass
 
     def start_version(self, project: str, name: str, label: str | None = None, metadata: dict | None = None,
                       source: dict | None = None, uid: str | None = None) -> dict:
@@ -1018,6 +1032,7 @@ DOWN_FOR = 30.0  # seconds a remote that was slow to fail is not asked again for
 SLOW = 2.0  # seconds: a failure that took this long counts as slow (a refused connection takes milliseconds)
 PROBE = 3.0  # seconds the first look at the remote may take
 QUICK = 10.0  # seconds a request a process makes while it works may wait for each answer (`SyncedRepo.quick`)
+SEND_BUDGET = 3.0  # seconds one publish, start, or sync of a running version waits for the remote in all (`_waiting`)
 _DOWN: dict[str, float] = {}  # remote URL -> until when this process does not ask it (`SyncedRepo.down`)
 
 
@@ -1068,7 +1083,7 @@ def _pending_warning(key: str, project: str, name: str, uid: str) -> str:
 _threads: dict[str, threading.Thread] = {}
 _threads_lock = threading.Lock()
 _exit_flush: dict[str, SyncedRepo] = {}
-EXIT_TIMEOUT = 5.0  # seconds the last attempt at exit may wait for the remote
+EXIT_TIMEOUT = 4.0  # seconds the last attempt at exit may wait for the remote, in all
 
 
 def start_uploader(repo: SyncedRepo, first_delay: float = 1.0, max_delay: float = 60.0) -> threading.Thread:
@@ -1108,6 +1123,7 @@ def _flush_at_exit() -> None:
     for repo in list(_exit_flush.values()):
         try:
             if not repo.down() and any(record["sync"] == "pending" for record in repo.records()):
-                repo.with_timeout(EXIT_TIMEOUT).engine.flush(time.monotonic() + EXIT_TIMEOUT)
+                with budget(EXIT_TIMEOUT):
+                    repo.with_timeout(EXIT_TIMEOUT).engine.flush(time.monotonic() + EXIT_TIMEOUT)
         except Exception:  # noqa: BLE001 - never a traceback at exit
             pass

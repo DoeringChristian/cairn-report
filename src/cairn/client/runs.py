@@ -55,6 +55,10 @@ from ..store import INPUTS_ENV, INPUTS_FILE, StoreError
 from ..store.inputs import close_sink, open_sink
 from . import logger as _logger
 from .drafts import _ACTIVE, Draft, reserve
+from .http import budget
+
+START_BUDGET = 3.0  # seconds a run's start may wait for the remote, in all (the version is pending after that)
+END_BUDGET = 4.0  # seconds a run's end (its drafts, then itself) may wait for the remote, in all
 
 RUN_ENV = "CAIRN_RUN"  # the exact uid reference of the run a process belongs to, for its subprocesses
 RUNS = "runs"
@@ -217,6 +221,11 @@ class Run(Draft):
             self._finished = True
         error = error if error is not None else self._error
         self._stop_recording(error)
+        with budget(END_BUDGET):  # its end waits for the remote this long in all; what is left stays in the outbox
+            return self._end(error)
+
+    def _end(self, error):
+        global _CURRENT
         for other in list(_ACTIVE):
             if other is self or other._closed or other.trial or other.record.get("run") != self.ref:
                 continue
@@ -314,7 +323,8 @@ def init(name: str | None = None, *, config=None, metadata: dict | None = None, 
                   capture=CAPTURE_DEFAULT if capture is None else capture, system=system, code=code, store=store,
                   label=label, folder=_folder, adopt=_adopt, inputs=_inputs)
         try:
-            run.start()
+            with budget(START_BUDGET):  # its start waits for the remote this long in all; then it is pending
+                run.start()
         except BaseException:
             run._abandon()
             if run._pub is None:

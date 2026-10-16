@@ -219,7 +219,7 @@ class Client:
         idempotent; a body that cannot be sent twice always goes on a connection used a moment ago, or a new one)."""
         replayable = isinstance(body, REPLAYABLE)
         for attempt in range(2):
-            limit = self._limit(method, path, upload)
+            limit = self._limit(method, path, upload or stream_to is not None)  # a download is a transfer too
             connection, reused = _POOL.take(self._key, fresh_only=not replayable) if attempt == 0 else (None, False)
             try:
                 if connection is None:

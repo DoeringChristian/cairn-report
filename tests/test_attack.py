@@ -683,8 +683,8 @@ print(json.dumps({"draft": drafted - began, "finish": time.perf_counter() - draf
 
 
 def test_remote_outages_do_not_slow_runs_and_everything_is_sent_once(tmp_path):
-    """The remote refuses, hangs (connected, never answering), errors (500), is slow (1 s per connection), and stops
-    answering while a run runs; then it recovers. Runs and publishes are timed against a repo without a remote, and
+    """The remote refuses, hangs (connected, never answering), errors (500), is slow (1 s per connection, then 1 s per
+    request), and stops answering while a run runs; then it recovers. Runs and publishes are timed against a repo without a remote, and
     every version is sent exactly once at the end."""
     baseline = project_at(tmp_path, "baseline")
     script(baseline, "timed.py", RUN_TIMING)
@@ -699,7 +699,7 @@ def test_remote_outages_do_not_slow_runs_and_everything_is_sent_once(tmp_path):
         script(project, name, code)
     report, runs, results = [], [], []
     try:
-        for index, mode in enumerate(("forward", "refuse", "hang", "error", "slow", "forward")):
+        for index, mode in enumerate(("forward", "refuse", "hang", "error", "slow", "slow-request", "forward")):
             proxy.mode = mode
             row = timed_run(project, env)
             runs.append(row["uid"])
@@ -739,7 +739,7 @@ def test_remote_outages_do_not_slow_runs_and_everything_is_sent_once(tmp_path):
     for uid in runs + results + [hung["out"]]:
         assert on_remote[uid]["status"] == "completed", on_remote[uid]
     assert sorted(version["uid"] for version in remote.versions("study", "runs/timed")) == sorted(runs[:-1])  # numbered as they arrived
-    assert len(remote.versions("study", "data")) == 6
+    assert len(remote.versions("study", "data")) == 7
     assert not (project / ".cairn" / "outbox").exists() or not list((project / ".cairn" / "outbox").iterdir())
     status = cli(project, "status", env=env)
     assert "nothing pending" in status.stdout, status.stdout + status.stderr
@@ -755,6 +755,11 @@ def test_remote_outages_do_not_slow_runs_and_everything_is_sent_once(tmp_path):
         assert row["init"] < 4 and row["draft"] < 1 and row["finish"] < 1 and row["process"] < 6, (mode, row)
         assert published < 6, (mode, published)
     assert hung["draft"] < 4 and ended < 20, (hung, ended)
+    baseline_process = base_runs[-1]["process"]
+    for mode in ("slow", "slow-request"):  # a slow remote that answers: a run waits a few seconds at most
+        row, published = timings[mode]
+        assert row["process"] < baseline_process + 6.5, (mode, row)  # about baseline + 5 s, with some slack
+        assert published < 13, (mode, published)  # about 12 s
 
 
 # ====================================================================== 6. a remote added later, with a version running

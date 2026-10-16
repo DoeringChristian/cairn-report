@@ -755,20 +755,33 @@ def main(argv: list[str] | None = None) -> None:
         if not config.found:
             existing_repo(config)
     syncing = args.run in REPO_COMMANDS and not getattr(args, "offline", False)  # --offline: never ask the remote
-    if syncing:
-        sync_quietly(args)
-    try:
-        args.run(args)
-    except Exception as error:  # an expected failure is one line; CAIRN_DEBUG=1 shows the traceback
-        if os.environ.get("CAIRN_DEBUG") or not _expected(error):
-            raise
-        raise SystemExit(f"cairn: {error}") from None
-    finally:
+    from contextlib import nullcontext
+
+    from .client.http import budget
+
+    bounded = args.run in BOUNDED_COMMANDS and not getattr(args, "watch", False)  # a command waits so long in all
+    with budget(COMMAND_BUDGET, uploads=False) if bounded else nullcontext():
         if syncing:
             sync_quietly(args)
+        try:
+            args.run(args)
+        except Exception as error:  # an expected failure is one line; CAIRN_DEBUG=1 shows the traceback
+            if os.environ.get("CAIRN_DEBUG") or not _expected(error):
+                raise
+            raise SystemExit(f"cairn: {error}") from None
+        finally:
+            if syncing:
+                sync_quietly(args)
+                from .client import repo
+
+                repo._exit_flush.clear()  # a command sends at its start and end; it makes no third attempt at exit
 
 
 LOOKING_COMMANDS = {cmd_status, cmd_verify, cmd_prune, cmd_sync}
+# the commands whose waits for the remote (transfers of blobs aside) add up to COMMAND_BUDGET seconds at most: what
+# could not be sent then stays pending; `cairn sync`, gc, deletions, `publish --watch`, the servers take their time
+BOUNDED_COMMANDS = {cmd_publish, cmd_pull, cmd_artifacts, cmd_versions, cmd_show, cmd_status, cmd_drafts, cmd_project, cmd_alias}
+COMMAND_BUDGET = 10.0
 READING_COMMANDS = {cmd_artifacts, cmd_versions, cmd_show, cmd_pull, cmd_alias, cmd_delete, cmd_drafts}  # need versions: no repo
 # found (nothing above the working directory, no $CAIRN_DIR) is refused, never made in a random folder
 REPO_COMMANDS = {cmd_publish, cmd_pull, cmd_project, cmd_project_delete, cmd_artifacts, cmd_versions, cmd_show, cmd_alias, cmd_delete,
