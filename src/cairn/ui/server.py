@@ -55,7 +55,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from ..hosts import LOCAL_HOSTS, url_host
 from ..term import cause, field, request_line, warn
 from .._version import __version__
-from ..store import BadRange, Deleted, FileRead, Forbidden, NotFound, Ref, StoreError, Unauthorized, refs
+from ..store import BadRange, Deleted, FileRead, Forbidden, InvalidRef, NotFound, Ref, StoreError, Unauthorized, refs
 from ..store.blobs import resolve_entry, valid_path
 from ..store.outbox import exact_ref
 from ..store.uids import UID
@@ -414,8 +414,7 @@ class UIHandler(BaseHTTPRequestHandler):
     def _version_api(self, repo, project: str, name: str, selector: str) -> dict:
         """One manifest (files, metadata, inputs) with its consumers; `selector` is a number, `v<n>`, a uid, a short id,
         an alias or a label."""
-        chosen = f"v{selector}" if selector.isdigit() else selector
-        version = self._version(repo, name, chosen)
+        version = self._numbered(repo, name, selector)
         consumers, deleted, nodes = [], [], {}
         if version["status"] in (
             "completed",
@@ -438,8 +437,7 @@ class UIHandler(BaseHTTPRequestHandler):
         """What the app's Run panel shows of a run version: its metrics.jsonl and system/metrics.jsonl rows (numbers
         only, thinned to RUN_POINTS), the tails of logs/stdout.txt, stderr.txt, and error.txt, system/info.json, and
         the config. A running version answers with what it has synced so far."""
-        chosen = f"v{selector}" if selector.isdigit() else selector
-        version = self._version(store, name, chosen)
+        version = self._numbered(store, name, selector)
         if version["status"] == "deleted":
             raise Deleted(f"{exact_ref(name, version)} was deleted")
         files = {entry["path"]: entry for entry in version.get("files", [])}
@@ -728,6 +726,19 @@ class UIHandler(BaseHTTPRequestHandler):
                 raise
             found = refs.pick(ref.id, store.ids(ref.id, None if ref.bare else ref.name))
             return found["name"], store.get_version(found["name"], found["uid"])
+
+    @classmethod
+    def _numbered(cls, store, name: str, selector: str) -> dict:
+        """`_version`, where a bare number is a version number (`3` is `v3`) unless it is a short id: a short id has
+        at least 4 hex digits and may be all 0-9, so 4 or more digits are tried as one first."""
+        if not selector.isdigit():
+            return cls._version(store, name, selector)
+        if len(selector) >= 4:
+            try:
+                return cls._version(store, name, selector)
+            except (NotFound, InvalidRef):
+                pass
+        return cls._version(store, name, f"v{int(selector)}")
 
     @classmethod
     def _version(cls, store, name: str, selector: str | None) -> dict:

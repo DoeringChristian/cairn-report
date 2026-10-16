@@ -395,3 +395,25 @@ def test_cairn_remote_set_checks_the_token_and_asks_for_it(server, tmp_path, mon
     assert saved.read_text().strip() == server.token and oct(saved.stat().st_mode & 0o777) == "0o600"
     main(["remote", "set", f"{server.url}/demo"])
     assert "token   accepted (from .cairn/token)" in capsys.readouterr().out
+
+
+def test_a_short_id_made_of_decimal_digits_is_a_short_id_not_a_version_number(study):
+    from cairn.ui import make_ui_server, open_backend
+
+    repo = cairn.connect()
+    artifact = repo.artifact("digits")
+    for index in range(400):  # about 4% of short ids are all 0-9: publish until one is
+        version = artifact.publish(folder_with(study, f"d{index}", {"x": str(index)}))
+        if version.short_id.isdigit():
+            break
+    else:
+        pytest.skip("no all-digit short id in 400 versions")
+    httpd = make_ui_server(open_backend(no_auth=True), port=0, no_auth=True)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        found = ui_get(httpd, f"/ui-api/projects/study/artifacts/digits/versions/{version.short_id}")["version"]
+        assert found["uid"] == version.uid
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert repo.version(f"digits@{version.short_id}").uid == version.uid  # the API resolves it the same way

@@ -14,6 +14,8 @@
   need a 0.14.1 server: a 0.14.0 server refuses removal entries.
 - **UI:** the lineage graph is drawn even when it has one node ("Data only" no longer ends in a dead end), and
   an empty image file is shown as empty instead of as an image that cannot be loaded.
+- **A short id made of decimal digits** (about 4% of them, such as `4381209`) opened in the UI as that version
+  number and was not found; a bare number of 4 or more digits is now tried as a short id first.
 
 ## 0.14.0: the repo, an optional remote, automatic sync
 
