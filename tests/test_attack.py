@@ -1156,3 +1156,90 @@ def test_a_server_stopped_and_killed_mid_run_changes_nothing_for_runs(tmp_path):
     assert third.returncode != 0 and str(taken.getsockname()[1] if False else "") in out + err, out + err
     assert "in use" in (out + err).lower() or "address already" in (out + err).lower(), out + err  # never a silent move
     server.stop()
+
+
+# ====================================================================== 4. many senders of one outbox, two machines, one remote
+
+OFFLINE_WORK = """
+import json, pathlib, sys, cairn
+tag, count = sys.argv[1], int(sys.argv[2])
+made = []
+project = cairn.connect().project()
+for index in range(count):
+    folder = pathlib.Path(f"work-{tag}/{index}")
+    folder.mkdir(parents=True)
+    (folder / "a.txt").write_text(f"{tag} {index}")
+    made.append(project.artifact("shared" if index % 2 else f"{tag}-own").publish(folder).uid)
+print(json.dumps(made))
+"""
+
+CONSUMER = """
+import json, sys, cairn
+run = cairn.init(name=f"consume-{sys.argv[1]}", code=False, system=False)
+data = cairn.use(sys.argv[2])
+with cairn.draft(f"derived-{sys.argv[1]}") as out:
+    out.add_json("from", {"ref": data.ref, "uid": data.uid, "text": (data.path / "a.txt").read_text()})
+run.finish()
+print(json.dumps({"run": run.uid, "out": out.version.uid, "used": data.uid}))
+"""
+
+
+def test_many_senders_of_one_outbox_and_two_machines_number_everything_once(tmp_path):
+    server = RealServer(tmp_path / "remote").start()
+    proxy = FaultProxy(server.port, mode="refuse")
+    env = base_env(CAIRN_TOKEN=server.token)
+    a = project_at(tmp_path, "machine-a", proxy.url, extra="heartbeat_timeout = 600\n")
+    b = project_at(tmp_path, "machine-b", server.url)
+    for project in (a, b):
+        script(project, "work.py", OFFLINE_WORK)
+        script(project, "consume.py", CONSUMER)
+    made_b = json.loads(subprocess.run([sys.executable, "work.py", "b", "6"], cwd=b, capture_output=True, text=True, env=env,
+                                       check=True).stdout)
+    proxy.mode = "forward"  # A uses B's version while it reaches the remote, then works offline
+    used = subprocess.run([sys.executable, "consume.py", "a1", "study:b-own@latest"], cwd=a, capture_output=True, text=True, env=env)
+    assert used.returncode == 0, used.stderr
+    proxy.mode = "refuse"
+    made_a = json.loads(subprocess.run([sys.executable, "work.py", "a", "30"], cwd=a, capture_output=True, text=True, env=env,
+                                       check=True).stdout)
+    offline_use = subprocess.run([sys.executable, "consume.py", "a2", f"study:a-own@{made_a[0]}"], cwd=a, capture_output=True,
+                                 text=True, env=env)
+    assert offline_use.returncode == 0, offline_use.stderr
+    assert len(outbox_of(a)) == 32  # 30 publishes, the offline run and its output
+    proxy.mode = "forward"  # now everyone sends the same outbox at once, while B keeps publishing to `shared`
+    senders = [spawn(a, "-m", "cairn", "sync", env=env) for _ in range(4)]
+    senders.append(spawn(a, "-m", "cairn", "versions", "shared", env=env))  # any command sends at its start
+    watcher = spawn(a, "-m", "cairn", "sync", "--watch", env=env)
+    more_b = spawn(b, "work.py", "b2", "20", env=env)
+    for process in senders:
+        finish(process, 300)
+    out, err = finish(more_b, 300)
+    assert more_b.returncode == 0, err
+    made_b += json.loads(out)
+    deadline = time.time() + 120
+    while outbox_of(a) and time.time() < deadline:
+        time.sleep(0.2)
+    watcher.send_signal(signal.SIGINT)
+    finish(watcher, 60)
+    assert outbox_of(a) == [], cli(a, "status", env=env).stdout
+    b_reads = subprocess.run([sys.executable, "consume.py", "b1", f"study:a-own@{made_a[2]}"], cwd=b, capture_output=True,
+                             text=True, env=env)
+    assert b_reads.returncode == 0, b_reads.stderr
+    assert json.loads(b_reads.stdout)["used"] == made_a[2]
+
+    remote = LocalRepo(server.root)
+    everything = check_numbers(remote)
+    on_remote = {version["uid"]: version for versions in everything.values() for version in versions}
+    for uid in made_a + made_b:
+        assert on_remote[uid]["status"] == "completed"
+    assert len(everything["shared"]) == 15 + 3 + 10  # every publish once
+    for project in (a, b):  # each repo's copies carry the remote's numbers
+        local = LocalRepo(project / ".cairn")
+        for name in local.artifacts("study"):
+            for version in local.versions("study", name):
+                assert on_remote[version["uid"]]["version"] == version["version"], (project.name, name)
+        verify_clean(project, env)
+    derived = remote.versions("study", "derived-a2")[0]
+    [run_ref] = derived["inputs"]
+    assert remote.resolve(run_ref)[2]["inputs"] == [f"study:a-own@v{on_remote[made_a[0]]['version']}"]  # pending input renumbered
+    proxy.close()
+    server.stop()

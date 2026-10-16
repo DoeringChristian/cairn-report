@@ -111,7 +111,7 @@ def use(ref: str, *, store: "Repo | LocalRepo | Path | str | None" = None, offli
     _start_run(store)
     version = _store(store).version(ref, offline=offline)
     version._usable()
-    if version.status != "completed":
+    if version.status not in ("completed", "pending"):  # pending: completed here, not on the remote yet (`_usable`)
         raise StoreError(f"{version.ref} is {version.status}: only a completed version can be used")
     from .store import record_input
 
