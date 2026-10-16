@@ -71,7 +71,7 @@ def manifest_of(record: dict) -> dict:
     """A version-style manifest for an entry (what `Version`, the UI, and `pull` read): number None, `pending` set."""
     status = "pending" if record["status"] == "completed" else record["status"]
     return {"version": record.get("number"), "uid": record["uid"], "label": record.get("label"), "status": status,
-            "created": record["created"], "completed": record.get("completed"), "files": record["files"],
+            "created": record["created"], "completed": record.get("completed"), "files": list(record["files"]),
             "metadata": record.get("metadata") or {}, "inputs": record.get("inputs") or [], "source": record.get("source"),
             "digest": record.get("digest"), "pending": True, "sync": record["sync"], "aliases": record.get("aliases") or [],
             "error": record.get("error")}
@@ -86,6 +86,31 @@ def exact_ref(project: str, name: str, manifest: dict) -> str:
     """`project:name@v<n>`, or `project:name@<uid>` while the remote has not numbered the version."""
     number = manifest.get("version")
     return str(Ref(project, name, f"v{number}" if number is not None else manifest["uid"]))
+
+
+_PARSED: dict[str, tuple[tuple, dict]] = {}  # manifest path -> ((inode, size, mtime_ns), record): `Outbox.records`
+_PARSED_MAX = 100_000
+
+
+def _parsed(path: str) -> dict | None:
+    """The record in an entry's manifest, parsed again only when the file changed (it is replaced, never edited, so a
+    new version is a new inode and time). None when it is missing or damaged."""
+    try:
+        info = os.stat(path)
+    except OSError:
+        _PARSED.pop(path, None)
+        return None
+    key = (info.st_ino, info.st_size, info.st_mtime_ns)
+    cached = _PARSED.get(path)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    record = read_json(Path(path))
+    if not isinstance(record, dict):
+        return None
+    if len(_PARSED) >= _PARSED_MAX:
+        _PARSED.clear()
+    _PARSED[path] = (key, record)
+    return record
 
 
 class Outbox:
@@ -125,18 +150,21 @@ class Outbox:
                 remove(build)
 
     def records(self) -> list[dict]:
-        """Every entry, oldest first (by uid, which is creation order)."""
+        """Every entry, oldest first (by uid, which is creation order). Each manifest is parsed once per process while
+        its file stays the same (`_PARSED`, by inode, size and time): a listing rereads only the entries that changed,
+        and sees a changed or removed one at once. The dicts are shallow copies: replace their values, do not edit
+        their lists or dicts in place (`load` reads one entry afresh, for that)."""
         found = []
         try:
-            folders = list(self.folder.iterdir())
+            entries = list(os.scandir(self.folder))
         except FileNotFoundError:
             return found
-        for folder in folders:
-            if ".tmp-" in folder.name:
+        for entry in entries:
+            if ".tmp-" in entry.name:
                 continue
-            record = read_record(folder)
-            if record and record.get("sync") in ("pending", "running", "rejected"):
-                found.append(record)
+            record = _parsed(os.path.join(entry.path, RECORD))
+            if record and record.get("uid") and record.get("sync") in ("pending", "running", "rejected"):
+                found.append(dict(record))
         return sorted(found, key=lambda record: record["uid"])
 
     def needed(self) -> set[str]:

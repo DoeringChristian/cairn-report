@@ -492,7 +492,7 @@ def test_listings_with_3000_versions_and_500_pending_entries(tmp_path):
     print(f"500 offline publishes in one process: {time.perf_counter() - began:.1f} s")
     assert len(list((offline / ".cairn" / "outbox").iterdir())) == 500
     pending = listing_times(offline, "500 pending outbox entries, remote refuses", names, env)
-    assert pending["ui project warm"] < 1.0 and pending["ui artifact warm"] < 1.0
+    assert pending["ui project warm"] < 0.03 and pending["ui artifact warm"] < 0.03 and pending["ui projects warm"] < 0.03
 
 
 # ====================================================================== remotes: a real `cairn server`, and a faulty one
@@ -1748,3 +1748,30 @@ def test_a_process_keeps_its_connection_and_survives_a_server_restart(tmp_path):
     assert remote.get_version("study", "runs/timed", row["uid"])["status"] == "completed"
     proxy.close()
     server.stop()
+
+
+def test_the_outbox_listing_cache_sees_changes_and_removals_at_once(tmp_path):
+    """Listings parse a manifest again only when it changed; a change written by another process, even one that keeps
+    the file's size, and a removal show at the next listing."""
+    from cairn.store.outbox import Outbox
+    from cairn.store.uids import new_uid
+
+    outbox = Outbox(tmp_path)
+    records = [{"uid": new_uid(), "sync": "pending", "status": "completed", "label": "aaaa", "files": [], "created": "x"}
+               for _ in range(3)]
+    for record in records:
+        outbox.create(record, running=False)
+    assert [record["label"] for record in outbox.records()] == ["aaaa"] * 3
+    changed = subprocess.run([sys.executable, "-c", textwrap.dedent(f"""
+        from cairn.store.outbox import Outbox
+        outbox = Outbox({str(tmp_path)!r})
+        record = outbox.load({records[1]['uid']!r})
+        record["label"] = "bbbb"  # the same size
+        outbox.save(record)
+        outbox.remove(outbox.load({records[2]['uid']!r}))
+    """)], capture_output=True, text=True)
+    assert changed.returncode == 0, changed.stderr
+    listed = outbox.records()
+    assert [record["label"] for record in listed] == ["aaaa", "bbbb"]
+    listed[0]["label"] = "edited by a caller"  # a caller's change does not reach the next listing
+    assert outbox.records()[0]["label"] == "aaaa"
