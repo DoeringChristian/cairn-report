@@ -318,7 +318,7 @@ def run(keep: bool) -> int:
     url = f"http://127.0.0.1:{store_httpd.server_address[1]}"
     os.environ["CAIRN_TOKEN"] = token
     build_data(base, url)
-    ui_httpd = make_ui_server(RemoteBackend(url, False), port=0, secure_cookie=False)
+    ui_httpd = make_ui_server(RemoteBackend(url, False), port=0)
     ui_httpd.RequestHandlerClass.log_message = lambda *a: None
     threading.Thread(target=ui_httpd.serve_forever, daemon=True).start()
     ui = f"http://127.0.0.1:{ui_httpd.server_address[1]}"

@@ -1,6 +1,6 @@
 """The UI: a browser view of a repo, as a process of its own.
 
-    cairn ui [--remote URL | --repo FOLDER] [--host 127.0.0.1] [--port 8801] [--no-auth] [--allow-http] [--insecure-cookies]
+    cairn ui [--remote URL | --repo FOLDER] [--host 127.0.0.1] [--port 8801] [--no-auth] [--allow-http]
 
 It reaches the data only through the repo interface (the project's repo, which reads through its remote when it
 has one and shows the versions still waiting for it as pending; a repo folder; or a remote), so it runs next to the
@@ -24,7 +24,7 @@ an artifact `reports/<slug>` whose files have `site/` and `source/`.
 Login: `cairn ui` prints a one-time link (a random code, valid once for 10 minutes); or the user enters a token on
 /login (the app posts it to /ui-api/login). The UI checks it (a remote: an authenticated API call; a repo on this
 machine: its owner token file and tokens.jsonl), keeps it server-side in an in-memory session table, and gives the
-browser only a random session id (HttpOnly, SameSite=Strict cookie, Secure unless --insecure-cookies). Every
+browser only a random session id (HttpOnly, SameSite=Strict cookie, Secure when a reverse proxy says X-Forwarded-Proto: https). Every
 request of a session uses its token, so a scoped token sees only its project. Every /ui-api/ call also needs the
 header `X-Cairn: 1`, which a cross-site form or image cannot send (on top of SameSite=Strict). `--no-auth`
 (loopback only) skips the login and uses `CAIRN_TOKEN` / `[repo] token_file` for a remote, or the owner's full
@@ -50,6 +50,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from ..hosts import LOCAL_HOSTS, url_host
 from .._version import __version__
 from ..store import BadRange, Deleted, FileRead, Forbidden, NotFound, Ref, StoreError, Unauthorized, refs
 from ..store.blobs import resolve_entry, valid_path
@@ -59,7 +60,6 @@ from ..store.uids import UID
 from .backends import LocalBackend, RemoteBackend
 from .sessions import COOKIE, LOGIN_DELAY, MAX_SESSIONS, SESSION_SECONDS, Session
 
-LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 STATIC = Path(__file__).parent / "static"  # the built app (web/ -> npm run build)
 MAX_LINEAGE_DEPTH = 3
 MAX_LINEAGE_NODES = 200
@@ -157,7 +157,6 @@ class UIHandler(BaseHTTPRequestHandler):
     sessions: dict
     lock: threading.Lock
     no_auth: bool = False
-    secure_cookie: bool = True
     static_cache: dict
     fixed: Session | None = None  # --no-auth: the one session every request uses
     server_version = f"cairn-ui/{__version__}"
@@ -166,10 +165,11 @@ class UIHandler(BaseHTTPRequestHandler):
     # --------------------------------------------------------------- sessions
 
     def _cookie_header(self, value: str, max_age: int) -> str:
-        # Secure unless the browser talks plain HTTP to this machine (`cairn ui`, an SSH tunnel): a reverse proxy
-        # in front says https in X-Forwarded-Proto, and a UI on a public address is meant to sit behind one.
+        # Secure exactly when the browser uses HTTPS, which the reverse proxy in front says in X-Forwarded-Proto:
+        # over plain HTTP (this machine, an SSH tunnel, a VPN such as Tailscale) a browser drops a Secure cookie,
+        # and every login would end on the login page again.
         https = self.headers.get("X-Forwarded-Proto", "").lower() == "https"
-        secure = "; Secure" if self.secure_cookie and (https or not self.local) else ""
+        secure = "; Secure" if https else ""
         return f"{COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}"
 
     def _cookie_value(self) -> str | None:
@@ -809,14 +809,14 @@ class _ChunkedSink(io.RawIOBase):
 
 
 def make_ui_server(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", port: int = 8801,
-                   no_auth: bool = False, secure_cookie: bool = True) -> ThreadingHTTPServer:
+                   no_auth: bool = False) -> ThreadingHTTPServer:
     """A bound UI server (not yet serving). With no_auth there is no login and every request uses the
     backend's own access, so it is refused on any address but this machine's loopback."""
     if no_auth and host not in LOCAL_HOSTS:
         raise SystemExit("--no-auth shows the repo to anyone who can connect: only with a loopback --host")
     handler = type("Handler", (UIHandler,), {
-        "backend": backend, "sessions": {}, "login_codes": {}, "lock": threading.Lock(), "no_auth": no_auth, "local": host in LOCAL_HOSTS,
-        "secure_cookie": secure_cookie, "static_cache": {}, "fixed": backend.anonymous() if no_auth else None,
+        "backend": backend, "sessions": {}, "login_codes": {}, "lock": threading.Lock(), "no_auth": no_auth,
+        "static_cache": {}, "fixed": backend.anonymous() if no_auth else None,
     })
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
@@ -850,27 +850,28 @@ def login_link(server: ThreadingHTTPServer, base: str, token: str) -> str:
     return f"{base}login?code={code}"
 
 
+PLAIN_HTTP_WARNING = ("warning: plain HTTP on a network address: use it over a VPN (Tailscale, WireGuard), an SSH tunnel, "
+                      "or an HTTPS reverse proxy")
+
 def serve_ui(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", port: int = 8801, no_auth: bool = False,
-             secure_cookie: bool = True, login_token: str = "", open_browser: bool = False) -> None:
+             login_token: str = "", open_browser: bool = False) -> None:
     """Serve the UI. With `login_token`, print a one-time login link for it (and open it with `open_browser`)."""
     try:
-        server = make_ui_server(backend, host, port, no_auth=no_auth, secure_cookie=secure_cookie)
+        server = make_ui_server(backend, host, port, no_auth=no_auth)
     except OSError as error:
         if not port or error.errno != errno.EADDRINUSE:
             raise
         print(f"port {port} is in use; taking a free one", flush=True)
-        server = make_ui_server(backend, host, 0, no_auth=no_auth, secure_cookie=secure_cookie)
-    shown = host if ":" not in host else f"[{host}]"
-    base = f"http://{shown}:{server.server_address[1]}/"
+        server = make_ui_server(backend, host, 0, no_auth=no_auth)
+    base = f"http://{url_host(host)}:{server.server_address[1]}/"  # this machine's name for 0.0.0.0
     print(f"UI: {base} (repo: {backend.describe})", flush=True)
-    if host not in LOCAL_HOSTS:
-        print("warning: the UI speaks plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
+    if host not in LOCAL_HOSTS and not os.environ.get("CAIRN_UI_PARENT"):  # beside `cairn server`, it warns for both
+        print(PLAIN_HTTP_WARNING, flush=True)
     if no_auth:
         print("Authentication is off (--no-auth): everyone who can connect sees the repo; for local use only", flush=True)
     opening = base
     if login_token and not no_auth:
-        here = {"0.0.0.0": "127.0.0.1", "::": "[::1]"}.get(host, shown)  # the link works from this machine
-        opening = login_link(server, f"http://{here}:{server.server_address[1]}/", login_token)
+        opening = login_link(server, base, login_token)
         print(f"Log in: {opening}  (one-time link, valid {LOGIN_LINK_SECONDS // 60} minutes)", flush=True)
     if open_browser:
         import webbrowser

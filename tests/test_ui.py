@@ -40,7 +40,7 @@ def start(backend, **options):
 def ui(request, server):
     """A UI (login required) over the store folder itself, and over the store server in its thread."""
     backend = LocalBackend(server.root, no_auth=False) if request.param == "folder" else RemoteBackend(server.url, allow_http=False)
-    httpd, stack = start(backend, secure_cookie=False)
+    httpd, stack = start(backend)
     stack.kind, stack.server = request.param, server
     yield stack
     httpd.shutdown()
@@ -106,7 +106,7 @@ def test_login_is_required_and_the_token_stays_server_side(ui):
     status, headers, body = call(ui, "POST", "/ui-api/login", body=json.dumps({"token": token}), token=None, headers=JSON)
     assert status == 200
     cookie = headers["Set-Cookie"]
-    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and token not in cookie and "Secure" not in cookie  # secure_cookie=False
+    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and token not in cookie and "Secure" not in cookie  # plain HTTP
     assert token.encode() not in body
     session = {"Cookie": cookie.split(";")[0]}
     for path in ("/", "/p/study/", "/ui-api/me"):
@@ -438,7 +438,7 @@ def test_the_ui_uses_only_the_store_interface_and_the_server_has_no_ui_code():
     assert not (source / "server" / "pages.py").exists()
     server_text = "".join(file.read_text() for file in (source / "server").glob("*.py"))
     for gone in ("text/html", "cookie", "Cookie", "is_report", "site.json", "_static", "/login"):
-        assert gone not in server_text.replace("there are no cookies", "").replace("--insecure-cookies", ""), gone
+        assert gone not in server_text.replace("there are no cookies", ""), gone
 
 
 def test_ui_command_wires_the_project_repo(env, server, monkeypatch, capsys):
@@ -449,11 +449,11 @@ def test_ui_command_wires_the_project_repo(env, server, monkeypatch, capsys):
     assert isinstance(seen["backend"], LocalBackend) and seen["backend"].root == (env / ".cairn").resolve()
     assert seen["backend"].store.repo.url == f"{server.url}/study" and seen["port"] == 8801
     assert seen["backend"].store.mode == "local" and seen["backend"].store.name == "study"  # one project: the remote's
-    assert seen["no_auth"] is False and seen["secure_cookie"] is True and seen["login_token"] == seen["backend"].owner
+    assert seen["no_auth"] is False and "secure_cookie" not in seen and seen["login_token"] == seen["backend"].owner
     main(["ui", "--remote", server.url])
     assert isinstance(seen["backend"], RemoteBackend) and seen["backend"].url == server.url
-    main(["ui", "--repo", str(server.root), "--port", "9999", "--insecure-cookies"])
-    assert isinstance(seen["backend"], LocalBackend) and seen["port"] == 9999 and seen["secure_cookie"] is False
+    main(["ui", "--repo", str(server.root), "--port", "9999"])
+    assert isinstance(seen["backend"], LocalBackend) and seen["port"] == 9999
     (env / "cairn.toml").write_text("")
     main(["ui", "--no-auth"])
     assert seen["backend"].root == (env / ".cairn").resolve() and seen["no_auth"] is True and seen["backend"].store.repo.url is None

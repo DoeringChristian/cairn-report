@@ -1026,9 +1026,10 @@ header `X-Cairn: 1` (a cross-site request cannot send it); a name may be one URL
 **Login.** Besides the one-time link, the UI takes a token on `/login` (the owner token or a scoped one)
 and checks it: a remote is asked with it; for a repo on this machine its owner token file and
 `tokens.jsonl` are checked. The app's login page posts the token to `/ui-api/login`; it stays in the UI process, in an in-memory session table; the
-browser gets only a random session id (HttpOnly, SameSite=Strict cookie; `Secure` when a reverse
-proxy says `X-Forwarded-Proto: https` or the UI listens on a public address, not for plain HTTP to
-this machine such as an SSH tunnel; `--insecure-cookies` drops it everywhere), and the token is never in a URL or a page. Each
+browser gets only a random session id (HttpOnly, SameSite=Strict cookie; `Secure` exactly when the
+browser uses HTTPS, which a reverse proxy says in `X-Forwarded-Proto: https`: over plain HTTP, to this
+machine, through an SSH tunnel or a VPN such as Tailscale, a browser would drop a `Secure` cookie), and the
+token is never in a URL or a page. Each
 session acts with its own token, so a scoped token sees only its project, and a revoked token ends
 its session. Sessions last 30 days and are forgotten when the UI restarts.
 
@@ -1045,7 +1046,7 @@ The app's source is `web/` (React 18, TypeScript, Vite; it imports
 no Node.
 
 ```bash
-cairn ui --repo /srv/cairn --insecure-cookies     # a UI to talk to, on 127.0.0.1:8801
+cairn ui --repo /srv/cairn                        # a UI to talk to, on 127.0.0.1:8801
 cd web && npm ci && npm run dev                   # http://localhost:5173, proxying /ui-api, /files and reports to it
 npm run build                                     # type-checks, then writes src/cairn/ui/static/ (commit it)
 ```

@@ -11,7 +11,8 @@ import signal
 import subprocess
 import sys
 
-LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+from ..hosts import LOCAL_HOSTS  # noqa: F401  (app imports it from here)
+
 PARENT_ENV = "CAIRN_UI_PARENT"  # set for a UI the server spawned: the pid it belongs to
 
 
@@ -19,26 +20,26 @@ def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool
     """`cairn ui` as a child process beside this server (so page work never loads the server).
 
     The child reaches the store at `host:port`; the owner token goes through its environment only (never its
-    command line). Returns (process, the line it printed with its address), or (None, None) if it did not start.
+    command line). Returns (process, the lines it printed at start: its address and login link), or (None, None) if it did not start.
     """
     where = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
     url = f"http://[{where}]:{port}" if ":" in where else f"http://{where}:{port}"
     command = [sys.executable, "-m", "cairn", "ui", "--remote", url, "--host", host, "--port", str(ui_port), "--allow-http", "--no-browser"]
     if no_auth:
         command.append("--no-auth")
-    if host in LOCAL_HOSTS:
-        command.append("--insecure-cookies")  # plain HTTP on this machine
     env = dict(os.environ)
     env.pop("CAIRN_TOKEN", None)
     if not no_auth:
         env["CAIRN_TOKEN"] = owner_token
     env[PARENT_ENV] = str(os.getpid())  # the UI exits when this process is gone, even after a SIGKILL
     child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, text=True)
-    line = child.stdout.readline().rstrip()
-    if not line:
-        child.wait()
-        return None, None
-    return child, line
+    lines = []  # its startup lines, up to the login link (or the no-auth notice), so the server prints them in order
+    for line in child.stdout:
+        lines.append(line.rstrip())
+        if line.startswith(("Log in:", "Authentication is off")):
+            return child, lines
+    child.wait()
+    return None, None
 
 
 def forward(child) -> None:

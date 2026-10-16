@@ -94,7 +94,8 @@ from ..store.tokens import OWNER, Principal, Tokens, init_root, read_token
 from ..store.uids import UID, valid_uid
 from .auth import Auth, HttpError, allow
 from .files import serve_file
-from .spawn import LOCAL_HOSTS, forward, start_ui, stop
+from ..hosts import LOCAL_HOSTS, url_host
+from .spawn import forward, start_ui, stop
 
 try:  # the [server] extra
     import uvicorn
@@ -775,29 +776,34 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         raise SystemExit(f"cairn: {error}") from None
     created = None if (root / "token").exists() else init_root(root)
     server = make_server(root, host, port, max_blob=max_blob, no_auth=no_auth, allow_network_fs=allow_network_fs, own=own)
-    if host not in LOCAL_HOSTS:
-        print("warning: the server speaks plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
     if created:
         print(f"Created the repo {root.resolve()} with a new owner token ({created}, owner-only)", flush=True)
     actual = server.server_address[1]
-    print(f"Repo: http://{host}:{actual}/ (the repo {root.resolve()})", flush=True)
-    if own is not None:
-        print(f"  this project's repo: other machines set [repo] remote = \"http://{host}:{actual}/{own}\"", flush=True)
+    here = f"http://{url_host(host)}:{actual}/"  # this machine's name for 0.0.0.0, which nobody can connect to
+    print(f"Repo: {here} (the repo {root.resolve()})", flush=True)
     child = None
     if ui_port is not None:
-        child, line = start_ui(host, actual, ui_port, server.owner_token, no_auth)
+        child, lines = start_ui(host, actual, ui_port, server.owner_token, no_auth)
         if child is None:
             print("warning: the UI did not start (see above); the server keeps running", file=sys.stderr, flush=True)
         else:
-            print(line, flush=True)
+            for line in lines:  # its address and the login link, before anything else
+                print(line, flush=True)
             threading.Thread(target=forward, args=(child,), daemon=True).start()
     if no_auth:
         print("Authentication is off (--no-auth): every request acts as the owner; for local testing only", flush=True)
     else:
         print(f"Token: {server.owner_token}", flush=True)
         print(f"  stored in {(root / 'token').resolve()} (owner-only)", flush=True)
-        print("  clients read it from CAIRN_TOKEN or [repo] token_file, and `cairn ui` logs in with it;"
-              " `cairn token create <repo> --project <name>` makes project-scoped tokens", flush=True)
+    project = own if own is not None else "<project>"
+    plain = host not in LOCAL_HOSTS
+    print(f"Other machines: [repo] remote = \"{here}{project}\"{' and allow_http = true' if plain else ''} in their cairn.toml,", flush=True)
+    if not no_auth:
+        print("  and the token in CAIRN_TOKEN, [repo] token_file, their .cairn/token, or ~/.config/cairn/token"
+              " (`cairn token create <repo> --project <name>` makes a project-scoped one)", flush=True)
+    if plain:
+        print("warning: plain HTTP on a network address: use it over a VPN (Tailscale, WireGuard), an SSH tunnel, "
+              "or an HTTPS reverse proxy", flush=True)
     reap_schedule(server.app)
     if gc_interval:
         gc_schedule(server.app, gc_interval, gc_grace)

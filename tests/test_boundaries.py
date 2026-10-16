@@ -18,13 +18,13 @@ import pytest
 import cairn
 
 PACKAGE = Path(cairn.__file__).parent
-LEAVES = {"config", "ranges", "formats", "_version"}  # import nothing from cairn
+LEAVES = {"config", "ranges", "formats", "hosts", "_version"}  # import nothing from cairn
 ALLOWED = {
     "store": {"store", "ranges", "formats"},  # the repo core: no configuration, no client
     "api": {"store"},  # the error boundary of the public calls
     "client": {"client", "store", "api", "config", "ranges", "formats", "_version"},  # formats: the run logger writes what it reads
-    "server": {"server", "store", "config", "ranges", "_version"},
-    "ui": {"ui", "store", "client", "config", "ranges", "_version"},
+    "server": {"server", "store", "config", "ranges", "hosts", "_version"},
+    "ui": {"ui", "store", "client", "config", "ranges", "hosts", "_version"},
     "reports": {"reports", "store", "client", "config", "ranges", "formats", "_version"},
     "runs": {"runs", "store", "client", "config", "formats", "_version"},
     "__init__": {"store", "client", "api", "_version"},  # the API (client lazily)

@@ -470,7 +470,7 @@ def cmd_ui(args) -> None:
             login = client(config, args.remote, allow_http=args.allow_http).token  # the first token open.find_token finds
         except SystemExit:
             login = ""
-    serve_ui(backend, host=args.host, port=args.port, no_auth=args.no_auth, secure_cookie=not args.insecure_cookies,
+    serve_ui(backend, host=args.host, port=args.port, no_auth=args.no_auth,
              login_token=login, open_browser=not args.no_browser)
 
 
@@ -686,7 +686,6 @@ def main(argv: list[str] | None = None) -> None:
     ui.add_argument("--port", type=int, default=8801)
     ui.add_argument("--no-auth", action="store_true", help="no login: use CAIRN_TOKEN / [repo] token_file for a remote (loopback hosts only)")
     ui.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
-    ui.add_argument("--insecure-cookies", action="store_true", help="login over plain HTTP (SSH tunnel): the session cookie loses its Secure flag")
     ui.add_argument("--no-browser", action="store_true", help="do not open the one-time login link in a browser")
     ui.set_defaults(run=cmd_ui)
 
