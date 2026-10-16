@@ -1,6 +1,6 @@
 # Cairn architecture: a repo, an optional remote, automatic sync
 
-Decided 2026-10-15 with the owner. Fixed: later work fits this design; it does not change it.
+Decided 2026-10-15 with the owner; projects, short ids and errors added 2026-10-16. Fixed: later work fits this design; it does not change it.
 
 ## The rules
 
@@ -23,7 +23,8 @@ Decided 2026-10-15 with the owner. Fixed: later work fits this design; it does n
 | term | meaning |
 |---|---|
 | repo | the folder `.cairn/` (`[cairn] dir`, `CAIRN_DIR`): metadata, blobs, outbox, drafts, report builds |
-| remote | a `cairn server` (`[repo] remote = "https://..."`), itself serving a repo on its machine |
+| remote | a project on a `cairn server`: `[repo] remote = "https://host/<project>"`, like a git remote URL |
+| project | what a repo holds: locally exactly one (unnamed), on a server many, each at `<server>/<project>` |
 | source of truth | the remote if configured, else the repo |
 | outbox | `<repo>/outbox/<uid>/`: one version on its way to the remote (manifest + state); one writer |
 | synced | the remote has the version and assigned its number |
@@ -33,7 +34,7 @@ Decided 2026-10-15 with the owner. Fixed: later work fits this design; it does n
 ```text
 .cairn/                      the repo (self-ignoring: .gitignore = "*")
 ├── repo.json                uid of this repo, layout version
-├── metadata.sqlite3         projects, versions, aliases, lineage (WAL)   — not on a network filesystem
+├── metadata.sqlite3         versions, aliases, lineage (WAL)   — not on a network filesystem
 ├── blobs/<aa>/<sha256>      content-addressed files, written once (temp + rename), shared by all versions
 ├── outbox/<uid>/            versions not yet on the remote (manifest, state); only with a remote
 ├── drafts/                  folders that become versions (runs, `cairn.draft`)
@@ -45,6 +46,27 @@ Decided 2026-10-15 with the owner. Fixed: later work fits this design; it does n
 ```
 
 A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has no project files around it.
+
+## Projects
+
+- **Locally there are no projects.** A project's `.cairn/` holds that project only; references, the CLI,
+  the Python API and `cairn ui` name artifacts without a project (`descent@v3`, `datasets/crops@best`).
+- **A server hosts many projects in one repo folder**, each exposed at `<server>/<project>` as if it were
+  its own repo (as a git host serves many repositories). They share the server's one database and one
+  content-addressed `blobs/`, so a file published by several projects is stored once.
+- **The remote URL names the project:** its last path segment (`https://host/my-study`, or
+  `https://host/prefix/my-study` behind a path prefix). Syncing to a project the server does not have
+  creates it when the token is the owner's; a project-scoped token only reaches its existing project.
+- **Another project's artifacts** are read with `store=` (`cairn.use("datasets/x@v3",
+  store="https://host/other")`); lineage records that project's URL. A reference has no project prefix.
+
+## Short ids
+
+- Every version has a **short id**: the first 7 hex digits of the SHA-256 of its uid (longer when needed
+  to be unique), fixed when the version is created and the same in the repo and on the remote.
+- `name@<id>` and a bare `<id>` (as in `cairn show 3f9a2c1`) name a version, by any unique prefix of
+  4 or more digits. Names, numbers, aliases and labels are matched first; an ambiguous prefix is an error
+  that lists the candidates.
 
 ## Versions and numbers
 
@@ -113,8 +135,7 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
 dir = ".cairn"                        # the repo (default; or CAIRN_DIR)
 
 [repo]
-remote = "https://cairn.example.org"  # optional: the source of truth
-project = "my-study"                  # default: the project folder name
+remote = "https://cairn.example.org/my-study"  # optional: the source of truth (<server>/<project>)
 token_file = "~/.config/cairn/token"  # or CAIRN_TOKEN
 allow_http = false                    # plain HTTP to a non-local remote
 interval = 30                         # seconds between live syncs of a running version
@@ -129,5 +150,13 @@ with fresh repos (`[store]` is an unknown key like any other).
 ## Commands
 
 - `cairn server [repo]` serves a repo (default: the project's) to other machines; `cairn ui` explores the
-  project's repo (or `--remote URL`); both print a one-time login link.
+  project's repo (or `--remote URL`: a server lists its projects, `<server>/<project>` opens one); both print
+  a one-time login link.
+
+## Errors
+
+Cairn's own errors (an unknown artifact, a refused alias, a remote that does not answer, ...) are raised
+from the public function or method the caller called, so the traceback ends at the caller's line and that
+one call, followed by a message that names what was looked for and where (the repo folder or remote).
+Unexpected failures keep their full traceback.
 - `cairn sync [--watch]`, `cairn status`, `cairn prune`, `cairn verify` work on the repo and its remote.
