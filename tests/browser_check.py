@@ -16,7 +16,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import struct
 import threading
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -28,6 +30,17 @@ from cairn.server import make_server  # noqa: E402
 from cairn.store.tokens import init_root  # noqa: E402
 from cairn.ui import RemoteBackend, make_ui_server  # noqa: E402
 from conftest import make_data, write  # noqa: E402
+
+
+def png(path: Path, width: int, height: int) -> None:
+    """A gradient PNG of the given size, written without any imaging library (a picture worth zooming into)."""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    rows = b"".join(b"\0" + bytes(v for x in range(width) for v in ((x * 255) // width, (y * 255) // height, 128 + ((x // 40 + y // 40) % 2) * 90))
+                    for y in range(height))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
 
 
 def build_data(base: Path, url: str) -> None:
@@ -63,6 +76,9 @@ def build_data(base: Path, url: str) -> None:
     shutil.copytree(toy, long)
     for i in range(10):
         (long / f"part-{i:02d}.txt").write_text(f"part {i}\n" * 5)
+    png(long / "figures" / "wide.png", 1200, 400)  # three images: a gallery to page through in the lightbox
+    (long / "figures" / "tall.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="600" viewBox="0 0 300 600">'
+                                               '<rect width="300" height="600" fill="#dcebe5"/><circle cx="150" cy="300" r="120" fill="#176b5b"/></svg>')
     store.publish("datasets/long-set", long)
     store.publish("models/denoiser", toy, inputs=["study:toy-fit@v1"], aliases=["best"])
     # a run: a script that uses the dataset, logs a curve, and publishes a model (the run is its one input)
@@ -102,6 +118,161 @@ def check_preview(page) -> None:
         assert m["w"] <= m["cw"] + 0.5, f"preview wider than its cell: {m}"
         assert abs(m["w"] / m["h"] - m["nw"] / m["nh"]) < 0.02 or m["fit"] == "contain", f"preview aspect distorted: {m}"
         assert m["fit"] == "contain", f"preview must use object-fit contain: {m}"
+
+LIGHTBOX = "dialog.app-lightbox"
+
+
+def lightbox_state(page) -> dict:
+    return page.evaluate("""() => { const d = document.querySelector('dialog.app-lightbox'), img = d && d.querySelector('.stage img');
+        return {open: !!(d && d.open), title: d?.querySelector('.lightbox-path')?.textContent ?? null, zoom: d?.querySelector('.zoom span')?.textContent ?? null,
+                meta: d?.querySelector('.lightbox-meta')?.textContent ?? null, x: img ? parseFloat(img.style.getPropertyValue('--pan-x')) : null,
+                y: img ? parseFloat(img.style.getPropertyValue('--pan-y')) : null, loaded: !!(img && img.complete && img.naturalWidth > 0),
+                overflow: document.documentElement.style.overflow, focusInside: !!(d && d.contains(document.activeElement)),
+                download: d?.querySelector('.lightbox-download')?.getAttribute('href') ?? null}; }""")
+
+
+def wait_image(page) -> None:
+    page.wait_for_function("() => { const i = document.querySelector('dialog.app-lightbox .stage img'); return i && i.complete && i.naturalWidth > 0 && !i.classList.contains('is-loading'); }")
+
+
+def check_lightbox(page, shots: Path) -> None:
+    """The lightbox from the inline preview and from the file list: one gallery in list order, arrows, zoom (keys,
+    buttons, wheel), mouse panning, reset on a new image, focus kept inside and given back, no page scroll behind."""
+    images = page.evaluate("() => [...document.querySelectorAll('.table-card tbody tr td:first-child')].filter(td => td.querySelector('.thumb:not(.thumb-spacer)')).map(td => td.querySelector('a:not(.thumb)').textContent)")
+    assert images == ["figures/hist.png", "figures/tall.svg", "figures/wide.png"], images
+    # (a) from the inline preview of the second image
+    opener = page.locator(".preview-row .preview-open").nth(1)
+    opener.scroll_into_view_if_needed()
+    scroll = page.evaluate("scrollY")
+    opener.click()
+    page.locator(LIGHTBOX + "[open]").wait_for()
+    wait_image(page)
+    state = lightbox_state(page)
+    assert state["title"] == "figures/tall.svg" and state["meta"].startswith("2 of 3"), state
+    assert state["overflow"] == "hidden" and state["focusInside"] and state["zoom"] == "100%", state
+    assert state["download"] and state["download"].endswith("?download=1"), state
+    page.screenshot(path=str(shots / "30-lightbox-preview.png"))
+    page.keyboard.press("ArrowRight")
+    wait_image(page)
+    assert lightbox_state(page)["title"] == "figures/wide.png"
+    page.keyboard.press("ArrowRight")  # wraps around
+    assert lightbox_state(page)["title"] == "figures/hist.png"
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("ArrowLeft")
+    assert lightbox_state(page)["title"] == "figures/tall.svg"
+    page.get_by_role("button", name="Next image").click()
+    wait_image(page)
+    assert lightbox_state(page)["title"] == "figures/wide.png"
+    # zoom: keys, buttons, the wheel about the pointer
+    page.keyboard.press("+")
+    assert lightbox_state(page)["zoom"] == "125%"
+    page.get_by_role("button", name="Zoom in").click()
+    assert lightbox_state(page)["zoom"] == "150%"
+    page.keyboard.press("-")
+    assert lightbox_state(page)["zoom"] == "125%"
+    box = page.locator(LIGHTBOX + " .stage img").bounding_box()
+    cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(cx + 80, cy + 30)
+    page.mouse.wheel(0, -120)
+    page.wait_for_timeout(200)
+    state = lightbox_state(page)
+    assert state["zoom"] == "140%" and abs(state["x"]) > 1, f"the wheel zooms about the pointer: {state}"
+    page.wait_for_timeout(200)
+    page.screenshot(path=str(shots / "31-lightbox-zoomed.png"))
+    # pan with the mouse
+    before = lightbox_state(page)
+    page.mouse.move(cx, cy)
+    page.mouse.down()
+    page.mouse.move(cx + 60, cy + 40, steps=5)
+    page.mouse.up()
+    after = lightbox_state(page)
+    assert abs(after["x"] - before["x"] - 60) < 2 and abs(after["y"] - before["y"] - 40) < 2, f"panning moves the image: {before} -> {after}"
+    page.get_by_role("button", name="Reset").click()
+    state = lightbox_state(page)
+    assert state["zoom"] == "100%" and state["x"] == 0 and state["y"] == 0, state
+    page.keyboard.press("+")
+    page.keyboard.press("ArrowLeft")  # a new image starts at 100%, centred
+    state = lightbox_state(page)
+    assert state["zoom"] == "100%" and state["x"] == 0 and state["title"] == "figures/tall.svg", state
+    for _ in range(12):  # focus stays inside while open
+        page.keyboard.press("Tab")
+        assert lightbox_state(page)["focusInside"], "Tab left the lightbox"
+    page.keyboard.press("Shift+Tab")
+    assert lightbox_state(page)["focusInside"], "Shift+Tab left the lightbox"
+    page.mouse.wheel(0, 400)  # the page behind does not scroll
+    assert page.evaluate("scrollY") == scroll, "the page scrolled behind the lightbox"
+    page.keyboard.press("Escape")
+    page.locator(LIGHTBOX + "[open]").wait_for(state="detached")
+    state = lightbox_state(page)
+    assert not state["open"] and state["overflow"] == "", state
+    assert opener.evaluate("e => e === document.activeElement"), "focus goes back to the preview on close"
+    # (b) from a thumbnail in the file list, closed with the visible button
+    page.get_by_role("link", name="Open figures/wide.png in the viewer").click()
+    page.locator(LIGHTBOX + "[open]").wait_for()
+    wait_image(page)
+    state = lightbox_state(page)
+    assert state["title"] == "figures/wide.png" and state["meta"].startswith("3 of 3"), state
+    page.get_by_role("button", name="Close").click()
+    page.locator(LIGHTBOX + "[open]").wait_for(state="detached")
+    # (c) from a figure card
+    page.locator(".app-figures .figure-card").first.click()
+    page.locator(LIGHTBOX + "[open]").wait_for()
+    assert lightbox_state(page)["title"] == "figures/hist.png"
+    page.keyboard.press("Escape")
+    page.locator(LIGHTBOX + "[open]").wait_for(state="detached")
+    thumbs = page.locator(".thumb img").evaluate_all("l => l.map(i => i.loading)")
+    assert thumbs and all(x == "lazy" for x in thumbs), thumbs
+
+
+def check_touch_lightbox(browser, ui: str, token: str, shots: Path, problems: list[str]) -> None:
+    """On a touch phone: a thumbnail opens the lightbox, a pinch zooms, one finger pans, a swipe pages."""
+    context = browser.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True, device_scale_factor=2)
+    page = context.new_page()
+    page.on("pageerror", lambda error: problems.append(f"page error: {error}"))
+    page.on("console", lambda m: m.type == "error" and problems.append(f"console error: {m.text}"))
+    page.goto(ui + "/login")
+    page.get_by_label("Token").fill(token)
+    page.get_by_role("button", name="Open repo").click()
+    page.wait_for_url(ui + "/")
+    page.goto(ui + "/p/study/a/datasets/long-set")
+    page.get_by_role("link", name="Open figures/wide.png in the viewer").tap()
+    page.locator(LIGHTBOX + "[open]").wait_for()
+    wait_image(page)
+    page.wait_for_timeout(300)
+    page.screenshot(path=str(shots / "phone-lightbox.png"))
+    sw = page.evaluate("[document.documentElement.scrollWidth, innerWidth]")
+    assert sw[0] <= sw[1], f"phone lightbox scrolls sideways {sw}"
+    for name in ("Close", "Previous image", "Next image", "Zoom in", "Zoom out", "Reset"):
+        h = page.get_by_role("button", name=name).bounding_box()
+        assert h and h["height"] >= 39.5 and h["x"] >= 0 and h["x"] + h["width"] <= 390, f"phone lightbox {name}: {h}"
+    cdp = context.new_cdp_session(page)
+    box = page.locator(LIGHTBOX + " .stage img").bounding_box()
+    cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+    def touch(kind: str, points: list[tuple[float, float]]) -> None:
+        cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [{"x": x, "y": y, "id": i} for i, (x, y) in enumerate(points)]})
+
+    touch("touchStart", [(cx - 30, cy), (cx + 30, cy)])
+    for step in range(1, 6):
+        touch("touchMove", [(cx - 30 - step * 12, cy), (cx + 30 + step * 12, cy)])
+    touch("touchEnd", [])
+    zoom = int(lightbox_state(page)["zoom"].rstrip("%"))
+    assert zoom > 150, f"a pinch zooms: {zoom}%"
+    before = lightbox_state(page)
+    touch("touchStart", [(cx, cy)])
+    for step in range(1, 6):
+        touch("touchMove", [(cx - step * 10, cy + step * 4)])
+    touch("touchEnd", [])
+    after = lightbox_state(page)
+    assert after["x"] < before["x"] - 30, f"one finger pans a zoomed image: {before} -> {after}"
+    page.screenshot(path=str(shots / "phone-lightbox-zoomed.png"))
+    page.get_by_role("button", name="Reset").tap()
+    touch("touchStart", [(cx + 100, cy)])
+    for step in range(1, 6):
+        touch("touchMove", [(cx + 100 - step * 30, cy)])
+    touch("touchEnd", [])
+    assert lightbox_state(page)["title"] == "figures/hist.png", "a swipe to the left shows the next image (wrapping)"
+    context.close()
 
 
 def run(keep: bool) -> int:
@@ -207,6 +378,7 @@ def run(keep: bool) -> int:
         page.wait_for_timeout(1500)
         view("21-image-preview")
         scroll_check("20-long-artifact")
+        check_lightbox(page, shots)
         page.goto(ui + "/p/study/a/toy-fit")
         page.locator(".graph-node").first.wait_for()
         page.locator(".image-copy").first.click()
@@ -363,6 +535,8 @@ def run(keep: bool) -> int:
         page.goto(ui + "/p/study/a/toy-fit")
         page.locator(".graph-node").first.wait_for()
         shot("14-dark-artifact")
+        page.on("console", lambda m: m.type == "error" and problems.append(f"console error (dark): {m.text}"))
+        check_touch_lightbox(browser, ui, token, shots, problems)
         browser.close()
 
     out = Path("/tmp/cairn-ui-mobile-shots")

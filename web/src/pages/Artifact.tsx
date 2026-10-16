@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { paths, useApi, type Entry, type Manifest, type Summary, type VersionRow } from "../api";
 import {
-  AliasPills, Button, CodeChips, CopyButton, Crumbs, DataTable, ErrorNote, Hero, HeroLine, Hint, JsonBlock,
+  AliasPills, Button, CodeChips, CopyButton, Crumbs, DataTable, ErrorNote, FigureCard, FigureGrid, Hero, HeroLine, Hint, JsonBlock,
   KeyValueTable, LinkButton, Loading, MetricCard, MetricGrid, Note, Panel, RefRow, RefRows, RowActions, SearchInput, Section, Select,
-  StatusPill, TextBlock, Toolbar,
+  StatusPill, TextBlock, Thumbnail, ThumbnailSpacer, Toolbar, useLightbox, type GalleryItem,
 } from "../components";
 import { artifactHref, bytes, exact, fileHref, isReport, parseRef, previewKind, reportHref, selOf, shortOf, when, zipHref } from "../util";
 import { Graph } from "./Graph";
@@ -13,7 +13,7 @@ import { RunPanel } from "./Run";
 interface ArtifactData { project: string; name: string; summary: Summary; versions: VersionRow[]; aliases: Record<string, number> }
 interface VersionData { project: string; name: string; version: Manifest; consumers: string[]; deleted?: string[] }
 
-const TEXT_LIMIT = 64 * 1024, MEDIA_LIMIT = 50 * 1024 * 1024, SHOWN = 200;
+const TEXT_LIMIT = 64 * 1024, MEDIA_LIMIT = 50 * 1024 * 1024, THUMB_LIMIT = 5 * 1024 * 1024, SHOWN = 200, FIGURES = 6;
 
 /** A nested config as `a.b.c` -> value rows (lists of plain values stay one row). */
 function flatten(value: unknown, prefix = ""): [string, string][] {
@@ -45,8 +45,8 @@ function MetadataSections({ metadata }: { metadata: Record<string, unknown> }) {
   );
 }
 
-/** A file's inline preview: an image, a video, or the start of a text file. */
-function Preview({ url, entry }: { url: string; entry: Entry }) {
+/** A file's inline preview: an image (a click opens the lightbox), a video, or the start of a text file. */
+function Preview({ url, entry, onOpen }: { url: string; entry: Entry; onOpen?: () => void }) {
   const kind = previewKind(entry.path);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -60,41 +60,60 @@ function Preview({ url, entry }: { url: string; entry: Entry }) {
     }, e => { if (live) setError(e.message); });
     return () => { live = false; };
   }, [url, kind, size, entry.path]);
-  if (kind === "image") return size > MEDIA_LIMIT ? <Hint>Too large to preview.</Hint> : <img className="preview-media" src={url} alt={entry.path} loading="lazy" />;
+  if (kind === "image") {
+    if (size > MEDIA_LIMIT) return <Hint>Too large to preview. {onOpen && <Button small onClick={onOpen}>Open in the viewer</Button>}</Hint>;
+    return (
+      <button type="button" className="preview-open" onClick={onOpen} aria-label={`Open ${entry.path} in the viewer`} title="Open in the viewer">
+        <img className="preview-media" src={url} alt={entry.path} loading="lazy" />
+      </button>
+    );
+  }
   if (kind === "video") return size > MEDIA_LIMIT ? <Hint>Too large to preview.</Hint> : <video className="preview-media" src={url} controls preload="metadata" muted />;
   if (error) return <Hint>Preview failed: {error}</Hint>;
   if (text === null) return <Loading />;
   return <><TextBlock>{text}</TextBlock>{size > TEXT_LIMIT && <Hint>Showing the first {bytes(TEXT_LIMIT)} of {bytes(size)}.</Hint>}</>;
 }
 
+/** A version's files: figure cards of its first images, then the list (filter, thumbnails, preview, download, copy).
+ *  All its images, in list order, are one lightbox gallery. */
 function Files({ project, name, version, files }: { project: string; name: string; version: string; files: Entry[] }) {
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [all, setAll] = useState(false);
   const href = (path: string, download = false) => fileHref(project, name, version, path, download);
+  const isImage = (f: Entry) => !!f.sha256 && previewKind(f.path) === "image";
+  const images = useMemo(() => files.filter(isImage), [files]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const gallery = useMemo<GalleryItem[]>(() => images.map(f => ({
+    src: href(f.path), title: f.path, caption: bytes(f.size ?? 0), download: href(f.path, true),
+    copy: { text: `${exact(project, name, version)}//${f.path}`, label: "Copy file reference", done: "Reference copied" },
+  })), [images, project, name, version]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const position = useMemo(() => new Map(images.map((f, i) => [f.path, i])), [images]);
+  const { open: show, lightbox } = useLightbox(gallery);
   const shown = files.filter(f => f.path.toLowerCase().includes(filter.toLowerCase()));
   const rows = all ? shown : shown.slice(0, SHOWN);
   const toggle = (path: string) => setOpen(prev => { const next = new Set(prev); next.has(path) ? next.delete(path) : next.add(path); return next; });
-  const images = files.filter(f => previewKind(f.path) === "image" && (f.size ?? 0) <= 5 * 1024 * 1024).slice(0, 6);
+  const figures = images.filter(f => (f.size ?? 0) <= THUMB_LIMIT).slice(0, FIGURES);
   return (
     <>
-      {images.length > 0 && (
-        <div className="figure-grid app-figures">
-          {images.map(f => (
-            <a className="figure-card" key={f.path} href={href(f.path)} target="_blank" rel="noreferrer">
-              <img src={href(f.path)} alt={f.path} loading="lazy" />
-              <div className="figure-copy"><p className="mono">{f.path}</p></div>
-            </a>
-          ))}
-        </div>
+      {figures.length > 0 && (
+        <FigureGrid>
+          {figures.map(f => <FigureCard key={f.path} src={href(f.path)} href={href(f.path)} title={f.path} onOpen={() => show(position.get(f.path)!)} />)}
+        </FigureGrid>
       )}
       {files.length > 12 && <Toolbar><SearchInput label="Filter files" value={filter} onChange={setFilter} /></Toolbar>}
       <DataTable head={["File", "Size", ""]}>
         {rows.flatMap(f => {
-          const kind = previewKind(f.path), isOpen = open.has(f.path);
+          const kind = previewKind(f.path), isOpen = open.has(f.path), at = position.get(f.path);
           const row = (
             <tr key={f.path}>
-              <td className="mono wrap-any">{f.sha256 ? <a href={href(f.path)}>{f.path}</a> : <>{f.path} <span className="muted">&rarr; {f.link}</span></>}</td>
+              <td className="mono wrap-any">
+                <span className={images.length ? "file-name" : undefined}>
+                  {images.length > 0 && (at !== undefined
+                    ? <Thumbnail src={(f.size ?? 0) <= THUMB_LIMIT ? href(f.path) : undefined} href={href(f.path)} label={`Open ${f.path} in the viewer`} onOpen={() => show(at)} />
+                    : <ThumbnailSpacer />)}
+                  {f.sha256 ? <a href={href(f.path)}>{f.path}</a> : <span>{f.path} <span className="muted">&rarr; {f.link}</span></span>}
+                </span>
+              </td>
               <td className="muted nowrap">{f.sha256 ? bytes(f.size ?? 0) : "link"}</td>
               <td><RowActions>
                 {f.sha256 && kind && <Button small aria-expanded={isOpen} onClick={() => toggle(f.path)}>{isOpen ? "Hide" : "Preview"}</Button>}
@@ -103,11 +122,12 @@ function Files({ project, name, version, files }: { project: string; name: strin
               </RowActions></td>
             </tr>
           );
-          return isOpen ? [row, <tr key={f.path + "#"} className="preview-row"><td colSpan={3}><Preview url={href(f.path)} entry={f} /></td></tr>] : [row];
+          return isOpen ? [row, <tr key={f.path + "#"} className="preview-row"><td colSpan={3}><Preview url={href(f.path)} entry={f} onOpen={at !== undefined ? () => show(at) : undefined} /></td></tr>] : [row];
         })}
       </DataTable>
       {shown.length === 0 && <Hint>No file matches.</Hint>}
       {!all && shown.length > SHOWN && <Button onClick={() => setAll(true)}>Show all {shown.length} files</Button>}
+      {lightbox}
     </>
   );
 }
