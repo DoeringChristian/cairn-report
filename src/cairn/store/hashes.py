@@ -36,13 +36,16 @@ class HashCache:
         cached = self.entries.get(key)
         if cached and cached[0] == info["size"] and cached[1] == info["mtime_ns"]:
             return cached[2]
-        digest = hashlib.sha256()
+        digest, read = hashlib.sha256(), 0
         with file.open("rb") as handle:
             while chunk := handle.read(1 << 20):
                 digest.update(chunk)
-        with self.lock:
-            self.entries[key] = [info["size"], info["mtime_ns"], digest.hexdigest()]
-            self.dirty = True
+                read += len(chunk)
+            after = os.fstat(handle.fileno())
+        if read == info["size"] == after.st_size and after.st_mtime_ns == info["mtime_ns"]:  # not written meanwhile
+            with self.lock:
+                self.entries[key] = [info["size"], info["mtime_ns"], digest.hexdigest()]
+                self.dirty = True
         return digest.hexdigest()
 
     def forget(self, file: Path) -> None:

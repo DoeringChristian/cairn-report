@@ -263,8 +263,11 @@ class BlobStore:
         between, `entry` is updated to what was kept (the version has what was staged). Blobs are read-only. Returns
         False when the file is gone. Safe on a network filesystem: written under a temporary name, renamed into place."""
         target = self.blob_path(entry["sha256"])
-        if target.is_file():
+        try:
+            entry["size"] = target.stat().st_size  # kept already (a file that grew while it was hashed: the hashed bytes)
             return True
+        except FileNotFoundError:
+            pass
         temporary = self.tmp / f"{entry['sha256']}.{secrets.token_hex(6)}"
         try:
             if not (link and _hard_link(source, temporary)):
@@ -276,8 +279,8 @@ class BlobStore:
                     digest.update(chunk)
                     size += len(chunk)
                 os.fsync(handle.fileno())
-            if digest.hexdigest() != entry["sha256"]:  # changed since it was hashed: publish what was kept
-                entry.update(sha256=digest.hexdigest(), size=size)
+            if digest.hexdigest() != entry["sha256"] or size != entry.get("size"):  # changed since it was hashed (or
+                entry.update(sha256=digest.hexdigest(), size=size)                  # while): publish what was kept
                 target = self.blob_path(entry["sha256"])
             os.chmod(temporary, 0o444)
             if not target.is_file():

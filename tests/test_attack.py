@@ -1448,3 +1448,155 @@ def test_finding_the_repo_from_anywhere(tmp_path):
     assert {finish(process, 60)[0].strip() for process in opened} == {uid}
     assert sorted(path.name for path in (racing / ".cairn").iterdir() if path.name.startswith("repo.json")) == ["repo.json"]
     assert not stray_repos(tmp_path, {outer / ".cairn", inner / ".cairn", named, racing / ".cairn", tmp_path / "remote"})
+
+
+# ====================================================================== 9. odd input
+
+
+def test_odd_names_empty_files_and_symlinks_publish_and_read_back_byte_identical(tmp_path):
+    project = project_at(tmp_path, "study-odd")
+    data = tmp_path / "odd"
+    (data / "empty-folder").mkdir(parents=True)
+    (data / "sub").mkdir()
+    files = {"empty.txt": b"", "sub/ünïcødé ✓ 文件 (1).txt": "größe".encode(), "sub/" + "x" * 240 + ".bin": os.urandom(1000),
+             "sub/space name.txt": b"spaces", "sub/new​line.txt": b"zero width"}
+    for path, content in files.items():
+        (data / path).write_bytes(content)
+    (data / "sub" / "inside").symlink_to("../empty.txt")
+    (data / "sub" / "self").symlink_to("self")
+    (data / "folder-link").symlink_to("sub")
+    (data / "sub" / "outside").symlink_to("../../somewhere-else")
+    (data / "sub" / "absolute").symlink_to("/etc/hosts")
+    result = cli(project, "publish", str(data), "odd")
+    assert result.returncode == 0, result.stderr
+    repo = LocalRepo(project / ".cairn")
+    version = repo.versions("study", "odd")[0]
+    entries = {entry["path"]: entry for entry in version["files"]}
+    assert {path: entries[path]["sha256"] for path in files} == {path: sha(content) for path, content in files.items()}
+    assert entries["sub/inside"]["link"] == "../empty.txt" and entries["sub/self"]["link"] == "self"
+    assert entries["folder-link"]["link"] == "sub"
+    assert "sub/outside" not in entries and "sub/absolute" not in entries  # links out of the folder are left out
+    pulled = Path(cli(project, "pull", "odd@v1", "--no-record").stdout.strip())
+    for path, content in files.items():
+        assert (pulled / path).read_bytes() == content
+    assert (pulled / "folder-link" / "space name.txt").read_bytes() == b"spaces"
+    verify_clean(project)
+
+
+GROWING = """
+import sys, time
+with open(sys.argv[1], "ab") as handle:
+    end = time.time() + float(sys.argv[2])
+    while time.time() < end and handle.tell() < 400 << 20:
+        handle.write(b"x" * 65536)
+        handle.flush()
+        time.sleep(0.0005)
+"""
+
+
+def test_files_that_change_while_published_and_files_that_cannot_be_read(tmp_path):
+    project = project_at(tmp_path, "study-change")
+    data = tmp_path / "changing"
+    data.mkdir()
+    (data / "log.txt").write_bytes(b"start\n" * 1000)
+    (data / "stable.txt").write_text("stable")
+    script(project, "grow.py", GROWING)
+    writer = spawn(project, "grow.py", data / "log.txt", 8)
+    numbers = []
+    for _ in range(5):
+        result = cli(project, "publish", str(data), "changing")
+        assert result.returncode == 0, result.stderr
+    finish(writer)
+    repo = LocalRepo(project / ".cairn")
+    for version in repo.versions("study", "changing"):  # each version has what was staged, consistently
+        for entry in version["files"]:
+            content = b"".join(repo.read_file("study", "changing", f"v{version['version']}", entry["path"]).chunks)
+            assert sha(content) == entry["sha256"] and len(content) == entry["size"], (version["version"], entry["path"])
+        numbers.append(version["version"])
+    assert numbers == list(range(1, len(numbers) + 1))
+    verify_clean(project)
+
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "a.txt").write_text("a")
+    (locked / "secret.txt").write_text("secret")
+    os.chmod(locked / "secret.txt", 0)
+    try:
+        result = cli(project, "publish", str(locked), "locked")
+    finally:
+        os.chmod(locked / "secret.txt", 0o644)
+    assert result.returncode == 1 and "Permission denied" in result.stderr and "Traceback" not in result.stderr
+    assert "locked" not in repo.artifacts("study")
+    verify_clean(project)
+
+
+def test_a_full_disk_fails_cleanly_and_the_repo_recovers(tmp_path):
+    """A 40 MB disk image (macOS hdiutil) holds the project: a publish too big for it, and a publish when the database
+    cannot grow, fail with one line; nothing partial is left, and once there is room again publishing works."""
+    import shutil
+
+    if sys.platform != "darwin" or not shutil.which("hdiutil"):
+        pytest.skip("needs hdiutil (macOS) for a small filesystem")
+    image, mount = tmp_path / "full.dmg", tmp_path / "mnt"
+    made = subprocess.run(["hdiutil", "create", "-size", "40m", "-fs", "APFS", "-volname", "cairnfull", str(image), "-quiet"],
+                          capture_output=True, text=True)
+    if made.returncode != 0:
+        pytest.skip(f"hdiutil create failed: {made.stderr}")
+    mount.mkdir()
+    attached = subprocess.run(["hdiutil", "attach", str(image), "-mountpoint", str(mount), "-nobrowse", "-quiet"],
+                              capture_output=True, text=True)
+    if attached.returncode != 0:
+        pytest.skip(f"hdiutil attach failed: {attached.stderr}")
+    try:
+        project = project_at(mount, "p")
+        sources = tmp_path / "sources"
+        for name, size in (("one", 10 << 20), ("two", 60 << 20)):
+            (sources / name).mkdir(parents=True)
+            (sources / name / "data.bin").write_bytes(os.urandom(size))
+        assert cli(project, "publish", str(sources / "one"), "one").returncode == 0
+        too_big = cli(project, "publish", str(sources / "two"), "two")
+        assert too_big.returncode == 1 and "No space left" in too_big.stderr and "Traceback" not in too_big.stderr
+        assert not list((project / ".cairn" / "tmp").glob("*.*"))  # no partial upload left
+        free = shutil.disk_usage(mount).free
+        filler = mount / "filler"
+        with filler.open("wb") as handle:  # leave a few kB: the next write to the database fails
+            handle.truncate(max(free - 8192, 0))
+            handle.write(b"\0")
+        small = sources / "small"
+        small.mkdir()
+        failed = 0
+        for index in range(3):
+            (small / "c.txt").write_text(f"small {index}")
+            result = cli(project, "publish", str(small), "small")
+            failed += result.returncode != 0
+            assert "Traceback" not in result.stderr, result.stderr
+        filler.unlink()
+        (small / "c.txt").write_text("after")
+        assert cli(project, "publish", str(small), "small").returncode == 0
+        repo = LocalRepo(project / ".cairn")
+        check_numbers(repo)
+        assert "two" not in repo.artifacts("study")
+        verify_clean(project)
+    finally:
+        subprocess.run(["hdiutil", "detach", str(mount), "-force", "-quiet"], capture_output=True)
+
+
+def test_a_file_that_grows_between_its_listing_and_its_hash_is_recorded_as_kept(tmp_path):
+    """The folder is listed (size from stat), then the file grows, then it is hashed and staged: the entry must have the
+    size of the bytes kept, and the hash cache must not remember the hash under the old size."""
+    from cairn.client.http import entries_for, scan
+    from cairn.store.blobs import BlobStore
+    from cairn.store.hashes import HashCache
+
+    folder = tmp_path / "f"
+    folder.mkdir()
+    (folder / "log.txt").write_bytes(b"a" * 1000)
+    files = scan(folder, "", tmp_path)
+    with (folder / "log.txt").open("ab") as handle:  # written after the listing, before the hash
+        handle.write(b"b" * 500)
+    cache = HashCache(tmp_path / "hashes.json")
+    [entry], _ = entries_for(files, cache)
+    BlobStore(tmp_path / "repo").stage_file(entry, folder / "log.txt")
+    kept = (tmp_path / "repo" / "blobs" / entry["sha256"][:2] / entry["sha256"]).read_bytes()
+    assert sha(kept) == entry["sha256"] and len(kept) == entry["size"] == 1500
+    assert str(folder / "log.txt") not in cache.entries
