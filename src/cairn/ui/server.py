@@ -101,7 +101,7 @@ def message_page(title: str, text: str) -> bytes:
 
 def app_route(segments: list[str]) -> bool:
     """Whether a path (split on `/`) is a client-side route of the app."""
-    if segments == ["", ""] or segments == ["", "login"]:
+    if segments in (["", ""], ["", "login"], ["", "palette"]):
         return True
     return len(segments) >= 4 and segments[1] == "p" and (segments[3] == "" and len(segments) == 4 or segments[3] == "a" and len(segments) > 4)
 

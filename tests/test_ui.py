@@ -230,7 +230,7 @@ def test_a_remote_ui_refuses_plain_http_to_a_non_local_store():
 def test_the_app_routes_serve_the_built_index(ui):
     cookie = login(ui)
     index = (Path(ui_server.__file__).parent / "static" / "index.html").read_bytes()
-    for path in ("/", "/p/study/", "/p/study/a/data", "/p/study/a/reports/alpha@v1", "/p/anything/a/a/b/c@best", "/login"):
+    for path in ("/", "/p/study/", "/p/study/a/data", "/p/study/a/reports/alpha@v1", "/p/anything/a/a/b/c@best", "/palette", "/login"):
         status, headers, body = get(ui, path, cookie)
         if path == "/login":
             assert status == 303  # logged in already
