@@ -120,7 +120,7 @@ class Publication:
 
         with cairn.Publication("sweep", "runs/sweep/latest") as pub:
             ...                    # the job runs and writes into the folder
-            pub.sync()             # add new and changed files now (call it as often as you like)
+            pub.sync()             # mirror the folder now: add new and changed files, drop removed ones
 
     Leaving the block syncs once more and completes the version (inputs come from the folder's
     `.cairn-inputs.jsonl` plus `inputs`); an exception marks it failed instead. The version is
@@ -200,19 +200,26 @@ class Publication:
             manifest = self.store.start_version(self.name, self.label, self.metadata, self.source, uid=self.uid)
             self.started = True
             self._apply(manifest)
+            # a version started before (the same uid) mirrors the folder too: what it has counts as sent
+            self._sent = {
+                entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in manifest.get("files", [])
+            }
             self._start_beating()
         return self.version
 
     def sync(self) -> int:
-        """Add the files that are new or changed since the last sync; returns how many."""
+        """Make the running version mirror the folder: add the files that are new or changed since the last sync, and
+        remove the ones that left it (deleted, or excluded now); returns how many changed."""
         self.start()
         for attempt in range(3):
             entries, sources = self.store.stage(self.local, self.exclude, self.config.project)
             fresh = [
                 entry for entry in entries if self._sent.get(entry["path"]) != (entry.get("sha256"), entry.get("link"))
             ]
+            present = {entry["path"] for entry in entries}
+            removed = [{"path": path, "removed": True} for path in sorted(self._sent) if path not in present]
             try:
-                self.store.add_files(self.name, self.uid, fresh)
+                self.store.add_files(self.name, self.uid, removed + fresh)
                 break
             except (
                 MissingBlobs
@@ -223,9 +230,11 @@ class Publication:
                 self._stop_beating()  # failed meanwhile (its heartbeat expired, or the repo failed it): this job lost it
                 raise
         self.store.restage(entries, sources)
+        for entry in removed:
+            del self._sent[entry["path"]]
         self._sent.update({entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in fresh})
         self._apply(self.store.get_version(self.name, self.uid))
-        return len(fresh)
+        return len(fresh) + len(removed)
 
     def set_metadata(self, metadata: dict) -> None:
         """Replace the metadata of the running version (not once it completed or failed)."""

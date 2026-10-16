@@ -461,7 +461,8 @@ the one-scalar lines (`{name, value, step}`) that cairn-report 0.11 wrote.
 
 A job that is not a Cairn run writes its folder with a draft (`cairn.draft(name)` is a managed folder
 and the same writer). A folder that already exists is followed with `cairn publish runs/x/latest x --watch -- python run.py`, which
-adds new and changed files to one running version of `x` every `[repo] interval` seconds, then
+keeps one running version of `x` equal to the folder every `[repo] interval` seconds (new and changed
+files are added, files deleted or excluded since are removed), then
 completes it (or marks it failed when the command fails); the command's pulls become the version's
 inputs.
 

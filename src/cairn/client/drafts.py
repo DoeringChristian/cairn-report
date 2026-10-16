@@ -382,7 +382,8 @@ class Draft(Writer):
             self._stop = self._watcher = None
 
     def sync(self) -> int:
-        """Add new and changed files to the running version now (watch mode; 0 otherwise); returns how many."""
+        """Make the running version mirror the folder now (watch mode; 0 otherwise): new and changed files are added,
+        files that left the folder removed; returns how many changed."""
         if self._pub is None:
             return 0
         with self._lock:

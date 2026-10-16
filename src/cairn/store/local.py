@@ -64,7 +64,7 @@ from pathlib import Path
 from ..ranges import byte_range
 from . import gc, refs
 from .folders import pid_alive
-from .blobs import CHUNK, BlobStore, BlobWriter, clean_entries, now, resolve_entry
+from .blobs import CHUNK, BlobStore, BlobWriter, clean_entries, merged_files, now, resolve_entry
 from .db import RETENTION_TABLE, Database, export
 from .digest import manifest_digest
 from .errors import (
@@ -763,13 +763,11 @@ class LocalRepo:
         }
 
     def _merged(self, state: dict, entries) -> dict:
-        clean = clean_entries(entries)
+        clean = clean_entries(entries, removals=True)
         missing = self.missing(clean)  # inside the write transaction: a sweep cannot remove them meanwhile
         if missing:
             raise MissingBlobs(missing)
-        merged = {entry["path"]: entry for entry in state["files"]}
-        merged.update({entry["path"]: entry for entry in clean})
-        files = sorted(merged.values(), key=lambda entry: entry["path"])
+        files = merged_files(state["files"], clean)
         _check_tree(files)
         return {**state, "files": files}
 
@@ -845,8 +843,8 @@ class LocalRepo:
             return state["version"]
 
     def add_files(self, project: str, name: str, version: int | str, entries: list[dict]) -> None:
-        """Add or replace files in a running version (by number or uid; entries as in `blobs.clean_entries`, blobs
-        already stored)."""
+        """Add, replace or remove files in a running version (by number or uid; entries as in
+        `blobs.clean_entries(..., removals=True)`, applied in order, blobs already stored)."""
         with self._write() as connection:
             self._check(connection, project, name)
             self._save(

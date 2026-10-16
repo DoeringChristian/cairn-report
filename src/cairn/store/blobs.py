@@ -43,14 +43,22 @@ def link_target(path: str, target) -> str | None:
     return resolved if valid_path(resolved) else None
 
 
-def clean_entries(entries) -> list[dict]:
-    """Validated {path, sha256, size[, mtime]} or {path, link} entries."""
+def clean_entries(entries, removals: bool = False) -> list[dict]:
+    """Validated {path, sha256, size[, mtime]} or {path, link} entries; with `removals` (the files of a running
+    version) also {path, removed: true}: that path leaves the version."""
     if not isinstance(entries, list) or len(entries) > 200_000:
         raise ValueError("entries must be a list")
     clean = []
     for entry in entries:
         if not isinstance(entry, dict) or not valid_path(entry.get("path")):
             raise ValueError(f"invalid entry path: {str(entry)[:200]}")
+        if "removed" in entry:
+            if not removals:
+                raise ValueError(f"{entry['path']}: only a running version's files can be removed")
+            if entry["removed"] is not True or set(entry) != {"path", "removed"}:
+                raise ValueError(f"{entry['path']}: a removal is {{path, removed: true}}, nothing else")
+            clean.append({"path": entry["path"], "removed": True})
+            continue
         if "link" in entry:
             if link_target(entry["path"], entry["link"]) is None:
                 raise ValueError(f"{entry['path']}: link must stay inside its artifact")
@@ -69,6 +77,18 @@ def clean_entries(entries) -> list[dict]:
             }
         )
     return clean
+
+
+def merged_files(files: list[dict], entries: list[dict]) -> list[dict]:
+    """A running version's files after `entries`, in order: a removal drops its path (a path not there is no change),
+    any other entry adds or replaces the file at its path. Sorted by path."""
+    merged = {entry["path"]: entry for entry in files}
+    for entry in entries:
+        if entry.get("removed"):
+            merged.pop(entry["path"], None)
+        else:
+            merged[entry["path"]] = entry
+    return sorted(merged.values(), key=lambda entry: entry["path"])
 
 
 def resolve_entry(files: list[dict], path: str) -> dict | None:

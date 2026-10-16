@@ -446,7 +446,7 @@ class StoreApp:
             case ["projects", project, "artifacts", name, "versions", number, action] if number.isdigit():
                 number = int(number)
                 if action == "files":
-                    entries = clean_entries(payload.get("entries"))
+                    entries = clean_entries(payload.get("entries"), removals=True)
                     missing = store.missing(entries)
                     if missing:
                         return _json(409, {"error": "upload these blobs first", "missing": missing})

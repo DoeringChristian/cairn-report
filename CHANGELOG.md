@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.14.1
+
+- **A running version mirrors its folder.** A file that leaves the folder of a run, a draft or a `cairn publish
+  --watch` (deleted, renamed, or excluded since) now leaves the running version at the next live sync, and
+  always when it ends: a completed version equals the folder's final content. Before, a running version's file
+  list only grew, so a run that wrote a video, copied it into a result draft and deleted it still listed it,
+  and a file caught mid-write and deleted later stayed at the size it was caught with. A file caught mid-write
+  and kept was and is replaced by its final content. The files of a running version (`POST
+  .../versions/<n>/files`, `LocalRepo.add_files`) take removal entries `{"path": p, "removed": true}`, applied
+  in order (a path the version does not have is no change); a publish refuses them. A pending run carries its
+  removals in its outbox entry, so `cairn sync` ends it with the right files on the remote. Clients of 0.14.1
+  need a 0.14.1 server: a 0.14.0 server refuses removal entries.
+
 ## 0.14.0: the repo, an optional remote, automatic sync
 
 This release introduces the design in `docs/architecture.md`. It is the new layout: Cairn was not in use

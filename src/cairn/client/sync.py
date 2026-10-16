@@ -271,21 +271,25 @@ class Sync:
             for item in record["files"]
             if record["pushed"].get(item["path"]) != (item.get("sha256") or item.get("link"))
         ]
+        present = {item["path"] for item in record["files"]}
+        removed = [{"path": path, "removed": True} for path in sorted(record["pushed"]) if path not in present]
         try:
-            if fresh:
+            if fresh or removed:
                 for attempt in range(RETRIES):
                     self._upload(fresh, name)
                     self.outbox.refresh_claim(claimed)
                     try:
-                        remote.add_files(name, record["number"], fresh)
+                        remote.add_files(name, record["number"], removed + fresh)
                         break
                     except MissingBlobs:  # removed by garbage collection since we checked: send it again
                         if attempt == RETRIES - 1:
                             raise
+                for item in removed:
+                    del record["pushed"][item["path"]]
                 record["pushed"].update({item["path"]: item.get("sha256") or item.get("link") for item in fresh})
                 self.outbox.save(record)
             if record["status"] == "running":
-                if not fresh:
+                if not fresh and not removed:
                     remote.keep_alive(name, record["number"])  # nothing new: still say it is alive
                 return False
             if record["status"] == "completed":

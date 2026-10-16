@@ -52,7 +52,7 @@ from pathlib import Path
 
 from ..ranges import byte_range
 from ..store import refs
-from ..store.blobs import CHUNK, BlobStore, blob_path, now, resolve_entry
+from ..store.blobs import CHUNK, BlobStore, blob_path, merged_files, now, resolve_entry
 from ..store.digest import manifest_digest
 from ..store.errors import BadRange, Deleted, Forbidden, MissingBlobs, NotFound, StoreError, Unauthorized, Unreachable
 from ..store.folders import cached, hostname, inside, materialize_version, pull as pull_local
@@ -1152,9 +1152,7 @@ class SyncedRepo(ProjectRepo):
 
     def add_files(self, name: str, uid: str, entries: list[dict]) -> None:
         record = self._running(name, uid)
-        files = {item["path"]: item for item in record["files"]}
-        files.update({entry["path"]: entry for entry in entries})
-        record["files"] = sorted(files.values(), key=lambda item: item["path"])
+        record["files"] = merged_files(record["files"], entries)  # removals too: `push` sends them
         self.outbox.save(record)
         self.outbox.beat(uid)
         self._try(record)
