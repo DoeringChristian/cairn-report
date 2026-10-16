@@ -1016,11 +1016,17 @@ class SyncedRepo(ProjectRepo):
         if current is not None:
             return manifest_of(current)
         try:
-            return self.get_version(name, id)
-        except NotFound:  # nothing changed since the latest: the remote kept its own version, not this id
-            if record.get("number") is not None:
-                return self.get_version(name, record["number"])
-            return self.resolve(Ref(name, None), warn=lambda line: None)[1]
+            try:
+                return self.get_version(name, id)
+            except NotFound:  # nothing changed since the latest: the remote kept its own version, not this id
+                if record.get("number") is not None:
+                    return self.get_version(name, record["number"])
+                return self.resolve(Ref(name, None), warn=lambda line: None)[1]
+        except Unreachable:
+            # the entry left the outbox, so the remote has the version (another sender sent it, or the remote took
+            # it and its answer was lost), but the remote does not answer now and the repo may keep no copy (on a
+            # network filesystem): the version as this process last knew it; a publish never fails for the remote
+            return manifest_of(record)
 
     def down(self) -> bool:
         """Whether the remote was slow to fail a moment ago (DOWN_FOR seconds), in this process: then it is not asked for

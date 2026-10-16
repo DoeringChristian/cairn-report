@@ -907,6 +907,56 @@ def test_a_failed_run_waits_while_another_sender_has_its_output(server, tmp_path
     assert outbox(project) == []
 
 
+LOST_ANSWER = """
+import sys, cairn
+import cairn.client.open as open_module
+import cairn.client.remote as remote
+import cairn.client.sync as sync
+import cairn.store.fs as fs
+import cairn.store.local as local
+from cairn.store.errors import Unreachable
+
+fs.network_filesystem = local.network_filesystem = open_module.network_filesystem = lambda path: "nfs4"
+gone = []
+call, send = remote.Remote._call, sync.Sync.send
+
+
+def unreachable_once_gone(self, *args, **kwargs):
+    if gone:
+        raise Unreachable(f"{self.url} not reachable: connection reset")
+    return call(self, *args, **kwargs)
+
+
+def sent_by_another_sender(self, record, claim=True):
+    sent = send(self, record, claim)  # the version reaches the remote and leaves the outbox (a login node sent it)
+    if record["name"] == "result":
+        gone.append(True)  # and then the remote stops answering this job: its own answer is lost
+        raise Unreachable(f"{self.remote.url} not reachable: connection reset")
+    return sent
+
+
+remote.Remote._call, sync.Sync.send = unreachable_once_gone, sent_by_another_sender
+run = cairn.init(name="job", code=False, system=False)
+with cairn.draft("result") as result:
+    result.add_json("value", {"n": 1})
+print(result.version.id)
+"""
+
+
+def test_a_job_whose_version_another_sender_sent_while_the_remote_went_away_does_not_fail(server, tmp_path):
+    """On a network filesystem (no database, so no copies): a job's publish loses the remote's answer, while the
+    version did reach the remote and left the outbox (the login node sent it); the remote then stops answering. The
+    job must go on with its version (the remote has it), not fail with Unreachable."""
+    server.start()
+    project = project_at(tmp_path, "study", server.url)
+    (project / "job.py").write_text(LOST_ANSWER)
+    done = subprocess.run([sys.executable, "job.py"], cwd=project, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert not (project / ".cairn" / "metadata.sqlite3").exists()
+    [result] = remote_versions(server, "result")
+    assert result["id"] == done.stdout.split()[-1] and result["status"] == "completed"
+
+
 def test_a_script_adopts_the_repos_own_versions_before_it_reads(server, tmp_path, monkeypatch):
     import cairn.client.repo as repo_module
 
