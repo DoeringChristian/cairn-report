@@ -16,7 +16,9 @@ import re
 import ssl
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -26,6 +28,74 @@ LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 BATCH = 5_000
 BLOCK = 1 << 20  # uploads are sent in 1 MB blocks (http.client's default is 8 KB)
 CONNECT_TIMEOUT = 10.0  # seconds to reach the remote at all: a host that does not answer fails fast
+IDLE = 20.0  # seconds an idle kept-alive connection is used again (a server keeps it 30 s)
+FRESH = 1.0  # seconds idle after which a request whose body cannot be sent twice takes a new connection
+KEEP = 4  # idle connections kept per remote (the uploader sends blobs in parallel)
+REPLAYABLE = (bytes, bytearray, str, type(None))
+
+
+class _Pool:
+    """Kept-alive connections per remote (scheme, host, port), shared by the threads of the process: a request takes an
+    idle one (or opens one) and gives it back when its answer was read whole, so a process pays the connection (and TLS
+    handshake) once, not once per request."""
+
+    def __init__(self):
+        self.lock, self.idle = threading.Lock(), {}
+
+    def take(self, key: tuple, fresh_only: bool) -> tuple[object | None, bool]:
+        """(connection, reused); None when there is no idle one to use (then the caller opens one)."""
+        now = time.monotonic()
+        with self.lock:
+            found = self.idle.get(key) or []
+            while found:
+                connection, since = found.pop()
+                if now - since < (FRESH if fresh_only else IDLE):
+                    return connection, True
+                connection.close()
+        return None, False
+
+    def give(self, key: tuple, connection) -> None:
+        with self.lock:
+            found = self.idle.setdefault(key, [])
+            if len(found) < KEEP:
+                found.append((connection, time.monotonic()))
+                return
+        connection.close()
+
+
+_POOL = _Pool()
+
+
+# ------------------------------------------------------------------ waiting budgets
+
+_BUDGET = threading.local()
+
+
+@contextmanager
+def budget(seconds: float, *, uploads: bool = True, default: bool = False):
+    """Within the block, this thread's requests together wait for the remote at most `seconds` (nested budgets: the
+    shorter wins); a request once the time is up fails at once, as a remote that does not answer. `uploads=False`
+    exempts blob uploads (they make progress; each read or write still has its timeout). `default`: only when no
+    budget is set already (an operation's own budget, which a command's or a run's phase overrides)."""
+    outer = getattr(_BUDGET, "deadline", None), getattr(_BUDGET, "uploads", True)
+    if default and outer[0] is not None:
+        yield
+        return
+    deadline = time.monotonic() + seconds
+    _BUDGET.deadline = deadline if outer[0] is None else min(outer[0], deadline)
+    _BUDGET.uploads = uploads if outer[0] is None else outer[1] and uploads
+    try:
+        yield
+    finally:
+        _BUDGET.deadline, _BUDGET.uploads = outer
+
+
+def remaining(upload: bool = False) -> float | None:
+    """Seconds this thread's budget leaves (None: no budget, or an upload it exempts)."""
+    deadline = getattr(_BUDGET, "deadline", None)
+    if deadline is None or (upload and not getattr(_BUDGET, "uploads", True)):
+        return None
+    return deadline - time.monotonic()
 
 
 class _Body:
@@ -110,10 +180,25 @@ class Client:
                              "use https://, an SSH tunnel to localhost, or [repo] allow_http (--allow-http)")
         self.url, self.parsed, self.token, self.timeout = url.rstrip("/"), parsed, token, timeout
 
-    def _connection(self):
+    @property
+    def _key(self) -> tuple:
+        return self.parsed.scheme, self.parsed.hostname, self.parsed.port
+
+    def _limit(self, method: str, path: str, upload: bool = False) -> float:
+        """The timeout of the next read or write: `timeout`, or less when this thread's budget is nearly spent
+        (ClientError, as a remote that does not answer, once it is spent)."""
+        left = remaining(upload)
+        if left is None:
+            return self.timeout
+        if left <= 0:
+            raise ClientError(f"{method} {path}: the remote at {self.url} did not answer in time (out of time)", None)
+        return min(self.timeout, left)
+
+    def _connection(self, limit: float | None = None):
         """A connection, connected within CONNECT_TIMEOUT (or the timeout, if shorter); each later read or write may
         then take `timeout`. Raises OSError (or an HTTPException) when the remote cannot be reached."""
-        reach = min(CONNECT_TIMEOUT, self.timeout)
+        limit = self.timeout if limit is None else limit
+        reach = min(CONNECT_TIMEOUT, limit)
         if self.parsed.scheme == "https":
             connection = http.client.HTTPSConnection(self.parsed.hostname, self.parsed.port, timeout=reach,
                                                      context=ssl.create_default_context(), blocksize=BLOCK)
@@ -121,35 +206,58 @@ class Client:
             connection = http.client.HTTPConnection(self.parsed.hostname, self.parsed.port, timeout=reach, blocksize=BLOCK)
         try:
             connection.connect()
-            connection.sock.settimeout(self.timeout)
+            connection.sock.settimeout(limit)
         except BaseException:
             connection.close()
             raise
         return connection
 
     def request(self, method: str, path: str, body=None, headers: dict | None = None,
-                expect=(200,), stream_to: Path | None = None):
-        try:
-            connection = self._connection()
-        except (OSError, http.client.HTTPException) as error:
-            raise _no_answer(method, path, self.url, error) from error
-        try:
-            connection.request(method, path, body=body, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})
-            response = connection.getresponse()
-            if response.status in expect and stream_to is not None:
-                with stream_to.open("wb") as handle:
-                    while chunk := response.read(1 << 20):
-                        handle.write(chunk)
-                return response.status, b""
-            data = response.read()
-        except (ConnectionError, TimeoutError, http.client.HTTPException) as error:
-            raise _no_answer(method, path, self.url, error) from error
-        except OSError as error:
-            if stream_to is not None and isinstance(error, (PermissionError, FileNotFoundError, IsADirectoryError)):
-                raise  # a local file problem, not the network
-            raise _no_answer(method, path, self.url, error) from error
-        finally:
-            connection.close()
+                expect=(200,), stream_to: Path | None = None, upload: bool = False):
+        """One request on a kept-alive connection (see `_Pool`). A kept-alive connection the remote closed meanwhile is
+        noticed when the request fails on it: the request is sent once more on a new one (every request of the API is
+        idempotent; a body that cannot be sent twice always goes on a connection used a moment ago, or a new one)."""
+        replayable = isinstance(body, REPLAYABLE)
+        for attempt in range(2):
+            limit = self._limit(method, path, upload)
+            connection, reused = _POOL.take(self._key, fresh_only=not replayable) if attempt == 0 else (None, False)
+            try:
+                if connection is None:
+                    connection = self._connection(limit)
+                else:
+                    connection.sock.settimeout(limit)
+            except (OSError, http.client.HTTPException) as error:
+                raise _no_answer(method, path, self.url, error) from error
+            keep = False
+            try:
+                connection.request(method, path, body=body, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})
+                response = connection.getresponse()
+                if response.status in expect and stream_to is not None:
+                    with stream_to.open("wb") as handle:
+                        while chunk := response.read(1 << 20):
+                            handle.write(chunk)
+                    data = b""
+                else:
+                    data = response.read()
+                keep = not response.will_close
+            except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError) as error:
+                if reused and replayable and attempt == 0:  # the remote closed the idle connection: once more, anew
+                    continue
+                raise _no_answer(method, path, self.url, error) from error
+            except (ConnectionError, TimeoutError, http.client.HTTPException) as error:
+                raise _no_answer(method, path, self.url, error) from error
+            except OSError as error:
+                if stream_to is not None and isinstance(error, (PermissionError, FileNotFoundError, IsADirectoryError)):
+                    raise  # a local file problem, not the network
+                raise _no_answer(method, path, self.url, error) from error
+            finally:
+                if keep:
+                    _POOL.give(self._key, connection)
+                else:
+                    connection.close()
+            break
+        if stream_to is not None and response.status in expect:
+            return response.status, b""
         if response.status == 401:
             raise ClientError("the remote rejected the token" if self.token else
                               "the remote needs a token: set CAIRN_TOKEN or [repo] token_file", 401)
@@ -160,7 +268,7 @@ class Client:
     def stream(self, path: str, headers: dict | None = None, expect=(200, 206)):
         """GET as (status, response headers, chunks); the connection closes when the chunks end or are closed."""
         try:
-            connection = self._connection()
+            connection = self._connection(self._limit("GET", path))  # its own: the chunks are read later, maybe never whole
         except (OSError, http.client.HTTPException) as error:
             raise _no_answer("GET", path, self.url, error) from error
         try:
@@ -192,7 +300,7 @@ class Client:
         with file.open("rb") as handle:
             self.request("PUT", f"/api/v2/blobs/{sha}", body=Limited(handle, size),
                          headers={"Content-Length": str(size), "Content-Type": "application/octet-stream"},
-                         expect=(200, 201))
+                         expect=(200, 201), upload=True)
 
     def missing(self, hashes: list[str]) -> set[str]:
         missing: set[str] = set()

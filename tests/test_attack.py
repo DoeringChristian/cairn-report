@@ -533,10 +533,14 @@ class RealServer:
             return []
 
 
+METHODS = {b"GET", b"POST", b"PUT", b"PATCH", b"DELETE", b"HEAD"}
+
+
 class FaultProxy:
     """A TCP proxy on its own port in front of `upstream` (a port), whose `mode` can change at any time:
-    forward, hang (accept, read, never answer), error (HTTP 500), slow (wait `delay` s, then forward), refuse (close
-    at once, like a server that restarts)."""
+    forward, hang (accept, read, never answer), error (HTTP 500), slow (wait `delay` s per connection, then forward),
+    slow-request (wait `delay` s before each request), refuse (close at once, like a server that restarts). A kept-alive
+    connection follows the mode at each new request."""
 
     def __init__(self, upstream: int | None = None, mode: str = "forward", delay: float = 5.0):
         self.upstream, self.mode, self.delay = upstream, mode, delay
@@ -585,9 +589,22 @@ class FaultProxy:
         upstream.settimeout(None)
         client.settimeout(None)
 
-        def pipe(source, target):
+        def pipe(source, target, requests=False):
             try:
                 while data := source.recv(1 << 16):
+                    if requests and data.split(b" ", 1)[0] in METHODS:  # a new request on a kept-alive connection
+                        mode = self.mode
+                        if mode == "hang":
+                            while not self.closed:
+                                time.sleep(0.1)
+                            return
+                        if mode == "refuse":
+                            return
+                        if mode == "error":
+                            source.sendall(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                            return
+                        if mode == "slow-request":
+                            time.sleep(self.delay)
                     target.sendall(data)
             except OSError:
                 pass
@@ -600,7 +617,7 @@ class FaultProxy:
                     end.close()
 
         threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
-        pipe(client, upstream)
+        pipe(client, upstream, requests=True)
 
     def close(self) -> None:
         self.closed = True
@@ -1679,5 +1696,50 @@ def test_a_slow_remote_with_a_backlog_holds_a_command_up_for_a_bounded_time(tmp_
     assert cli(project, "sync", env=env).returncode == 0
     assert outbox_of(project) == []
     assert len(LocalRepo(server.root).versions("study", "shared")) == 10
+    proxy.close()
+    server.stop()
+
+
+TWO_PUBLISHES = """
+import json, pathlib, sys, time, cairn
+artifact = cairn.connect().project().artifact("kept")
+numbers = []
+for index in range(2):
+    folder = pathlib.Path(f"k{index}")
+    folder.mkdir()
+    (folder / "a.txt").write_text(str(index))
+    numbers.append(artifact.publish(folder).number)
+    if index == 0:
+        pathlib.Path("first").write_text("")
+        while not pathlib.Path("again").exists():
+            time.sleep(0.05)
+print(json.dumps(numbers))
+"""
+
+
+def test_a_process_keeps_its_connection_and_survives_a_server_restart(tmp_path):
+    """A run (with a draft) talks to the remote over one or two kept-alive connections, not one per request; a
+    connection the remote closed (the server restarted) is noticed and the request goes out again on a new one."""
+    server = RealServer(tmp_path / "remote").start()
+    proxy = FaultProxy(server.port)
+    env = base_env(CAIRN_TOKEN=server.token)
+    project = project_at(tmp_path, "study", proxy.url)
+    script(project, "timed.py", RUN_TIMING)
+    script(project, "two.py", TWO_PUBLISHES)
+    row = timed_run(project, env)
+    print(f"\na run with a draft opened {proxy.connections} connections")
+    assert proxy.connections <= 3, proxy.connections
+    process = spawn(project, "two.py", env=env)
+    while not (project / "first").exists():
+        assert process.poll() is None, finish(process)
+        time.sleep(0.05)
+    server.stop()  # its kept-alive connections close
+    server.start()
+    (project / "again").write_text("")
+    out, err = finish(process, 120)
+    assert process.returncode == 0, err
+    assert json.loads(out) == [1, 2], (out, err)  # both numbered at once: the second went out on a new connection
+    remote = LocalRepo(server.root)
+    assert remote.get_version("study", "runs/timed", row["uid"])["status"] == "completed"
     proxy.close()
     server.stop()
