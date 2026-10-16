@@ -19,11 +19,12 @@ A version's **id** is now its only identity, as a commit's hash is in git, and e
 - **One reference syntax with four forms, told apart by their shape:** `<id>` (4 to 64 hex digits), `<name>`
   (latest), `<name>@v<n>`, `<name>@<alias or label>`, each optionally followed by `//<path>`. Artifact names,
   aliases, and labels that are 4 or more hex digits alone (`cafe`, `1234`, `DEADBEEF`) are refused when they are
-  made (publish, draft, run names, aliases, labels; matched case-insensitively), and an alias and a label never
+  made (publish, draft, run names, aliases, labels; matched case-insensitively), as are aliases and labels of a version's
+  shape (`V3`, `v-1`, `v01`, `v2-final`) and Cairn 0.14 uids (a pasted uid's message names the id it became), and an alias and a label never
   share a word, so nothing is matched "first" any more: `name@<short id>` is refused (write the id alone). One
   parser, `store/refs.py`, reads every reference (the CLI, the Python API, report `inputs:`, the inputs file, the
   server, the UI), and a boundary test fails on selector parsing anywhere else; the web app has one module
-  (`web/src/refs.ts`) that mirrors it. The UI's `_numbered` shortcut, which read an all-digit short id as a version
+  (`web/src/refs.ts`) that parses exactly like it (`tests/refs_vectors.json`: about 1700 references, checked against both parsers by the suite and by `npm run build`). The UI's `_numbered` shortcut, which read an all-digit short id as a version
   number, is gone with every other `isdigit` rewriting. Report `inputs:` must be text: an unquoted `1234567` (a
   number to YAML) is refused with a hint to quote it.
 - **Order never comes from ids.** `@latest` is the highest completed number (a version that started first and

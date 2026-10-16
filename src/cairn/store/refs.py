@@ -11,7 +11,7 @@ A reference has exactly one of four forms, told apart by its shape alone, before
 
 and a file inside the version may follow after `//` (`descent@v3//figures/a.png`, `3f9a2c1//figures/a.png`).
 
-The forms cannot overlap: an id has no `@`; `v<n>` is never a word; an artifact name, an alias, and a label are never 4
+The forms cannot overlap: an id has no `@`; `v<n>` is never a word, nor anything else of a version's shape (MALFORMED); a 0.14 uid is neither a name nor a word; an artifact name, an alias, and a label are never 4
 or more hex digits alone (`cafe`, `1234`, `DEADBEEF`: refused when one is created, matched case-insensitively), so a
 bare word is an id or a name by its shape, and a word after `@` is a number or a word. A reference names a version of
 the project it is used in: there is no project in it.
@@ -23,6 +23,7 @@ Ambiguous, listing them (`pick`).
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -34,11 +35,24 @@ SEGMENT = re.compile(r"[a-z0-9][a-z0-9_.-]*")
 WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")  # aliases and labels
 LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*")  # words, maybe joined by `/`
 VERSION = re.compile(r"v(0|[1-9][0-9]*)")
-NUMBERED = re.compile(r"v[0-9]+")  # what a word may never be
+MALFORMED = re.compile(
+    r"[vV][-+]?[0-9].*", re.DOTALL
+)  # looks like a version: never a word (`v<n>` aside, which is one)
 HEX = re.compile(r"[0-9a-fA-F]{4,}")  # never a name, an alias, or a label alone
+UID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)  # Cairn 0.14's
+BLANK = " \t\n\r\x0b\x0c"  # a reference never starts or ends with one
 MAX_NAME = 200
 MIN_PREFIX = 4
 SHORT = 7  # digits of a short id, unless more are needed to tell it apart
+
+
+def _old_uid(text: str) -> str:
+    """What a pasted Cairn 0.14 uid gets: the id `cairn upgrade` gave that version (the SHA-256 of the uid)."""
+    id = hashlib.sha256(text.lower().encode()).hexdigest()
+    return (
+        f"{text} is a Cairn 0.14 uid: since 0.15 a version is named by its id; after `cairn upgrade` this one's id is "
+        f"{id} (its short id {id[:SHORT]})"
+    )
 
 
 def valid_project(project: str) -> str:
@@ -62,6 +76,8 @@ def valid_name(name: str) -> str:
             f"invalid artifact name {name!r}: 4 or more hex digits alone are an id, never a name (add a letter "
             f"outside a-f, a '-', or a folder, e.g. 'data-{name}')"
         )
+    if UID.fullmatch(name):
+        raise InvalidRef(_old_uid(name))
     for segment in name.split("/"):
         if not SEGMENT.fullmatch(segment) or ".." in segment:
             raise InvalidRef(
@@ -74,8 +90,10 @@ def valid_word(word: str, what: str) -> str:
     """An alias or a label word: never `v<n>` (a version) and never 4 or more hex digits alone (an id)."""
     if not isinstance(word, str) or not WORD.fullmatch(word) or len(word) > 128:
         raise InvalidRef(f"invalid {what} {word!r}: use [A-Za-z0-9][A-Za-z0-9_.-]*")
-    if NUMBERED.fullmatch(word):
+    if MALFORMED.fullmatch(word):
         raise InvalidRef(f"invalid {what} {word!r}: v<number> is reserved for versions")
+    if UID.fullmatch(word):
+        raise InvalidRef(_old_uid(word))
     if hex_alone(word):
         raise InvalidRef(f"invalid {what} {word!r}: 4 or more hex digits alone are an id, never an alias or a label")
     return word
@@ -88,7 +106,7 @@ def valid_label(label: str) -> str:
     if "/" not in label:
         return valid_word(label, "label")
     for word in label.split("/"):
-        if NUMBERED.fullmatch(word):
+        if MALFORMED.fullmatch(word):
             raise InvalidRef(f"invalid label {label!r}: v<number> is reserved for versions")
     return label
 
@@ -168,7 +186,7 @@ def parse(text) -> Ref:
     as it is."""
     if isinstance(text, Ref):
         return text
-    if not isinstance(text, str) or not text.strip() or text != text.strip():
+    if not isinstance(text, str) or not text or text[0] in BLANK or text[-1] in BLANK:
         raise InvalidRef(f"invalid reference {text!r}")
     head, separator, path = text.partition("//")
     if separator:
@@ -203,8 +221,10 @@ def parse(text) -> Ref:
         raise InvalidRef(f"invalid reference {text!r}: nothing after '@' (v<n>, an alias, or a label)")
     if VERSION.fullmatch(selector):
         return Ref(name, selector, path)
-    if NUMBERED.fullmatch(selector):
-        raise InvalidRef(f"invalid reference {text!r}: version numbers have no leading zeros")
+    if MALFORMED.fullmatch(selector):
+        raise InvalidRef(f"invalid reference {text!r}: a version is v<n>, n without leading zeros (v1, v12)")
+    if UID.fullmatch(selector):
+        raise InvalidRef(_old_uid(selector))
     if hex_alone(selector):
         raise InvalidRef(
             f"invalid reference {text!r}: {selector} is an id, which names a version alone: write "

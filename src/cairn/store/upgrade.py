@@ -48,6 +48,11 @@ OLD_LAYOUT, LAYOUT = 1, 2
 HEARTBEAT_TIMEOUT = 600.0
 
 
+def is_uid(value) -> bool:
+    """Whether `value` is a uid of Cairn 0.14 (a UUIDv7)."""
+    return isinstance(value, str) and UID.fullmatch(value) is not None
+
+
 def legacy_id(uid: str) -> str:
     """The id a version (or a repo) of Cairn 0.14 gets: the SHA-256 of its uid, so a server and its clients, each
     upgraded on its own, give a version the same id, and the short ids 0.14 showed (prefixes of that hash) still name

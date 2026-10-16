@@ -436,3 +436,33 @@ def down(env):
         port = probe.getsockname()[1]
     write_config(env, f'[remote]\nurl = "http://127.0.0.1:{port}/study"\n')
     return env
+
+
+OLD_UID = "01a144ef-bd78-72e6-a221-1439c21f9ea2"
+
+
+@pytest.mark.parametrize("text", [OLD_UID, OLD_UID.upper(), f"{OLD_UID}//a.txt", f"data@{OLD_UID}"])
+def test_a_pasted_014_uid_says_so_and_names_the_id_it_became(text):
+    """A Cairn 0.14 uid (a UUID) is not read as an artifact name: the message says what it is and gives the id
+    `cairn upgrade` gave that version (the SHA-256 of the uid)."""
+    import hashlib
+
+    with pytest.raises(InvalidRef, match="Cairn 0.14 uid") as refused:
+        refs.parse(text)
+    assert hashlib.sha256(OLD_UID.encode()).hexdigest() in str(refused.value)
+    assert "cairn upgrade" in str(refused.value)
+
+
+@pytest.mark.parametrize("word", ["V3", "v-1", "v+1", "v01", "v3x", "v2-final", "V0"])
+def test_a_word_that_looks_like_a_malformed_version_is_refused_as_a_selector_alias_and_label(word):
+    """`[vV]` with a sign or a digit after it is a version's shape: `v<n>` is a version, anything else of that shape is
+    refused, in a reference and when an alias or a label is made (also as a word of a label: `sweep/v-1`)."""
+    with pytest.raises(InvalidRef):
+        refs.parse(f"data@{word}")
+    with pytest.raises(InvalidRef):
+        refs.new_alias(word)
+    with pytest.raises(InvalidRef):
+        refs.new_label(word)
+    with pytest.raises(InvalidRef):
+        refs.new_label(f"sweep/{word}")
+    assert refs.parse("data@vfoo").word == "vfoo" and refs.parse("data@val").word == "val"  # not a version's shape

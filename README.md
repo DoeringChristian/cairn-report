@@ -603,7 +603,7 @@ messages that print published versions (`published descent@v3 (3f9a2c1, ...)`), 
 the version (`cairn show 3f9a`, `cairn.use("3f9a2c1")`), also a running or pending one; a prefix that
 matches several versions is an error that lists them (`name@vN (short id)`). The forms cannot overlap:
 an artifact name, an alias, or a label of 4 or more hex digits alone (`cafe`, `1234`, `DEADBEEF`) is
-refused when it is made, `v<n>` is never an alias or a label, and an alias and a label of an artifact
+refused when it is made, `v<n>` and anything else of a version's shape (`V3`, `v-1`, `v01`, `v2-final`) are never an alias or a label (a pasted 0.14 uid is refused with the id `cairn upgrade` gave it), and an alias and a label of an artifact
 never share a word. So a bare hex word is always an id, and `name@<short id>` is refused: write the id
 alone. Every reference is read by one parser, `cairn.store.refs`.
 
