@@ -130,6 +130,25 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
 - Over HTTP: the owner token or project-scoped tokens (`cairn token`), never in a URL. The UI logs in with
   a one-time link (a random code valid once for 10 minutes).
 
+## SSH access
+
+As on GitHub: SSH carries sync, the CLI and the Python API, with the SSH key as the credential (no token);
+a browser talking to a server's UI stays on HTTP(S) with a login.
+
+- **Remote:** `ssh://[user@]host[:port]/<project>` (or scp-like `[user@]host:<project>`). The URL names
+  only the project; which repo folder serves it is the server's business, fixed by the key's command.
+- **Keys:** on the server's account, `cairn key add <name> <public key> (--project P [--write] | --owner)`
+  adds the key to that account's `~/.ssh/authorized_keys`, inside a block Cairn marks and owns, as
+  `command="<absolute path of this cairn> ssh-serve <repo> --key <name>",restrict <key>`. `cairn key list`
+  and `cairn key remove` manage it; lines outside the block are never touched. A key's permissions are a
+  scoped token's (one project, read or write) or the owner's; the owner's key creates a project on first sync.
+- **A forced command applies to its key only**, so the server's account is either dedicated (like GitHub's
+  `git` user) or the key is one made for Cairn; a key used for a normal shell login stays unregistered.
+- **The connection:** the client runs `ssh -T` with that key (batch mode, no password prompts) and speaks
+  the same HTTP API over it; `ssh-serve` opens the repo directly (rule 1), answers only within the key's
+  permissions, and ends with the connection. No `cairn server` needs to run; one may run beside it.
+- **`cairn ui --remote ssh://...`** runs the UI on the client and reads through SSH, with no token.
+
 ## Configuration
 
 ```toml
