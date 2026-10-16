@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 
 from .errors import StoreError
+from .ids import ID
 
 UID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")  # 0.14's version and repo uids
 NUMBERED = re.compile(r"(.+)@v(0|[1-9][0-9]*)")  # 0.14's exact input references, `name@v<n>`
@@ -126,19 +127,18 @@ def in_use(root: Path, timeout: float = HEARTBEAT_TIMEOUT) -> list[str]:
 
 
 def _draft_records(root: Path) -> list[Path]:
-    """The `<uid>.draft.json` records under `<root>/drafts` (a draft's own folder is never entered)."""
+    """The `<uid>.draft.json` records under `<root>/drafts`, also one whose folder an earlier attempt renamed to the id
+    already (or that has no folder); a draft's own folder is never entered."""
     found = []
     base = Path(root) / "drafts"
     if not base.is_dir():
         return found
     for directory, folders, files in os.walk(base):
-        keep = []
-        for name in folders:
-            if UID.fullmatch(name) and f"{name}.draft.json" in files:
-                found.append(Path(directory) / f"{name}.draft.json")
-            else:
-                keep.append(name)
-        folders[:] = keep
+        records = {name[: -len(".draft.json")] for name in files if name.endswith(".draft.json")}
+        uids = {name for name in records if UID.fullmatch(name)}
+        found.extend(Path(directory) / f"{uid}.draft.json" for uid in sorted(uids))
+        drafts = uids | {legacy_id(uid) for uid in uids} | records  # the drafts' own folders, by uid or id
+        folders[:] = [name for name in folders if name not in drafts]
     return found
 
 
@@ -177,6 +177,8 @@ class _Mapping:
         """The id a 0.14 input reference names (`name@v<n>` of the project, `name@<uid>`), None if it is not known."""
         if not isinstance(text, str):
             return None
+        if ID.fullmatch(text):  # converted already (an earlier attempt that stopped half way)
+            return text
         match = BY_UID.fullmatch(text)
         if match:
             return legacy_id(match.group(2))
@@ -504,6 +506,9 @@ def _drafts(root: Path, counts: dict) -> None:
         record = _read(record_file)
         uid = record_file.name[: -len(".draft.json")]
         folder = record_file.parent / uid
+        target = record_file.parent / legacy_id(uid)
+        if not folder.is_dir() and target.is_dir():  # renamed by an earlier attempt that stopped half way
+            folder = target
         if not isinstance(record, dict):
             continue
         record = {"id": legacy_id(uid), **{key: value for key, value in record.items() if key != "uid"}}
@@ -515,12 +520,17 @@ def _drafts(root: Path, counts: dict) -> None:
             running["id"] = legacy_id(running.pop("uid"))
             record["running"] = running
         record["inputs"] = [
-            legacy_id(BY_UID.fullmatch(text).group(2)) if isinstance(text, str) and BY_UID.fullmatch(text) else text
+            (
+                legacy_id(BY_UID.fullmatch(text).group(2) if BY_UID.fullmatch(text) else text)
+                if isinstance(text, str) and (BY_UID.fullmatch(text) or UID.fullmatch(text))
+                else text
+            )
             for text in record.get("inputs") or []
         ] or record.get("inputs")
         if record.get("inputs") is None:
             record.pop("inputs")
-        record["metadata"] = _sweep(record.get("metadata"))
+        if "metadata" in record:
+            record["metadata"] = _sweep(record["metadata"])
         for path in folder.rglob("run.json") if folder.is_dir() else []:
             status = _read(path)
             if isinstance(status, dict) and isinstance(status.get("run"), str) and BY_UID.fullmatch(status["run"]):
@@ -533,10 +543,9 @@ def _drafts(root: Path, counts: dict) -> None:
                 except ValueError:
                     rows.append(line)
             path.write_text("".join(row + "\n" for row in rows))
-        target = record_file.parent / legacy_id(uid)
-        if folder.is_dir():
+        _write(record_file, record)  # converted in place first: a later attempt finds it under its uid again
+        if folder.is_dir() and folder != target:
             os.rename(folder, target)
-        _write(record_file, record)
         os.rename(record_file, record_file.with_name(f"{legacy_id(uid)}.draft.json"))
         counts["drafts"] += 1
 

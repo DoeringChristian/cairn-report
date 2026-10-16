@@ -418,3 +418,78 @@ def test_the_upgrade_refuses_while_a_version_runs_or_a_draft_is_open(old, tmp_pa
         process.wait(60)
     result = upgrade(folder / ".cairn")
     assert result["counts"]["versions"] == 2 and result["report"].ok  # the run and its output
+
+
+# ------------------------------------------------------------------ an upgrade that stopped half way runs again
+
+
+UID_A = "01a144ef-bd78-72e6-a221-1439c21f9ea2"  # 0.14 uids (UUIDv7)
+UID_B = "01a144ef-bd79-7000-8000-000000000001"
+
+
+def test_a_read_only_folder_converted_before_a_stop_survives_the_next_attempt(tmp_path):
+    """`_versions` writes a folder's converted record, then renames the folder: a stop between the two leaves a record by
+    ids under the uid's name, and the next attempt converts it again (its inputs are ids now), never removes it."""
+    from cairn.store import upgrade as module
+
+    root = tmp_path / ".cairn"
+    folder = root / "versions" / UID_B
+    folder.mkdir(parents=True)
+    manifest = {"uid": UID_B, "version": 2, "status": "completed", "files": [], "inputs": ["data@v1", f"data@{UID_A}"]}
+    (folder / "manifest.json").write_text(json.dumps({"uid": UID_B, "name": "out", "manifest": manifest}))
+    mapping = module._Mapping([("", "data", 1, UID_A)])
+    counts = {"read-only folders": 0, "read-only folders removed": 0}
+    real_rename = os.rename
+
+    def stop(source, target):
+        raise KeyboardInterrupt  # the upgrade stopped after writing the record, before the rename
+
+    module.os.rename = stop
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._versions(root, mapping, counts)
+    finally:
+        module.os.rename = real_rename
+    assert json.loads((folder / "manifest.json").read_text())["manifest"]["inputs"] == [legacy_id(UID_A)]
+    module._versions(root, mapping, counts)  # the next attempt
+    target = root / "versions" / legacy_id(UID_B)
+    assert counts == {"read-only folders": 1, "read-only folders removed": 0}
+    record = json.loads((target / "manifest.json").read_text())
+    assert record["id"] == legacy_id(UID_B) and record["manifest"]["inputs"] == [legacy_id(UID_A)]
+
+
+def test_a_draft_renamed_before_a_stop_is_converted_by_the_next_attempt(tmp_path):
+    """`_drafts` renames a draft's folder and its record: a stop between the two leaves `<uid>.draft.json` beside
+    `<id>/`; the next attempt finds it, converts it, and the draft is whole again (and `in_use` sees it)."""
+    from cairn.store import upgrade as module
+
+    root = tmp_path / ".cairn"
+    base = root / "drafts" / "out"
+    (base / UID_B).mkdir(parents=True)
+    (base / UID_B / "a.txt").write_text("kept")
+    record = {"uid": UID_B, "name": "out", "state": "open", "run": f"runs/x@{UID_A}", "inputs": [UID_A]}
+    record["owner"] = {"host": socket.gethostname(), "pid": 2**22 + 12345}  # a process that is gone
+    (base / f"{UID_B}.draft.json").write_text(json.dumps(record))
+    real_rename = os.rename
+
+    def stop(source, target):
+        if str(source).endswith(".draft.json"):
+            raise KeyboardInterrupt  # stopped after the folder was renamed, before the record
+        return real_rename(source, target)
+
+    module.os.rename = stop
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._drafts(root, {"drafts": 0})
+    finally:
+        module.os.rename = real_rename
+    assert (base / legacy_id(UID_B)).is_dir() and (base / f"{UID_B}.draft.json").is_file()
+    assert module._draft_records(root) == [base / f"{UID_B}.draft.json"]
+    counts = {"drafts": 0}
+    module._drafts(root, counts)
+    assert counts == {"drafts": 1}
+    assert sorted(path.name for path in base.iterdir()) == [legacy_id(UID_B), f"{legacy_id(UID_B)}.draft.json"]
+    converted = json.loads((base / f"{legacy_id(UID_B)}.draft.json").read_text())
+    assert converted["id"] == legacy_id(UID_B) and "uid" not in converted and "metadata" not in converted
+    assert converted["run"] == legacy_id(UID_A) and converted["inputs"] == [legacy_id(UID_A)]
+    assert (base / legacy_id(UID_B) / "a.txt").read_text() == "kept"
