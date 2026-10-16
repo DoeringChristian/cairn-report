@@ -586,8 +586,17 @@ def run(keep: bool) -> int:
         page.get_by_role("link", name="Open report v").click()
         page.wait_for_url("**/p/study/r/summary@v*/")
         page.locator("#title").wait_for()
-        page.locator(".data-version").first.click()
-        page.wait_for_url("**/p/study/a/**")
+        pinned = page.evaluate(
+            "async () => (await (await fetch('/ui-api/projects/study/version?ref=reports/summary', "
+            "{headers: {'X-Cairn': '1'}})).json()).version.inputs"
+        )
+        first = page.locator(".data-version").first
+        first.wait_for()
+        href = first.get_attribute("href") or ""
+        assert href.startswith("/p/study/v/") and href.split("/")[-1] in pinned, (href, pinned)  # by id: a number
+        # the build recorded can name another version after a renumbering (a remote added later)
+        first.click()
+        page.wait_for_url("**/p/study/v/**")
         page.go_back()
         page.locator(".brand").click()
         page.wait_for_url("**/p/study/")
