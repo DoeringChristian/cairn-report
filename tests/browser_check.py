@@ -29,7 +29,7 @@ import cairn as store  # noqa: E402
 from cairn.cli import main  # noqa: E402
 from cairn.server import make_server  # noqa: E402
 from cairn.store.tokens import init_root  # noqa: E402
-from cairn.ui import RemoteBackend, make_ui_server  # noqa: E402
+from cairn.ui import RemoteBackend, make_ui_server, open_backend  # noqa: E402
 from conftest import make_data, write, write_config  # noqa: E402
 
 
@@ -718,6 +718,35 @@ def run(keep: bool) -> int:
         page.goto(ui + "/")
         check_palette(page, shots, "dark")
         check_touch_lightbox(browser, ui, token, shots, problems)
+
+        # a bare name opens its @latest as the repo resolves it: with the remote away, a version pending in the
+        # project's repo is the latest, though no alias of the listing names it (it has no number yet)
+        store_httpd.shutdown()
+        store_httpd.server_close()
+        pending = (
+            store.connect().artifact("datasets/toy").publish(write(base / "pending" / "notes.md", "# Pending\n").parent)
+        )
+        assert pending.pending, pending
+        local_httpd = make_ui_server(open_backend(no_auth=True), port=0, no_auth=True)
+        local_httpd.RequestHandlerClass.log_message = lambda *a: None
+        threading.Thread(target=local_httpd.serve_forever, daemon=True).start()
+        local = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
+        local.on("pageerror", lambda error: problems.append(f"page error (local): {error}"))
+        local.on("response", lambda r: r.status >= 400 and problems.append(f"HTTP {r.status} (local): {r.url}"))
+        local.goto(f"http://127.0.0.1:{local_httpd.server_address[1]}/p/study/a/datasets/toy")
+        try:
+            local.get_by_role("heading", name="datasets/toy").wait_for()
+        except Exception:
+            print("LOCAL PAGE", local.url, local.locator("body").inner_text()[:1000])
+            raise
+        local.locator("section.data-panel[aria-label=Reference] .data-row").first.wait_for()
+        shown = local.evaluate(
+            """() => Object.fromEntries([...document.querySelectorAll('section.data-panel[aria-label=Reference] .data-row')]
+            .map(r => [r.querySelector('.data-name').textContent, r.querySelector('.data-version').textContent]))"""
+        )
+        if shown.get("Id") != pending.id:
+            problems.append(f"the bare name shows {shown} as its latest, not the pending {pending.id}")
+        local_httpd.shutdown()
         browser.close()
 
     out = Path("/tmp/cairn-ui-mobile-shots")

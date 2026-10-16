@@ -155,19 +155,19 @@ function RefList({ title, ids, nodes, project, empty, deleted }: { title: string
 
 export function ArtifactPage({ project, target }: { project: string; target: Ref }) {
   const navigate = useNavigate();
-  // `name@<selector>` and an id name their version; a bare name is its latest, which the listing tells
-  const direct = target.id !== undefined || target.selector ? refText({ ...target, path: null }) : null;
-  const named = useApi<VersionData>(direct ? paths.version(project, direct) : null);
+  // every form is resolved by the server (store/refs.py), a bare name too: its `latest` may be a pending version of
+  // the repo, which no listing's alias names; only an artifact with no completed version shows its newest row
+  const direct = refText({ ...target, path: null });
+  const named = useApi<VersionData>(paths.version(project, direct));
   const name = target.name ?? named.data?.name ?? null;
   const art = useApi<ArtifactData>(name ? paths.artifact(project, name) : null);
   let head: string | null = null;
-  if (!direct && art.data) {
-    const latest = art.data.aliases.latest;
-    const row = (latest !== undefined ? art.data.versions.find(v => v.version === latest) : undefined) ?? art.data.versions.at(-1);
+  if (target.id === undefined && !target.selector && named.error && art.data) {
+    const row = art.data.versions.at(-1);
     head = row ? exactRef({ name: art.data.name, version: row.version, id: row.id }) : null;
   }
   const latestVer = useApi<VersionData>(head ? paths.version(project, head) : null);
-  const ver = direct ? named : latestVer;
+  const ver = head ? latestVer : named;
   const error = ver.error ?? art.error;
 
   const byVersion: Record<number, string[]> = {};
