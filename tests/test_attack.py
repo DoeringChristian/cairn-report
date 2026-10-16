@@ -1551,7 +1551,7 @@ def test_cluster_jobs_on_a_network_filesystem_with_a_login_node_and_a_flaky_remo
     assert len(runs) >= len(finished) // 2 and sum(v["status"] == "failed" for v in runs) <= killed
     for result in everything.get("result", []):  # each result names its own run, by the remote's number
         [run_ref] = result["inputs"]
-        assert remote.resolve("study", run_ref)[1]["metadata"]["kind"] == "run"
+        assert remote.find("study", run_ref)[1]["metadata"]["kind"] == "run"  # failed too: a killed job's result
     verify_clean(project, env)
     assert not database.exists()
     proxy.close()
