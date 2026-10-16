@@ -218,7 +218,7 @@ class StandaloneRepo(ProjectRepo):
 
     # ------------------------------------------------------------------ waiting for a remote: nothing
 
-    def sync(self, report=None, refresh: bool = True) -> dict:
+    def sync(self, report=None, refresh: bool = True, deadline: float | None = None) -> dict:
         return {"remote": None, "sent": [], "rejected": [], "waiting": [], "failed": [], "adopted": 0, "refreshed": 0, "lines": []}
 
     def pending(self) -> list[dict]:
@@ -961,11 +961,11 @@ class SyncedRepo(ProjectRepo):
 
     # ------------------------------------------------------------------ what waits for the remote
 
-    def sync(self, report=None, refresh: bool = True) -> dict:
-        """Send the outbox now (the sync engine), then (`refresh`) mirror the remote's aliases of the artifacts the repo
-        has versions of (`refreshed`: how many; skipped while the remote does not answer). `report(line)` hears what
-        happened."""
-        result = self.engine.flush()
+    def sync(self, report=None, refresh: bool = True, deadline: float | None = None) -> dict:
+        """Send the outbox now (the sync engine; until `deadline`, a time.monotonic() value, if given), then (`refresh`)
+        mirror the remote's aliases of the artifacts the repo has versions of (`refreshed`: how many; skipped while the
+        remote does not answer). `report(line)` hears what happened."""
+        result = self.engine.flush(deadline)
         result.update(remote=self.url, refreshed=0)
         if refresh and not [record for record in result["waiting"] if record["sync"] != "running"]:
             try:
@@ -1108,6 +1108,6 @@ def _flush_at_exit() -> None:
     for repo in list(_exit_flush.values()):
         try:
             if not repo.down() and any(record["sync"] == "pending" for record in repo.records()):
-                repo.with_timeout(EXIT_TIMEOUT).engine.flush()
+                repo.with_timeout(EXIT_TIMEOUT).engine.flush(time.monotonic() + EXIT_TIMEOUT)
         except Exception:  # noqa: BLE001 - never a traceback at exit
             pass

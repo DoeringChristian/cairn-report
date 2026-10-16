@@ -216,12 +216,13 @@ HAMMER = """
 import http.client, json, random, sys, time
 from urllib.parse import quote
 port, seconds, out = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
+server, token = (int(sys.argv[4]), sys.argv[5]) if len(sys.argv) > 5 else (None, None)
 samples, statuses, errors = {}, {}, []
 rng = random.Random(0)
 
-def get(kind, path, headers=None):
+def get(kind, path, headers=None, to=None):
     began = time.perf_counter()
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+    connection = http.client.HTTPConnection("127.0.0.1", to or port, timeout=60)
     try:
         connection.request("GET", path, headers={"X-Cairn": "1", **(headers or {})})
         response = connection.getresponse()
@@ -265,8 +266,14 @@ while time.time() < end:
     else:
         get("file-range", f"/files/study/{path}@v{version['version']}//value.txt", {"Range": "bytes=0-2"})
         get("file", f"/files/study/{path}@v{version['version']}//nested/deeper/x.json")
-        if item["name"] in ("own0", "own1"):
-            get("big-range", f"/files/study/{path}@latest//big.bin", {"Range": "bytes=1000000-1999999"})
+        if item["name"] == "shared":  # every fourth publish of a big publisher has a 50-200 MB file
+            get("big-range", f"/files/study/{path}@v{version['version']}//big.bin", {"Range": "bytes=1000000-1999999"})
+    if server:  # `cairn server` on the same repo, as another machine's client sees it
+        auth = {"Authorization": f"Bearer {token}"}
+        get("srv-list", "/api/v2/projects/study/artifacts", auth, server)
+        get("srv-versions", f"/api/v2/projects/study/artifacts/{name}/versions", auth, server)
+        get("srv-file", f"/files/study/{path}@v{version['version']}//"
+            + ("metrics.jsonl" if item["name"].startswith("runs/") else "value.txt"), {**auth, "Range": "bytes=0-2"}, server)
 json.dump({"samples": samples, "statuses": statuses, "errors": errors}, open(out, "w"))
 """
 
@@ -291,9 +298,9 @@ def wait_port(port: int, process: subprocess.Popen | None = None, seconds: float
     raise AssertionError(f"nothing listens on {port}")
 
 
-def hammer(project: Path, port: int, seconds: float, out: str) -> dict:
+def hammer(project: Path, port: int, seconds: float, out: str, server: "RealServer | None" = None) -> dict:
     script(project, "hammer.py", HAMMER)
-    process = spawn(project, "hammer.py", port, seconds, out)
+    process = spawn(project, "hammer.py", port, seconds, out, *((server.port, server.token) if server else ()))
     _, err = finish(process)
     assert process.returncode == 0, err
     return json.loads((project / out).read_text())
@@ -323,8 +330,9 @@ class WalWatch:
 
 
 def test_contention_on_one_repo(tmp_path):
-    """5 publishers (two with 50-200 MB files), 2 live runs, a gc/prune/status loop with a retention rule that deletes
-    concurrently, and a client hammering the UI's API, all on one repo for CAIRN_ATTACK_SECONDS."""
+    """4 publishers (two with 50-200 MB files), 2 live runs, a gc/prune/status loop with a retention rule that deletes
+    concurrently, `cairn server` serving the same repo, and a client hammering the UI's API and the server's, all on one
+    repo for CAIRN_ATTACK_SECONDS."""
     project = project_at(tmp_path, "busy")
     seed = tmp_path / "seed"
     (seed / "nested" / "deeper").mkdir(parents=True)
@@ -336,18 +344,20 @@ def test_contention_on_one_repo(tmp_path):
     for name, code in (("publisher.py", PUBLISHER), ("live.py", LIVE_RUN), ("maintenance.py", MAINTENANCE)):
         script(project, name, code)
     ui, port = start_ui(project)
+    server = RealServer(project / ".cairn").start()  # just another process on the repo (rule 1)
     try:
-        idle = hammer(project, port, 5, "idle.json")
+        idle = hammer(project, port, 5, "idle.json", server)
         with WalWatch(project / ".cairn") as wal:
-            processes = [spawn(project, "publisher.py", worker, SECONDS, "big" if worker < 2 else "small") for worker in range(5)]
+            processes = [spawn(project, "publisher.py", worker, SECONDS, "big" if worker < 2 else "small") for worker in range(4)]
             processes += [spawn(project, "live.py", index, SECONDS) for index in range(2)]
             processes += [spawn(project, "maintenance.py", SECONDS)]
-            loaded = hammer(project, port, SECONDS, "load.json")
+            loaded = hammer(project, port, SECONDS, "load.json", server)
             outputs = [(process, *finish(process)) for process in processes]
-        after = hammer(project, port, 5, "after.json")
+        after = hammer(project, port, 5, "after.json", server)
     finally:
         ui.terminate()
         ui_out, ui_err = finish(ui, 30)
+        server.stop()
 
     problems = []
     for process, out, err in outputs:
@@ -355,6 +365,7 @@ def test_contention_on_one_repo(tmp_path):
             problems.append(f"{process.args}: exit {process.returncode}\n{out[-2000:]}\n{err[-4000:]}")
         problems += [f"{process.args[1]}: {line}" for line in bad_lines(err)]
     problems += [f"ui: {line}" for line in bad_lines(ui_err)]
+    problems += [f"server: {line}" for line in bad_lines(server.process_logs()[1])]
     for phase in (idle, loaded, after):
         problems += phase["errors"]
     print("\nUI latency idle:\n" + latency_table(idle["samples"]))
@@ -367,7 +378,7 @@ def test_contention_on_one_repo(tmp_path):
     repo = LocalRepo(project / ".cairn")
     everything = check_numbers(repo)
     by_uid = {version["uid"]: (name, version) for name, versions in everything.items() for version in versions}
-    published = [json.loads(line) for worker in range(5) for line in (project / f"published-{worker}.jsonl").read_text().splitlines()]
+    published = [json.loads(line) for worker in range(4) for line in (project / f"published-{worker}.jsonl").read_text().splitlines()]
     timings = [row["seconds"] for row in published]
     print(f"publishes: {len(published)}, p50 {percentile(timings, .5):.2f} s, p95 {percentile(timings, .95):.2f} s, "
           f"max {max(timings):.2f} s; versions in the repo: {len(by_uid)}")
@@ -502,8 +513,12 @@ class RealServer:
 
     def start(self, env=None) -> "RealServer":
         self.process = spawn(self.root.parent, "-m", "cairn", "server", self.root, "--port", self.port, "--no-ui", env=env)
+        self.logs = self.process.logs
         wait_port(self.port, self.process)
         return self
+
+    def process_logs(self) -> tuple[str, str]:
+        return self.logs[0].read_text(), self.logs[1].read_text()
 
     def stop(self, kill: bool = False) -> None:
         if self.process is not None:
@@ -1641,3 +1656,28 @@ def test_a_gc_sweep_between_staging_and_a_live_sync_does_not_lose_the_run(tmp_pa
     assert version["status"] == "completed", version.get("error")
     assert len([entry for entry in version["files"] if entry["path"].startswith("files/")]) == 40
     verify_clean(project)
+
+
+def test_a_slow_remote_with_a_backlog_holds_a_command_up_for_a_bounded_time(tmp_path):
+    """20 versions wait in the outbox; then the remote answers, but slowly (1 s per connection). A command's start and
+    end syncs send what fits in their time budget and leave the rest, instead of sending the whole backlog first."""
+    server = RealServer(tmp_path / "remote").start()
+    proxy = FaultProxy(server.port, mode="refuse", delay=1.0)
+    env = base_env(CAIRN_TOKEN=server.token)
+    project = project_at(tmp_path, "study", proxy.url)
+    script(project, "work.py", OFFLINE_WORK)
+    made = subprocess.run([sys.executable, "work.py", "x", "20"], cwd=project, capture_output=True, text=True, env=env)
+    assert made.returncode == 0, made.stderr
+    proxy.mode = "slow"
+    began = time.perf_counter()
+    result = cli(project, "artifacts", env=env)
+    took = time.perf_counter() - began
+    assert result.returncode == 0, result.stderr
+    print(f"\n`cairn artifacts` with 20 pending versions and a remote that takes 1 s per connection: {took:.1f} s")
+    assert took < 45, took
+    proxy.mode = "forward"
+    assert cli(project, "sync", env=env).returncode == 0
+    assert outbox_of(project) == []
+    assert len(LocalRepo(server.root).versions("study", "shared")) == 10
+    proxy.close()
+    server.stop()

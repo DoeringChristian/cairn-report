@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from ..config import Config, load_config, locate, protect
@@ -191,7 +192,7 @@ def sync_now(config: Config, report=None, timeout: float = 10) -> dict | None:
         if not repo.engine.waiting():
             return None
         repo.reach()  # a remote that does not answer costs one short look (and none at the end of the command)
-        return repo.with_timeout(timeout).sync(report, refresh=False)
+        return repo.with_timeout(timeout).sync(report, refresh=False, deadline=time.monotonic() + timeout)
     except Unreachable:
         return None
     except (StoreError, OSError) as error:

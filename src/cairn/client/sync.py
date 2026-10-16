@@ -33,6 +33,7 @@ oldest first, with their inputs named by uid; the remote numbers them, and they 
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from ..store import refs
@@ -375,8 +376,9 @@ class Sync:
         finally:
             self.outbox.release(claimed)
 
-    def flush(self) -> dict:
-        """Send every pending entry in uid order; stops at the first one the remote does not answer for.
+    def flush(self, deadline: float | None = None) -> dict:
+        """Send every pending entry in uid order; stops at the first one the remote does not answer for, and (`deadline`,
+        a time.monotonic() value) once that time has passed: what is left waits for the next sync.
 
         First the repo's own earlier versions are adopted (see `adopt`). A running entry whose owner is gone
         (`Outbox.dead`) is failed first. Returns a report: {"sent": [entries], "rejected": [entries], "waiting":
@@ -392,6 +394,11 @@ class Sync:
             say(f"adopted {result['adopted']} versions this repo numbered itself: the remote numbers them as they are sent")
         records = self.ordered(self.pending())
         for index, record in enumerate(records):
+            if deadline is not None and time.monotonic() > deadline:
+                left = [record for record in records[index:] if record not in result["waiting"]]
+                result["waiting"].extend(left)
+                say(f"{len(left)} entries left for the next sync (out of time)")
+                break
             if record["sync"] == "running":
                 why = self.outbox.dead(record, self.timeout)
                 if why is None:
