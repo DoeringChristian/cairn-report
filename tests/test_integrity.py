@@ -330,7 +330,10 @@ def test_verify_pending_versions(down, env, capsys):
     assert (path / "a.txt").read_text() == "one"
     out, _ = run(capsys, "verify")
     assert "no problems" in out
-    os.chmod(path / "a.txt", 0o644)
+    # the read-only folder gets a changed file: replaced, not written through (where the filesystem cannot clone,
+    # a pulled file is a hard link of the blob, and writing through it would change the blob itself; see the README)
+    os.chmod(path, 0o755)
+    (path / "a.txt").unlink()
     (path / "a.txt").write_text("edited")
     out, _ = run(capsys, "verify", "--repair")  # its read-only folder is made again from the blobs
     assert "a.txt" in out and not path.exists()
