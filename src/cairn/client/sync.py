@@ -3,9 +3,10 @@ repo. Pure mechanism: it uses the outbox (store/outbox.py), the remote (the repo
 HTTP), and the repo's copies (a LocalRepo, or a stand-in without a database), and nothing else: no configuration, no
 printing (what happened comes back as a report), no threads.
 
-A publish in a repo with a remote first commits the version to the outbox: an entry with the manifest entries,
-label, metadata, inputs, aliases, and source, and the contents it needs kept in the repo's blobs (client/repo.py
-stages them), so the upload never reads the source folder.
+A publish in a repo with a remote first commits the version to the outbox: an entry with the artifact name, the
+manifest entries, label, metadata, inputs, aliases, and source, and the contents it needs kept in the repo's blobs
+(client/repo.py stages them), so the upload never reads the source folder. The remote is one project of a server
+(`<server>/<project>`), and the repo's copies are its one project: neither call names a project.
 
 Kinds and sync states:
 - `publish` (`sync: pending`): one finished version, sent with the publish route.
@@ -23,8 +24,7 @@ entry removed. Sending is idempotent because every request carries the version's
 it already has with that version, so an entry sent twice (a sync killed after the remote's answer, two hosts
 sending one shared outbox) makes one version. To avoid double work, a sender claims an entry first
 (`Outbox.claim`). Entries are sent in uid order, which is creation order, so a pending version that consumed
-another pending version (its input is `project:name@<uid>`) follows it, and the remote turns that input into
-`@v<n>`.
+another pending version (its input is `name@<uid>`) follows it, and the remote turns that input into `name@v<n>`.
 
 A repo that numbered versions itself before it had a remote hands them to the outbox at its first sync (`adopt`),
 oldest first, with their inputs named by uid; the remote numbers them, and they come back as copies.
@@ -78,9 +78,10 @@ def _when(record: dict) -> tuple:
 class Sync:
     """One repo's outbox and its remote (see the module doc).
 
-    `copies` is the repo's database (a LocalRepo: `put_copy`, `mirror_aliases`, `meta`, `set_meta`, `local_versions`,
-    `forget_versions`, `aliases`, `get_version`, `copies`) or a stand-in that keeps nothing; `root` the repo folder;
-    `timeout` the heartbeat timeout of running versions (seconds)."""
+    `remote` is the project on the server (client/remote.py Remote); `copies` the repo's own project in its database (a
+    LocalProject: `put_copy`, `mirror_aliases`, `meta`, `set_meta`, `local_versions`, `forget_versions`, `aliases`,
+    `get_version`, `copies`) or a stand-in that keeps nothing; `root` the repo folder; `timeout` the heartbeat
+    timeout of running versions (seconds)."""
 
     def __init__(self, outbox: Outbox, remote, copies, root: Path, timeout: float):
         self.outbox, self.remote, self.copies, self.root, self.timeout = outbox, remote, copies, Path(root), timeout
@@ -95,24 +96,31 @@ class Sync:
         known = read_repo_file(self.root).get("remote") or {}
         return known.get("uid") if isinstance(known, dict) and known.get("url") == self.remote.url else None
 
+    def _bound(self, uid: str) -> str:
+        """What the repo's copies are recorded under (`origin`) and the repo is bound to (meta `remote`): the server's
+        uid and the project, `<uid>/<project>`."""
+        return f"{uid}/{self.remote.project}"
+
     def check_remote(self) -> str:
-        """The remote's uid, after making sure this repo may sync with it: not the repo itself, and the remote whose
-        copies the repo holds (a repo has one remote). Remembered in repo.json. Raises Unreachable while it does not
-        answer, StoreError when the remote is not this repo's."""
+        """The remote's uid, after making sure this repo may sync with it: not the repo itself, and the remote (server
+        and project) whose copies the repo holds (a repo has one remote). Remembered in repo.json. Raises Unreachable
+        while it does not answer, StoreError when the remote is not this repo's."""
         uid = self.remote.uid
         if uid == repo_uid(self.root):
             raise StoreError(f"the remote {self.remote.url} is the server of this very repo ({self.root}); processes on its "
                              "machine open the repo directly: remove [repo] remote")
         bound = self.copies.meta("remote")
-        if bound and bound != uid:
-            raise StoreError(f"the repo {self.root} holds the versions of another remote (repo uid {bound}); the remote "
-                             f"{self.remote.url} is a different one (uid {uid}). A repo has one remote: set [repo] remote back, "
-                             "or start a new repo (move the folder away once `cairn status` shows nothing pending)")
+        if bound and bound != self._bound(uid):
+            raise StoreError(f"the repo {self.root} holds the versions of another remote ({bound}: a server's uid and its "
+                             f"project); the remote {self.remote.url} is a different one ({self._bound(uid)}). A repo has one "
+                             "remote: set [repo] remote back, or start a new repo (move the folder away once `cairn status` "
+                             "shows nothing pending)")
         update_repo_file(self.root, remote={"url": self.remote.url, "uid": uid})
         return uid
 
     def origin(self) -> str | None:
-        """The uid the repo's copies are recorded under: the remote's, if this repo is (or may become) its repo."""
+        """What the repo's copies are recorded under: the remote's server uid and project, if this repo is (or may
+        become) its repo."""
         uid = self.known_uid
         if uid is None:
             try:
@@ -120,7 +128,7 @@ class Sync:
             except StoreError:
                 return None
         bound = self.copies.meta("remote")
-        return uid if not bound or bound == uid else None
+        return self._bound(uid) if not bound or bound == self._bound(uid) else None
 
     # ------------------------------------------------------------ entries
 
@@ -164,35 +172,35 @@ class Sync:
 
     # ------------------------------------------------------------ recording the remote's answers
 
-    def record(self, project: str, name: str, manifest: dict) -> None:
+    def record(self, name: str, manifest: dict) -> None:
         """Write a remote's answer into the repo: the version (a copy, with the remote's number) and the artifact's
         aliases as the remote has them (their versions copied first), and the read-only folder's record. Raises when
         the repo cannot record it (then the outbox entry stays, and the next sync records it)."""
         origin = self.origin()
         if origin is not None and manifest.get("status") in ("completed", "failed", "deleted"):
-            self.copies.put_copy(project, name, manifest, origin)
+            self.copies.put_copy(name, manifest, origin)
             try:
-                self.mirror(project, name)
+                self.mirror(name)
             except StoreError:  # best effort: the next refresh mirrors them
                 pass
         update_record(self.root, manifest, self.known_uid)
 
-    def mirror(self, project: str, name: str, aliases: dict[str, int] | None = None) -> None:
+    def mirror(self, name: str, aliases: dict[str, int] | None = None) -> None:
         """Make the repo's aliases of an artifact the remote's (asked now unless given); the versions they point at are
         copied first."""
         origin = self.origin()
         if origin is None:
             return
         if aliases is None:
-            aliases = self.remote.aliases(project, name)
+            aliases = self.remote.aliases(name)
         for number in sorted(set(aliases.values())):
             try:
-                self.copies.get_version(project, name, number)
+                self.copies.get_version(name, number)
             except (NotFound, Unreachable):
-                manifest = self.remote.get_version(project, name, number)
+                manifest = self.remote.get_version(name, number)
                 if manifest.get("status") in ("completed", "failed", "deleted"):
-                    self.copies.put_copy(project, name, manifest, origin)
-        self.copies.mirror_aliases(project, name, aliases)
+                    self.copies.put_copy(name, manifest, origin)
+        self.copies.mirror_aliases(name, aliases)
 
     # ------------------------------------------------------------- sending
 
@@ -213,8 +221,8 @@ class Sync:
         """Send what the remote lacks of an entry; True once the version is final there (and recorded in the repo).
 
         Raises Unreachable when the remote does not answer, and StoreError when it refuses."""
-        remote, project, name = self.remote, record["project"], record["name"]
-        remote.create_project(project)
+        remote, name = self.remote, record["name"]
+        remote.create()
         if record["status"] == "completed":
             record["digest"] = manifest_digest(record["files"])  # the remote recomputes it from the files and refuses a mismatch
         manifest = {key: record.get(key) for key in ("label", "metadata", "source")}
@@ -222,10 +230,10 @@ class Sync:
             self._start_inputs(record)
         if record["kind"] == "publish":
             for attempt in range(RETRIES):
-                self._upload(record["files"], f"{project}:{name}")
+                self._upload(record["files"], name)
                 self.outbox.refresh_claim(claimed)
                 try:
-                    record["number"] = remote.publish(project, name, record["files"], inputs=record["inputs"],
+                    record["number"] = remote.publish(name, record["files"], inputs=record["inputs"],
                                                       aliases=record["aliases"], uid=record["uid"], digest=record["digest"], **manifest)
                     break
                 except MissingBlobs:  # the remote's garbage collection removed a blob since we checked: send it again
@@ -233,21 +241,21 @@ class Sync:
                         raise
             return self._done(record)
         if record["number"] is None:
-            record["number"] = remote.start_version(project, name, uid=record["uid"], **manifest)
+            record["number"] = remote.start_version(name, uid=record["uid"], **manifest)
             record["pushed_metadata"] = record.get("metadata")
             self.outbox.save(record)
         if record.get("pushed_metadata", record.get("metadata")) != record.get("metadata") and record["status"] == "running":
-            remote.set_metadata(project, name, record["number"], record.get("metadata") or {})  # changed while it ran
+            remote.set_metadata(name, record["number"], record.get("metadata") or {})  # changed while it ran
             record["pushed_metadata"] = record.get("metadata")
             self.outbox.save(record)
         fresh = [item for item in record["files"] if record["pushed"].get(item["path"]) != (item.get("sha256") or item.get("link"))]
         try:
             if fresh:
                 for attempt in range(RETRIES):
-                    self._upload(fresh, f"{project}:{name}")
+                    self._upload(fresh, name)
                     self.outbox.refresh_claim(claimed)
                     try:
-                        remote.add_files(project, name, record["number"], fresh)
+                        remote.add_files(name, record["number"], fresh)
                         break
                     except MissingBlobs:  # removed by garbage collection since we checked: send it again
                         if attempt == RETRIES - 1:
@@ -256,23 +264,23 @@ class Sync:
                 self.outbox.save(record)
             if record["status"] == "running":
                 if not fresh:
-                    remote.keep_alive(project, name, record["number"])  # nothing new: still say it is alive
+                    remote.keep_alive(name, record["number"])  # nothing new: still say it is alive
                 return False
             if record["status"] == "completed":
-                remote.complete_version(project, name, record["number"], record["inputs"], digest=record["digest"])
+                remote.complete_version(name, record["number"], record["inputs"], digest=record["digest"])
                 for alias in record["aliases"]:
-                    remote.set_alias(project, name, alias, record["number"])
+                    remote.set_alias(name, alias, record["number"])
             else:
-                remote.fail_version(project, name, record["number"])
+                remote.fail_version(name, record["number"])
         except StoreError as error:
             if isinstance(error, Unreachable) or "can no longer change" not in str(error):
                 raise
-            final = remote.get_version(project, name, record["uid"])  # sent before (by us or another process)
+            final = remote.get_version(name, record["uid"])  # sent before (by us or another process)
             if final["status"] == "running":
                 raise
             if final["status"] == "completed" and record["status"] == "completed":
                 for alias in record["aliases"]:
-                    remote.set_alias(project, name, alias, record["number"])
+                    remote.set_alias(name, alias, record["number"])
         return self._done(record)
 
     def _start_inputs(self, record: dict) -> None:
@@ -287,12 +295,11 @@ class Sync:
                 if other.get("sync") == "pending":
                     self.send(other)  # a pending version the record consumed: it goes first
                 if self.outbox.load(uid) is not None:
-                    raise Waiting(f"{record['project']}:{record['name']}@{record['uid']} waits for its input "
-                                  f"{other['project']}:{other['name']}@{uid}, which is not sent yet")
+                    raise Waiting(f"{record['name']}@{record['uid']} waits for its input {other['name']}@{uid}, which is not sent yet")
                 continue
             manifest = {key: other.get(key) for key in ("label", "metadata", "source")}
-            self.remote.create_project(other["project"])
-            number = self.remote.start_version(other["project"], other["name"], uid=other["uid"], **manifest)
+            self.remote.create()
+            number = self.remote.start_version(other["name"], uid=other["uid"], **manifest)
             current = self.outbox.load(uid)
             if current is not None and current.get("number") is None:
                 current["number"] = number
@@ -301,33 +308,33 @@ class Sync:
     def _done(self, record: dict) -> bool:
         """The remote has the version: record it in the repo (its number, a copy), then remove the outbox entry. When the
         repo cannot record it yet, the entry stays (sending again is harmless) and this raises."""
-        remote, project, name = self.remote, record["project"], record["name"]
+        remote, name = self.remote, record["name"]
         try:
-            manifest = remote.get_version(project, name, record["uid"])
+            manifest = remote.get_version(name, record["uid"])
         except NotFound:  # nothing changed since the latest: the remote kept its own version, not this uid
             manifest = None
             if record.get("number") is not None:
                 try:
-                    manifest = remote.get_version(project, name, record["number"])
+                    manifest = remote.get_version(name, record["number"])
                 except NotFound:
                     manifest = None
         if manifest is not None and manifest.get("uid") != record["uid"]:
-            self._redirect(record, project, name, manifest)
+            self._redirect(record, name, manifest)
         if manifest is not None:
             try:
-                self.record(project, name, manifest)
+                self.record(name, manifest)
             except Unreachable:
                 raise
             except Exception as error:  # noqa: BLE001 - the repo could not record it: keep the entry, never reject it
-                raise NotRecorded(f"the remote has {project}:{name}@v{manifest.get('version')} (uid {manifest.get('uid')}), but "
+                raise NotRecorded(f"the remote has {name}@v{manifest.get('version')} (uid {manifest.get('uid')}), but "
                                   f"the repo could not record it yet ({type(error).__name__}: {error}); the next sync does") from error
         self.outbox.remove(record)
         return True
 
-    def _redirect(self, record: dict, project: str, name: str, manifest: dict) -> None:
+    def _redirect(self, record: dict, name: str, manifest: dict) -> None:
         """The remote kept its own version instead of this entry's (nothing changed since its latest): every other entry
         that names this entry's uid as an input names the remote's version from now on."""
-        gone, exact = f"{project}:{name}@{record['uid']}", f"{project}:{name}@v{manifest['version']}"
+        gone, exact = f"{name}@{record['uid']}", f"{name}@v{manifest['version']}"
         for other in self.outbox.records():
             if gone in (other.get("inputs") or []):
                 other["inputs"] = [exact if item == gone else item for item in other["inputs"]]
@@ -336,7 +343,7 @@ class Sync:
     def _final_there(self, record: dict) -> bool:
         """Whether the remote has this entry's version final already (sent before, by another sender or a lost answer)."""
         try:
-            manifest = self.remote.get_version(record["project"], record["name"], record["uid"])
+            manifest = self.remote.get_version(record["name"], record["uid"])
         except StoreError:
             return False
         return manifest.get("status") in ("completed", "failed", "deleted") and \
@@ -363,8 +370,7 @@ class Sync:
         except Unreachable:
             raise
         except (Unauthorized, Forbidden) as error:  # the token, not the entry: it waits until the token is right
-            raise Waiting(f"the remote refused the token ({error}); {record['project']}:{record['name']}@{record['uid']} "
-                          "waits") from error
+            raise Waiting(f"{error}; {record['name']}@{record['uid']} waits") from error
         except StoreError as error:
             if record["status"] != "running" and self._final_there(record):
                 return self._done(record)
@@ -372,7 +378,7 @@ class Sync:
             self.outbox.save(record)
             raise
         except OSError as error:  # a file of this repo (a blob being read): not the remote's verdict; try again next time
-            raise NotRecorded(f"{record['project']}:{record['name']}@{record['uid']}: {error}") from error
+            raise NotRecorded(f"{record['name']}@{record['uid']}: {error}") from error
         finally:
             self.outbox.release(claimed)
 
@@ -417,7 +423,7 @@ class Sync:
                 finally:
                     self.outbox.release(claimed)
                 result["failed"].append(record)
-                say(f"failing {record['project']}:{record['name']}@{record['uid']}: {why}")
+                say(f"failing {record['name']}@{record['uid']}: {why}")
             try:
                 sent = self.send(record)
             except (NotRecorded, Waiting) as error:  # this entry waits; the others need not
@@ -429,7 +435,7 @@ class Sync:
                 break
             except StoreError as error:
                 result["rejected"].append(record)
-                say(f"rejected {record['project']}:{record['name']}@{record['uid']}: {error}")
+                say(f"rejected {record['name']}@{record['uid']}: {error}")
                 continue
             if not sent:
                 if self.outbox.load(record["uid"]) is not None:
@@ -437,7 +443,7 @@ class Sync:
                 continue
             result["sent"].append(record)
             what = "failed" if record["status"] == "failed" else "uploaded"
-            say(f"{what} {record['project']}:{record['name']}@v{record['number']} (uid {record['uid']})")
+            say(f"{what} {record['name']}@v{record['number']} ({refs.default_short_id(record['uid'])})")
         return result
 
     def adopt(self) -> int:
@@ -449,23 +455,23 @@ class Sync:
         uid = self.check_remote()
         rows = self.copies.local_versions()
         if not rows:
-            if self.copies.meta("remote") != uid:
-                self.copies.set_meta("remote", uid)
+            if self.copies.meta("remote") != self._bound(uid):
+                self.copies.set_meta("remote", self._bound(uid))
             return 0
         adopted, waiting = [], 0
-        rows = sorted(rows, key=lambda row: (row[2].get("completed") or row[2].get("created") or "", row[2]["version"]))
-        for project, name, state in rows:
+        rows = sorted(rows, key=lambda row: (row[1].get("completed") or row[1].get("created") or "", row[1]["version"]))
+        for name, state in rows:
             if state["status"] == "running":
                 waiting += 1
                 continue
             adopted.append(state["uid"])
             if state["status"] == "deleted" or self.outbox.folder_of(state["uid"]).exists():
                 continue
-            aliases = [alias for alias, number in self.copies.aliases(project, name).items()
+            aliases = [alias for alias, number in self.copies.aliases(name).items()
                        if number == state["version"] and alias != "latest"]
             failed = state["status"] == "failed"
             record = {"uid": state["uid"], "kind": "running" if failed else "publish", "sync": "pending", "status": state["status"],
-                      "url": self.remote.url, "store": uid, "project": project, "name": name, "label": state.get("label"),
+                      "url": self.remote.url, "store": uid, "name": name, "label": state.get("label"),
                       "metadata": state.get("metadata") or {}, "inputs": self._adopted_inputs(state.get("inputs") or []),
                       "aliases": aliases, "source": state.get("source"), "files": state.get("files") or [],
                       "created": state.get("created") or now(), "completed": state.get("completed"), "number": None, "pushed": {},
@@ -475,7 +481,7 @@ class Sync:
             self.outbox.create(record, running=False)
         self.copies.forget_versions(adopted)
         if not waiting:
-            self.copies.set_meta("remote", uid)
+            self.copies.set_meta("remote", self._bound(uid))
         return len(adopted)
 
     def _adopted_inputs(self, inputs: list[str]) -> list[str]:
@@ -485,27 +491,27 @@ class Sync:
             state = None
             try:
                 ref = refs.parse(text)
-                if ref.project:
-                    state = self.copies.get_version(ref.project, ref.name, ref.version if ref.version is not None else ref.uid)
+                if ref.exact:
+                    state = self.copies.get_version(ref.name, ref.version if ref.version is not None else ref.uid)
             except (StoreError, ValueError):
                 state = None
             if state is not None and not state.get("origin"):
                 if state["status"] == "deleted":
                     continue
-                text = str(Ref(ref.project, ref.name, state["uid"]))
+                text = str(Ref(ref.name, state["uid"]))
             found.append(text)
         return found
 
     def refresh(self) -> int:
         """Mirror the remote's aliases of every artifact the repo has versions of (for resolving offline); returns how many."""
-        artifacts = {(record["project"], record["name"]) for record in self.records()}
-        artifacts |= {(project, name) for project, name, _ in self.copies.copies()}
+        artifacts = {record["name"] for record in self.records()}
+        artifacts |= {name for name, _ in self.copies.copies()}
         count = 0
-        for project, name in sorted(artifacts):
+        for name in sorted(artifacts):
             try:
-                aliases = self.remote.aliases(project, name)
+                aliases = self.remote.aliases(name)
             except NotFound:
                 continue
-            self.mirror(project, name, aliases)
+            self.mirror(name, aliases)
             count += 1
         return count

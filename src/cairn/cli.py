@@ -1,5 +1,8 @@
-"""Command line: `cairn init | build | serve | share | publish | pull | project | artifacts | versions | show | alias | delete | retention |
+"""Command line: `cairn init | build | serve | share | publish | pull | artifacts | versions | show | alias | delete | retention |
 gc | sync | status | prune | verify | server | ui | token | export-metadata | finalize-study | drafts`.
+
+A repo holds one project, so no command names one, except the server admin's `cairn token create --project`.
+References are `name[@vN|@uid|@<short id>|@alias|@label]`, or a bare short id; versions are shown with their short id.
 
 Every command that uses the repo first tries to send what waits for its remote, and once more at its end (quietly,
 and only when something is pending; nothing without a remote); `sync` does that by hand, says what happened, and
@@ -19,19 +22,19 @@ from .config import load_config
 def cmd_build(args) -> None:
     from .reports.build import build_all
 
-    build_all(load_config(args.project), report=args.report)
+    build_all(load_config(args.directory), report=args.report)
 
 
 def cmd_serve(args) -> None:
     from .reports.serve import serve
 
-    serve(load_config(args.project), host=args.host, port=args.port, strict_port=args.strict_port, build=not args.no_build)
+    serve(load_config(args.directory), host=args.host, port=args.port, strict_port=args.strict_port, build=not args.no_build)
 
 
 def cmd_share(args) -> None:
     from .reports.share import share
 
-    share(load_config(args.project), report=args.report, build=not args.no_build, out=args.out)
+    share(load_config(args.directory), report=args.report, build=not args.no_build, out=args.out)
 
 
 def cmd_publish(args) -> None:
@@ -39,7 +42,7 @@ def cmd_publish(args) -> None:
     from .reports.publishing import is_report_folder, publish_report
     from .store import IncompleteRun
 
-    config = with_options(load_config(args.project), args)
+    config = with_options(load_config(args.directory), args)
     meta, command = parse_meta(args.meta), args.command or None
     if args.folder is not None and is_report_folder(config, Path(args.folder)):
         if args.name or args.watch or command or args.label or args.alias or meta:
@@ -68,7 +71,7 @@ def cmd_pull(args) -> None:
 
     from .client.open import open_repo
 
-    config = with_options(load_config(args.project), args)
+    config = with_options(load_config(args.directory), args)
     path = open_repo(config).pull(args.ref, record=not args.no_record, offline=args.offline)
     if args.into is None:
         return print(path)
@@ -88,7 +91,7 @@ def open_objects(args):
     from .client.objects import Repo
     from .client.open import open_repo
 
-    return Repo(open_repo(with_options(load_config(args.project), args)))
+    return Repo(open_repo(with_options(load_config(args.directory), args)))
 
 
 def report(line: str) -> None:
@@ -100,43 +103,15 @@ def sync_quietly(args) -> None:
     from .client.open import sync_now
 
     try:
-        config = with_options(load_config(args.project), args)
+        config = with_options(load_config(args.directory), args)
     except (SystemExit, ValueError):
         return
     sync_now(config, report)
 
 
-def cmd_project(args) -> None:
-    store = open_objects(args)
-    if args.project_command == "list":
-        rows = store.backend.overviews()
-        for row in rows:
-            print(f"{row['name']}\t{row.get('title') or row['name']}\t{row.get('artifacts', 0)} artifacts\t{(row.get('updated') or '')[:19]}")
-        if not rows:
-            print("no projects")
-        return
-    if args.project_command == "create":
-        project = store.create_project(args.name, args.title, args.description or "")
-        return print(f"project {project.name}: {project.title}")
-    project = store.project(args.name)
-    if args.project_command == "edit":
-        if args.title is None and args.description is None:
-            raise SystemExit("edit takes --title and/or --description")
-        project.update(title=args.title, description=args.description)
-    print(f"project      {project.name}")
-    print(f"title        {project.title}")
-    print(f"description  {project.description}")
-    if args.project_command == "show":
-        artifacts = project.artifacts()
-        print(f"artifacts    {len(artifacts)}")
-        for artifact in artifacts:
-            latest = artifact.summary.get("latest")
-            print(f"  {artifact.name}\t{f'v{latest}' if latest else '-'}\t{artifact.summary.get('versions', 0)} versions")
-
-
 def cmd_artifacts(args) -> None:
     store = open_objects(args)
-    artifacts = store.project(args.store_project).artifacts(prefix=args.prefix)
+    artifacts = store.artifacts(prefix=args.prefix)
     for artifact in artifacts:
         summary = artifact.summary
         latest = summary.get("latest")
@@ -156,7 +131,8 @@ def cmd_versions(args) -> None:
     versions = store.artifact(args.name).versions()
     for version in versions:
         number = f"v{version.number}" if version.number is not None else "pending"
-        print(f"{number}\t{version.status}\t{version.label or ''}\t{(version.created or '')[:19]}\t{version.uid}\t{_size(version.files)}")
+        print(f"{number}\t{version.short_id}\t{version.status}\t{version.label or ''}\t{(version.created or '')[:19]}\t{version.uid}\t"
+              f"{_size(version.files)}")
     if not versions:
         print(f"no versions of {args.name}")
 
@@ -170,6 +146,7 @@ def cmd_show(args) -> None:
     version = store.version(args.ref, offline=args.offline)
     aliases = [] if version.number is None else sorted(name for name, number in version.artifact.aliases.items() if number == version.number)
     print(f"ref          {version.ref}")
+    print(f"id           {version.short_id}")
     print(f"uid          {version.uid}")
     print(f"status       {version.status}")
     print(f"digest       {version.digest or '-'}")
@@ -195,7 +172,7 @@ def cmd_show(args) -> None:
         try:
             run = version.run
             if run is not None:
-                print(f"run          {run.ref} ({run.status})")
+                print(f"run          {run.ref} ({run.short_id}, {run.status})")
                 print(f"data         {', '.join(item.ref for item in version.upstream()) or '-'}")
         except StoreError as error:
             print(f"run          (unknown: {error})")
@@ -244,9 +221,9 @@ def cmd_drafts(args) -> None:
     if version is None:
         print(f"the draft {draft.uid} waits for its inputs")
     elif version.number is None:
-        print(f"pending {version.ref}: the remote does not answer; `cairn status` lists it, `cairn sync` sends it")
+        print(f"pending {version.ref} ({version.short_id}): the remote does not answer; `cairn status` lists it, `cairn sync` sends it")
     else:
-        print(f"published {version.ref} ({_size(version.files)})")
+        print(f"published {version.ref} ({version.short_id}; {_size(version.files)})")
 
 
 def _store_errors(action):
@@ -275,15 +252,7 @@ def cmd_alias(args) -> None:
     store = open_objects(args)
     version = _store_errors(lambda: store.version(args.ref))
     _store_errors(lambda: version.artifact.alias(args.alias, version))
-    print(f"{version.artifact.name}@{args.alias} -> v{version.number}")
-
-
-def cmd_project_delete(args) -> None:
-    store = open_objects(args)
-    result = _store_errors(lambda: store.project(args.name).delete(force=args.force, reason=args.reason))
-    for ref in result["deleted"]:
-        print(f"deleted {ref}")
-    print(f"deleted project {args.name}")
+    print(f"{version.artifact.name}@{args.alias} -> v{version.number} ({version.short_id})")
 
 
 def _rule_text(rule: dict) -> str:
@@ -294,21 +263,20 @@ def _rule_text(rule: dict) -> str:
 
 
 def cmd_retention(args) -> None:
-    store = open_objects(args)
-    project = store.project(args.store_project)
+    repo = open_objects(args)
     if args.retention_command == "set":
         if args.keep_last is None and args.keep_days is None:
             raise SystemExit("set takes --keep-last and/or --keep-days")
-        _store_errors(lambda: project.set_retention(args.prefix or "", keep_last=args.keep_last, keep_days=args.keep_days,
+        _store_errors(lambda: repo.set_retention(args.prefix or "", keep_last=args.keep_last, keep_days=args.keep_days,
                                                     keep_aliased=not args.no_keep_aliased))
     elif args.retention_command == "clear":
-        rules = _store_errors(lambda: project.retention)
-        _store_errors(lambda: setattr(project, "retention", [rule for rule in rules if rule["prefix"] != (args.prefix or "")]))
-    rules = _store_errors(lambda: project.retention)
+        rules = _store_errors(lambda: repo.retention)
+        _store_errors(lambda: setattr(repo, "retention", [rule for rule in rules if rule["prefix"] != (args.prefix or "")]))
+    rules = _store_errors(lambda: repo.retention)
     for rule in rules:
         print(_rule_text(rule))
     if not rules:
-        print(f"no retention rules in {project.name}: nothing is deleted by `cairn gc` but blobs no version names")
+        print("no retention rules: nothing is deleted by `cairn gc` but blobs no version names")
 
 
 def cmd_gc(args) -> None:
@@ -361,7 +329,7 @@ def cmd_sync(args) -> None:
     import time
 
     store = open_objects(args)
-    config = load_config(args.project)
+    config = load_config(args.directory)
     while True:
         result = store.sync(report=lambda line: print(line, flush=True))
         if result["remote"] is None:
@@ -393,6 +361,7 @@ def _age(seconds: float) -> str:
 def cmd_status(args) -> None:
     import time
 
+    from .store import refs
     from .store.outbox import epoch
 
     store = open_objects(args)
@@ -407,7 +376,8 @@ def cmd_status(args) -> None:
         files = row.get("files", [])
         size = sum(item.get("size", 0) for item in files)
         number = row.get("number")
-        line = (f"{row['sync']}\t{row['project']}:{row['name']}\t{f'v{number}' if number else '-'}\t{row['uid']}\t{row['status']}\t"
+        line = (f"{row['sync']}\t{row['name']}\t{f'v{number}' if number else '-'}\t{refs.default_short_id(row['uid'])}\t{row['uid']}\t"
+                f"{row['status']}\t"
                 f"{(row.get('owner') or {}).get('host', '')}\t{_age(now - epoch(row.get('created')))}\t{len(files)} files, {size / 1e6:.1f} MB")
         if row["sync"] == "running" and row.get("heartbeat") is not None:
             line += f"\theartbeat {_age(now - row['heartbeat'])} ago"
@@ -468,14 +438,14 @@ def cmd_server(args) -> None:
         raise SystemExit(str(error)) from None
     if interval is not None and interval <= 0:
         raise SystemExit("--gc-interval must be longer than 0")
-    root = args.root
-    if root is None:  # the project's own repo (.cairn by default)
+    root, own = args.root, None
+    if root is None:  # the project's own repo (.cairn by default), its project served under the folder's name
         from .client.open import served_root
 
-        root = served_root(load_config(args.project))
+        root, own = served_root(load_config(args.directory))
     serve_store(root, host=args.host, port=args.port, max_blob=int(args.max_blob_gb * 1024**3), no_auth=args.no_auth,
                 ui_port=None if args.no_ui else args.ui_port if args.ui_port is not None else args.port + 1 if args.port else 0,
-                allow_network_fs=args.allow_network_fs, gc_interval=interval, gc_grace=grace)
+                allow_network_fs=args.allow_network_fs, gc_interval=interval, gc_grace=grace, own=own)
 
 
 def cmd_ui(args) -> None:
@@ -485,7 +455,7 @@ def cmd_ui(args) -> None:
         raise SystemExit("ui takes --remote URL or --repo FOLDER, not both")
     config = None
     try:
-        config = with_options(load_config(args.project), args)
+        config = with_options(load_config(args.directory), args)
     except (SystemExit, ValueError):
         if not (args.remote or args.repo):
             raise
@@ -516,7 +486,16 @@ def cmd_export_metadata(args) -> None:
 def cmd_token_create(args) -> None:
     from .store.tokens import create_token
 
-    token = create_token(args.root, args.project, write=args.write, name=args.name)
+    own = None
+    try:  # the project's own repo: its project is served under the project folder's name
+        from .client.open import project_label
+
+        config = load_config(args.directory)
+        if Path(config.cairn_dir).resolve() == args.root.resolve():
+            own = project_label(config)
+    except (SystemExit, ValueError):
+        pass
+    token = create_token(args.root, args.project, write=args.write, name=args.name, own=own)
     print(f"Token: {token}")
     print(f"  {'read and write' if args.write else 'read-only'} access to project {args.project!r}; shown only now, stored hashed.")
 
@@ -550,7 +529,7 @@ def cmd_finalize_study(args) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="cairn", description="Cairn: a repo of versioned artifacts for research (runs, their results, reports built from pinned artifacts), with an optional remote, a server, and a UI.")
     parser.add_argument("--version", action="version", version=f"cairn {__version__}")
-    parser.add_argument("--project", type=Path, help="project root (default: the nearest folder upward with .cairn/repo.json or cairn.toml, else here)")
+    parser.add_argument("-C", "--directory", type=Path, help="the project folder (default: the nearest folder upward with .cairn/repo.json or cairn.toml, else here)")
     commands = parser.add_subparsers(dest="command", required=True)
 
     build = commands.add_parser("build", help="build every report (or one)")
@@ -600,59 +579,38 @@ def main(argv: list[str] | None = None) -> None:
 
     publish.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
     pull = commands.add_parser("pull", help="materialize an artifact version locally and print its path")
-    pull.add_argument("ref", help="[project:]name[@vN|@alias|@label][//file], e.g. datasets/crops@v3")
+    pull.add_argument("ref", help="name[@vN|@<short id>|@alias|@label][//file], or a bare short id, e.g. datasets/crops@v3")
     pull.add_argument("--into", type=Path, help="copy it into this folder instead of printing the read-only path")
     pull.add_argument("--no-record", action="store_true", help="do not append the version to the inputs file ($CAIRN_INPUTS or .cairn-inputs.jsonl)")
     pull.add_argument("--offline", action="store_true", help="do not ask the remote: the repo's pending versions, its copies, and its mirrored aliases")
     pull.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
     pull.set_defaults(run=cmd_pull)
 
-    project = commands.add_parser("project", help="list, create, show, or edit the repo's projects")
-    project_commands = project.add_subparsers(dest="project_command", required=True)
-    project_commands.add_parser("list", help="every project with its artifact count").set_defaults(run=cmd_project)
-    for verb, text in (("create", "create a project (an existing one is left as is)"), ("show", "a project and its artifacts"),
-                       ("edit", "change a project's title or description")):
-        command = project_commands.add_parser(verb, help=text)
-        command.add_argument("name")
-        if verb != "show":
-            command.add_argument("--title")
-            command.add_argument("--description")
-        command.add_argument("--allow-http", action="store_true", help=argparse.SUPPRESS)
-        command.set_defaults(run=cmd_project)
-    project_delete = project_commands.add_parser("delete", help="delete a project (refused while it has versions, unless --force)")
-    project_delete.add_argument("name")
-    project_delete.add_argument("--force", action="store_true", help="delete its versions first, protected ones too (owner token)")
-    project_delete.add_argument("--reason", help="why (kept in the tombstones)")
-    project_delete.add_argument("--allow-http", action="store_true", help=argparse.SUPPRESS)
-    project_delete.set_defaults(run=cmd_project_delete)
-
-    artifacts = commands.add_parser("artifacts", help="the artifacts of a project (latest version, versions, aliases)")
+    artifacts = commands.add_parser("artifacts", help="the repo's artifacts (latest version, versions, aliases)")
     artifacts.add_argument("--prefix", help="only names starting with this, e.g. reports/")
-    artifacts.add_argument("--project", dest="store_project", help="the project (default: [repo] project)")
     artifacts.set_defaults(run=cmd_artifacts)
-    versions = commands.add_parser("versions", help="every version of an artifact: number, status, label, created, uid, size")
-    versions.add_argument("name", help="[project:]name")
+    versions = commands.add_parser("versions", help="every version of an artifact: number, short id, status, label, created, uid, size")
+    versions.add_argument("name", help="the artifact name")
     versions.set_defaults(run=cmd_versions)
-    show = commands.add_parser("show", help="one version: metadata, files, inputs, consumers")
-    show.add_argument("ref", help="[project:]name[@vN|@uid|@alias|@label]")
+    show = commands.add_parser("show", help="one version: short id, metadata, files, inputs, consumers")
+    show.add_argument("ref", help="name[@vN|@uid|@<short id>|@alias|@label], or a bare short id (3f9a2c1)")
     show.add_argument("--offline", action="store_true", help="do not ask the remote: answer from the repo only")
     show.set_defaults(run=cmd_show)
     alias = commands.add_parser("alias", help="point an alias (best, paper, ...) at a completed version; latest moves by itself")
-    alias.add_argument("ref", help="[project:]name@vN (or @uid, @label, @another-alias)")
+    alias.add_argument("ref", help="name@vN (or @uid, @<short id>, @label, @another-alias), or a bare short id")
     alias.add_argument("alias", help="the alias to set or move")
     alias.set_defaults(run=cmd_alias)
     delete = commands.add_parser("delete", help="delete a version (a tombstone: its number and uid are never used again) or a whole artifact")
-    delete.add_argument("ref", nargs="?", help="[project:]name@vN (or @uid, @alias, @label)")
-    delete.add_argument("--artifact", metavar="NAME", help="delete every version of this artifact ([project:]name)")
+    delete.add_argument("ref", nargs="?", help="name@vN (or @uid, @<short id>, @alias, @label), or a bare short id")
+    delete.add_argument("--artifact", metavar="NAME", help="delete every version of this artifact")
     delete.add_argument("--force", action="store_true",
                         help="delete protected versions too (aliased, inputs of other versions, running); owner token on a server")
     delete.add_argument("--reason", help="why (kept in the tombstone)")
     delete.set_defaults(run=cmd_delete)
-    retention = commands.add_parser("retention", help="the retention rules `cairn gc` applies, per project or artifact prefix")
+    retention = commands.add_parser("retention", help="the retention rules `cairn gc` applies, per artifact-name prefix")
     retention_commands = retention.add_subparsers(dest="retention_command", required=True)
-    for verb, text in (("show", "a project's rules"), ("set", "add or replace the rule for a prefix"), ("clear", "remove the rule for a prefix")):
+    for verb, text in (("show", "the rules"), ("set", "add or replace the rule for a prefix"), ("clear", "remove the rule for a prefix")):
         command = retention_commands.add_parser(verb, help=text)
-        command.add_argument("store_project", metavar="project", help="the project")
         if verb != "show":
             command.add_argument("--prefix", default="", help="artifact names starting with this, e.g. runs/ (default: every artifact)")
         if verb == "set":
@@ -685,7 +643,7 @@ def main(argv: list[str] | None = None) -> None:
         command.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
 
     verify = commands.add_parser("verify", help="re-hash what the repo holds (blobs, versions, read-only folders, the outbox); exit 1 on any problem")
-    verify.add_argument("ref", nargs="?", help="[project:]name[@vN|@uid|@alias|@label]: one version")
+    verify.add_argument("ref", nargs="?", help="name[@vN|@uid|@<short id>|@alias|@label], or a bare short id: one version")
     verify.add_argument("--repo", type=Path, help="a repo folder on this machine instead of the project's (a server's)")
     verify.add_argument("--repair", action="store_true", help="remove what can be made again (broken read-only folders; broken contents of a remote's versions), never the only copy")
     verify.add_argument("--allow-http", action="store_true", help="allow plain HTTP to a non-local remote (sends the token unencrypted)")
@@ -709,10 +667,12 @@ def main(argv: list[str] | None = None) -> None:
     export_metadata.add_argument("root", type=Path)
     export_metadata.add_argument("folder", type=Path)
     export_metadata.set_defaults(run=cmd_export_metadata)
-    token = commands.add_parser("token", help="project-scoped tokens").add_subparsers(dest="token_command", required=True)
-    token_create = token.add_parser("create", help="print a new token for one project (shown once, stored hashed)")
-    token_create.add_argument("root", type=Path)
-    token_create.add_argument("--project", required=True)
+    token = commands.add_parser("token", help="project-scoped tokens of a served repo (a server admin's command)").add_subparsers(
+        dest="token_command", required=True)
+    token_create = token.add_parser("create", help="print a new token for one project of a served repo (shown once, stored hashed); "
+                                    "the project is made if it is new")
+    token_create.add_argument("root", type=Path, help="the served repo folder")
+    token_create.add_argument("--project", required=True, help="the project the token reaches (clients' remote <server>/<project>)")
     token_create.add_argument("--write", action="store_true", help="allow publishing (default: read-only)")
     token_create.add_argument("--name", help="a name to list and revoke it by")
     token_create.set_defaults(run=cmd_token_create)
@@ -724,8 +684,8 @@ def main(argv: list[str] | None = None) -> None:
     token_revoke.add_argument("name")
     token_revoke.set_defaults(run=cmd_token_revoke)
 
-    ui = commands.add_parser("ui", help="explore the repo in a browser: its projects, reports, artifacts, versions (pending ones too), and lineage")
-    ui.add_argument("--remote", help="a remote's URL instead of the project's repo (e.g. from a laptop)")
+    ui = commands.add_parser("ui", help="explore the repo in a browser: its reports, artifacts, versions (pending ones too), and lineage")
+    ui.add_argument("--remote", help="a server's URL (its projects) or a project on it, <server>/<project>, instead of the project's repo")
     ui.add_argument("--repo", type=Path, help="a repo folder on this machine instead of the project's (a server's)")
     ui.add_argument("--host", default="127.0.0.1")
     ui.add_argument("--port", type=int, default=8801)
@@ -747,11 +707,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.run in LOOKING_COMMANDS and not getattr(args, "repo", None):  # they look at a repo; they never make one
         from .client.open import existing_repo
 
-        existing_repo(load_config(args.project))
+        existing_repo(load_config(args.directory))
     elif args.run in READING_COMMANDS:
         from .client.open import existing_repo
 
-        config = load_config(args.project)
+        config = load_config(args.directory)
         if not config.found:
             existing_repo(config)
     syncing = args.run in REPO_COMMANDS and not getattr(args, "offline", False)  # --offline: never ask the remote
@@ -780,11 +740,11 @@ def main(argv: list[str] | None = None) -> None:
 LOOKING_COMMANDS = {cmd_status, cmd_verify, cmd_prune, cmd_sync}
 # the commands whose waits for the remote (transfers of blobs aside) add up to COMMAND_BUDGET seconds at most: what
 # could not be sent then stays pending; `cairn sync`, gc, deletions, `publish --watch`, the servers take their time
-BOUNDED_COMMANDS = {cmd_publish, cmd_pull, cmd_artifacts, cmd_versions, cmd_show, cmd_status, cmd_drafts, cmd_project, cmd_alias}
+BOUNDED_COMMANDS = {cmd_publish, cmd_pull, cmd_artifacts, cmd_versions, cmd_show, cmd_status, cmd_drafts, cmd_alias}
 COMMAND_BUDGET = 10.0
 READING_COMMANDS = {cmd_artifacts, cmd_versions, cmd_show, cmd_pull, cmd_alias, cmd_delete, cmd_drafts}  # need versions: no repo
 # found (nothing above the working directory, no $CAIRN_DIR) is refused, never made in a random folder
-REPO_COMMANDS = {cmd_publish, cmd_pull, cmd_project, cmd_project_delete, cmd_artifacts, cmd_versions, cmd_show, cmd_alias, cmd_delete,
+REPO_COMMANDS = {cmd_publish, cmd_pull, cmd_artifacts, cmd_versions, cmd_show, cmd_alias, cmd_delete,
                  cmd_retention, cmd_gc, cmd_status, cmd_prune, cmd_verify, cmd_build, cmd_drafts, cmd_finalize_study}
 
 

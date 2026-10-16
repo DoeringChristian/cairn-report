@@ -14,8 +14,8 @@ something, add a `cairn.toml` at the project root:
     template_dir = "reports/template"  # files here replace the packaged page files by name
 
     [repo]                             # the repo's remote and what the repo publishes
-    remote = "https://cairn.example.org"   # optional: a `cairn server`, the source of truth for numbers and aliases
-    project = "my-study"               # default: the project folder name
+    remote = "https://cairn.example.org/my-study"   # optional: a project on a `cairn server` (<server>/<project>),
+                                       # the source of truth for numbers and aliases
     token_file = "~/.config/cairn/token"   # or CAIRN_TOKEN; never the token itself
     allow_http = false                 # send the token over plain HTTP to a non-local remote (default: refuse)
     interval = 30                      # seconds between live syncs of a running version
@@ -48,7 +48,7 @@ ROOT_MARKERS = (CONFIG_FILE,)  # besides `.cairn/repo.json` (an existing repo); 
 BASE_ENV = "CAIRN_DIR"
 BASE_NAME = ".cairn"
 _DIR_CACHE: dict[tuple, str | None] = {}
-REPO_KEYS = {"remote", "project", "token_file", "allow_http", "interval", "heartbeat_timeout", "allow_network_fs", "exclude"}
+REPO_KEYS = {"remote", "token_file", "allow_http", "interval", "heartbeat_timeout", "allow_network_fs", "exclude"}
 
 
 def config_path(root: Path) -> Path | None:
@@ -67,6 +67,7 @@ class Config:
     template_dir: Path | None = None
     repo: dict = field(default_factory=dict)  # the [repo] table
     found: bool = True  # False: nothing was found, so the repo is the working directory's `.cairn`, made when opened
+    located: str = ""  # how the repo was found, for messages ("found from the working directory", "named by $CAIRN_DIR")
 
     @property
     def source(self) -> Path | None:
@@ -77,11 +78,12 @@ class Config:
 class Location:
     """Where the repo is: `root` the project root, `repo` the repo folder, `marked` whether the walk found a project
     root (or a repo), `found` whether there is a repo to use without creating one in the working directory (found
-    by the walk, or named by $CAIRN_DIR)."""
+    by the walk, or named by $CAIRN_DIR), `how` how it was found (for messages)."""
     root: Path
     repo: Path
     marked: bool
     found: bool
+    how: str = ""
 
 
 def _marked(folder: Path) -> bool:
@@ -91,18 +93,21 @@ def _marked(folder: Path) -> bool:
 def locate(start: Path | str | None = None, root: Path | str | None = None) -> Location:
     """The one rule for finding the repo (see the module doc), from `start` (default: the working directory), or for
     the project root `root` when it is given (`--project`)."""
+    here = start is None
     start = Path(start or Path.cwd()).resolve()
     if root is not None:
-        folder, marked = Path(root).resolve(), True
+        folder, marked, how = Path(root).resolve(), True, "of the project folder given"
     else:
         folder = next((candidate for candidate in [start, *start.parents] if _marked(candidate)), None)
         marked = folder is not None
+        how = ("found from the working directory" if here else f"found from {start}") if marked else \
+            "the working directory's: no project above it"
         folder = folder or start
     if os.environ.get(BASE_ENV):
-        return Location(folder, Path(os.environ[BASE_ENV]).expanduser().resolve(), marked, True)
+        return Location(folder, Path(os.environ[BASE_ENV]).expanduser().resolve(), marked, True, "named by $CAIRN_DIR")
     configured = _configured_dir(folder)
     repo = (folder / Path(configured).expanduser()).resolve() if configured else folder / BASE_NAME
-    return Location(folder, repo, marked, marked)
+    return Location(folder, repo, marked, marked, how)
 
 
 def find_project_root(start: Path | None = None) -> Path | None:
@@ -185,7 +190,7 @@ def load_config(project: Path | str | None = None) -> Config:
     unknown_repo = set(repo) - REPO_KEYS
     if unknown_repo:
         raise ValueError(f"{source}: unknown [repo] keys {sorted(unknown_repo)} (it takes {', '.join(sorted(REPO_KEYS))})")
-    for key in ("remote", "project", "token_file"):
+    for key in ("remote", "token_file"):
         if not isinstance(repo.get(key, ""), str):
             raise ValueError(f"{source}: [repo] {key} must be text")
     for key in ("allow_http", "allow_network_fs"):
@@ -223,6 +228,7 @@ def load_config(project: Path | str | None = None) -> Config:
         output_dir=path(data.get("output_dir"), None) or base / "build",
         cairn_dir=base,
         found=location.found,
+        located=location.how,
         extra_css=css,
         template_dir=template_dir,
         repo=dict(repo),

@@ -1,6 +1,7 @@
 """The layers of the package may import only the layers they are allowed to: parse every module's imports with `ast`.
 
     store/            the repo core: the only code that changes a repo folder; no HTTP, no remote, no configuration
+    api.py            Cairn's errors raised from the caller's call (a decorator over the store's error types)
     client/http.py    HTTP and folder scanning; client/remote.py the repo interface over HTTP
     client/sync.py    the sync engine: outbox -> remote -> the repo; pure mechanism (no configuration, no printing)
     client/repo.py    the two compositions (without and with a remote) behind one interface
@@ -20,12 +21,13 @@ PACKAGE = Path(cairn.__file__).parent
 LEAVES = {"config", "ranges", "formats", "_version"}  # import nothing from cairn
 ALLOWED = {
     "store": {"store", "ranges", "formats"},  # the repo core: no configuration, no client
-    "client": {"client", "store", "config", "ranges", "formats", "_version"},  # formats: the run logger writes what it reads
+    "api": {"store"},  # the error boundary of the public calls
+    "client": {"client", "store", "api", "config", "ranges", "formats", "_version"},  # formats: the run logger writes what it reads
     "server": {"server", "store", "config", "ranges", "_version"},
     "ui": {"ui", "store", "client", "config", "ranges", "_version"},
     "reports": {"reports", "store", "client", "config", "ranges", "formats", "_version"},
     "runs": {"runs", "store", "client", "config", "formats", "_version"},
-    "__init__": {"store", "client", "_version"},  # the API (client lazily)
+    "__init__": {"store", "client", "api", "_version"},  # the API (client lazily)
     "cli": set(),  # argument parsing: anything, lazily; checked separately
 }
 
@@ -224,11 +226,33 @@ def test_no_import_cycles():
     assert not cycle, cycle[0]
 
 
-def test_local_repo_and_remote_implement_the_repo_interface():
+def test_local_project_and_remote_implement_the_repo_interface():
     from cairn.client.remote import Remote
     from cairn.store.interface import METHODS
-    from cairn.store.local import LocalRepo
+    from cairn.store.project import LocalProject
 
-    for cls in (LocalRepo, Remote):
+    for cls in (LocalProject, Remote):
         missing = [name for name in METHODS if name != "uid" and not callable(getattr(cls, name, None))]
         assert not missing, f"{cls.__name__} lacks {missing}"
+
+
+def test_no_layer_above_the_core_names_a_project_in_a_reference():
+    """References name no project (`name@v3`): nothing builds or parses `project:name` outside the UI's JSON, which
+    the app reads that way, and the core has no default project."""
+    import re
+
+    for path in MODULES:
+        name = str(path.relative_to(PACKAGE))
+        code = _code(path)
+        if name in ("ui/server.py",):
+            continue
+        assert not re.search(r"""f["'][^"']*\{project\}:\{""", code), f"{name} formats a project:name reference"
+        assert "ref.project" not in code, f"{name} reads a project from a reference"
+
+
+def test_only_the_policy_module_parses_a_remote_url():
+    for path in MODULES:
+        name = str(path.relative_to(PACKAGE))
+        if name in ("client/open.py", "client/http.py", "ui/backends.py"):
+            continue
+        assert "split_remote" not in _code(path), f"{name} parses a remote URL (client/open.py does)"

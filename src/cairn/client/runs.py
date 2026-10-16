@@ -51,6 +51,7 @@ import threading
 import traceback
 from pathlib import Path
 
+from ..api import public, surface
 from ..store import INPUTS_ENV, INPUTS_FILE, StoreError
 from ..store.inputs import close_sink, open_sink
 from . import logger as _logger
@@ -97,6 +98,7 @@ def _same_store(one, other) -> bool:
     return one.backend.same_as(other.backend)
 
 
+@surface
 class Run(Draft):
     """The process's run: a draft of `runs/<name>` that records the process (see the module doc). Make one with
     `cairn.init()`; it is also a writer on its folder (`add`, `add_figure`, ...)."""
@@ -104,8 +106,8 @@ class Run(Draft):
     is_run = True
 
     def __init__(self, name: str | None = None, *, config=None, metadata: dict | None = None, watch: bool | None = None,
-                 capture: bool = True, system: bool | float = True, code: bool = True, store=None, label: str | None = None,
-                 folder: Path | None = None, adopt: Draft | None = None, inputs=()):
+                 capture: bool = True, system: bool | float = True, code: bool = True, label: str | None = None,
+                 folder: Path | None = None, adopt: Draft | None = None, inputs=(), _repo=None):
         self.run_name = _slug(name or default_name())
         meta = {"kind": "run", **(metadata or {})}
         if config is not None:
@@ -115,11 +117,11 @@ class Run(Draft):
             record.update(metadata={**(record.get("metadata") or {}), **meta}, name=f"{RUNS}/{self.run_name}",
                           label=label or record.get("label"))
             folder = adopt.folder
-            self._setup(folder, folder, record, store, None)
+            self._setup(folder, folder, record, _repo, None)
             self._save()
         else:
             folder, record = reserve(f"{RUNS}/{self.run_name}", label=label, metadata=meta, folder=folder, kind="run")
-            self._setup(folder, folder, record, store, None)
+            self._setup(folder, folder, record, _repo, None)
         if inputs:
             self.record["inputs"] = list(inputs)
             self._save()
@@ -135,6 +137,9 @@ class Run(Draft):
     @property
     def config(self):
         return (self.record.get("metadata") or {}).get("config")
+
+    def _kept_line(self) -> str:
+        return "cairn: the run failed; its folder is kept (cairn drafts lists it)"
 
     # ------------------------------------------------------------ starting
 
@@ -230,7 +235,7 @@ class Run(Draft):
             if other is self or other._closed or other.trial or other.record.get("run") != self.ref:
                 continue
             try:
-                other.fail(error) if error is not None else other.publish()
+                other.fail(error, quiet=True) if error is not None else other.publish()  # the run's line says it
             except Exception as failure:  # noqa: BLE001  (one draft must not keep the run from ending)
                 print(f"warning: could not close the draft {other.folder} ({failure})", file=sys.stderr, flush=True)
         self._release()
@@ -299,8 +304,9 @@ def current() -> Run | None:
     return _CURRENT
 
 
+@public("cairn.init")
 def init(name: str | None = None, *, config=None, metadata: dict | None = None, watch: bool | None = None, capture: bool | None = None,
-         system: bool | float = True, code: bool = True, store=None, label: str | None = None, _adopt: Draft | None = None,
+         system: bool | float = True, code: bool = True, label: str | None = None, _adopt: Draft | None = None,
          _folder: Path | None = None, _inputs=()) -> Run:
     """Start this process's run (see the module doc), or return it when it already runs.
 
@@ -308,7 +314,7 @@ def init(name: str | None = None, *, config=None, metadata: dict | None = None, 
     `metadata.config`, `metadata` is added to the version's metadata. `watch` (default: True with a remote)
     keeps the running version synced while it runs; `capture` tees stdout and stderr into logs/; `system` samples
     the machine every 10 s (or every `system` seconds); `code` snapshots the source and the installed packages.
-    `store` as for `cairn.publish` (None: the project's repo). A second call returns the current run; with
+    The run is a version of the project's repo. A second call returns the current run; with
     another name it raises, and a `config` or `metadata` given then is added to the running run (also when the
     first `use`/`pull`/`draft` started it implicitly)."""
     with _LOCK:
@@ -320,7 +326,7 @@ def init(name: str | None = None, *, config=None, metadata: dict | None = None, 
                 run.set_metadata(**({"config": config} if config is not None else {}), **(metadata or {}))
             return run
         run = Run(name, config=config, metadata=metadata, watch=watch,
-                  capture=CAPTURE_DEFAULT if capture is None else capture, system=system, code=code, store=store,
+                  capture=CAPTURE_DEFAULT if capture is None else capture, system=system, code=code,
                   label=label, folder=_folder, adopt=_adopt, inputs=_inputs)
         try:
             with budget(START_BUDGET):  # its start waits for the remote this long in all; then it is pending
@@ -338,19 +344,20 @@ def init(name: str | None = None, *, config=None, metadata: dict | None = None, 
         return run
 
 
-def ensure(store=None) -> Run | None:
+def ensure() -> Run | None:
     """The current run, else a new one (implicitly, named after the script); None in a subprocess of a run (it
     inherited `$CAIRN_RUN`): that run records what this process reads."""
     if _CURRENT is not None:
         return _CURRENT
     if os.environ.get(RUN_ENV):
         return None
-    return init(store=store)
+    return init()
 
 
 def input_for(draft: Draft) -> str | None:
-    """The run reference a draft opened now gets as its input (starting the run if needed)."""
-    run = ensure(draft._store_arg)
+    """The run reference a draft opened now gets as its input (starting the run if needed); none when the draft goes to
+    another repo than the run (a foreign repo: `cairn.connect(<folder>).artifact(...).draft()`)."""
+    run = ensure()
     if run is None:
         return os.environ.get(RUN_ENV)
     if not _same_store(run.store, draft.store):

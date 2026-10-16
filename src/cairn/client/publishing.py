@@ -30,29 +30,37 @@ import threading
 import time
 from pathlib import Path
 
+from ..api import public, surface
 from ..config import Config, load_config
 from ..store import INPUTS_ENV, INPUTS_FILE, MissingBlobs, StoreError, read_inputs, refs
 from .http import scan
-from .open import as_repo, open_repo, versions_of
+from .open import open_repo
 
 SETTLE = 2.0  # seconds without new changes before a changed folder is synced
 
 
-def _target(name: str, store) -> tuple[str, str]:
-    """(project, artifact name) for a publish target."""
+def _target(name: str) -> str:
+    """The artifact name of a publish target."""
     target = refs.parse(name)
     if target.selector or target.path:
-        raise ValueError(f"publish takes an artifact name, not {name!r}")
-    project = target.project or store.project
-    if project is None:
-        raise StoreError(f"{name!r} has no project and the repo has no default")
-    return project, target.name
+        raise refs.InvalidRef(f"publish takes an artifact name, not {name!r}")
+    return target.name
 
 
+def publish_version(repo, name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
+                    inputs=None, config: Config | None = None, allow_incomplete: bool = False):
+    """`Artifact.publish` in the repo `repo` (a client/repo.py ProjectRepo): the Version."""
+    from .objects import Repo
+
+    return Repo(repo).artifact(_target(name)).publish(folder, metadata=metadata, aliases=aliases, label=label, inputs=inputs,
+                                                      config=config, allow_incomplete=allow_incomplete)
+
+
+@public("cairn.publish")
 def publish(name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-            inputs=None, store=None, config: Config | None = None,
-            allow_incomplete: bool = False) -> int | None:
-    """Store a folder as the next version of artifact `name`; returns the version number (`Artifact.publish`).
+            inputs=None, config: Config | None = None, allow_incomplete: bool = False) -> int | None:
+    """Store a folder as the next version of artifact `name` in the project's repo; returns the version number
+    (`Artifact.publish`).
 
     A symlinked folder is followed (the label defaults to the resolved folder's name). A folder whose
     `run.json` is not `completed` is refused unless `allow_incomplete` (then `metadata.run_status` records it). When nothing
@@ -60,16 +68,13 @@ def publish(name: str, folder: Path | str, *, metadata: dict | None = None, alia
     remote did not answer: the version is pending in the repo's outbox (`cairn status`), usable here
     by its uid, and sent later.
     """
-    from .objects import Repo
-
-    backend = as_repo(store)
-    project, artifact = _target(name, backend)
-    version = Repo(backend).project(project).artifact(artifact).publish(folder, metadata=metadata, aliases=aliases,
-                                                                          label=label, inputs=inputs, config=config,
-                                                                          allow_incomplete=allow_incomplete)
-    return version.number
+    repo = open_repo(config)
+    repo.resume()
+    return publish_version(repo, name, folder, metadata=metadata, aliases=aliases, label=label, inputs=inputs, config=config,
+                           allow_incomplete=allow_incomplete).number
 
 
+@surface
 class Publication:
     """One running version that follows a folder while a job writes it.
 
@@ -84,12 +89,12 @@ class Publication:
     """
 
     def __init__(self, name: str, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
-                 inputs=None, store=None, uid: str | None = None):
+                 inputs=None, uid: str | None = None, _repo=None):
         from .open import heartbeat_timeout
 
         self.local = Path(folder).resolve()
-        self.store = as_repo(store)
-        self.project, self.name = _target(name, self.store)
+        self.store = _repo if _repo is not None else open_repo()  # the project's repo (a ProjectRepo)
+        self.name = _target(name)
         self.config = load_config()
         self.exclude = self.config.repo.get("exclude", [])
         self.label, self.metadata, self.aliases, self.inputs = label or self.local.name, metadata, tuple(aliases), inputs
@@ -107,8 +112,8 @@ class Publication:
 
     @property
     def ref(self) -> str:
-        """`project:name@v<n>`, or `project:name@<uid>` while it has no number yet."""
-        return refs.exact(self.project, self.name, self.version) if self.version is not None else f"{self.project}:{self.name}@{self.uid}"
+        """`name@v<n>`, or `name@<uid>` while it has no number yet."""
+        return refs.exact(self.name, self.version) if self.version is not None else f"{self.name}@{self.uid}"
 
     def _apply(self, manifest: dict) -> None:
         self.version, self.uid = manifest.get("version"), manifest["uid"]
@@ -137,7 +142,7 @@ class Publication:
             from ..store.uids import new_uid
 
             self.uid = self.uid or new_uid()
-            manifest = self.store.start_version(self.project, self.name, self.label, self.metadata, self.source, uid=self.uid)
+            manifest = self.store.start_version(self.name, self.label, self.metadata, self.source, uid=self.uid)
             self.started = True
             self._apply(manifest)
             self._start_beating()
@@ -150,7 +155,7 @@ class Publication:
             entries, sources = self.store.stage(self.local, self.exclude, self.config.project)
             fresh = [entry for entry in entries if self._sent.get(entry["path"]) != (entry.get("sha256"), entry.get("link"))]
             try:
-                self.store.add_files(self.project, self.name, self.uid, fresh)
+                self.store.add_files(self.name, self.uid, fresh)
                 break
             except MissingBlobs:  # garbage collection removed a staged blob meanwhile: stage again (the version is fine)
                 if attempt == 2:
@@ -160,14 +165,14 @@ class Publication:
                 raise
         self.store.restage(entries, sources)
         self._sent.update({entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in fresh})
-        self._apply(self.store.get_version(self.project, self.name, self.uid))
+        self._apply(self.store.get_version(self.name, self.uid))
         return len(fresh)
 
     def set_metadata(self, metadata: dict) -> None:
         """Replace the metadata of the running version (not once it completed or failed)."""
         self.metadata = metadata
         if self.started:
-            self.store.set_metadata(self.project, self.name, self.uid, metadata)
+            self.store.set_metadata(self.name, self.uid, metadata)
 
     def complete(self) -> int | None:
         """Sync a last time, freeze the version, move `latest`, and apply the aliases. While the remote does not answer,
@@ -175,13 +180,13 @@ class Publication:
         self.sync()
         merged = [*read_inputs(self.local), *(str(item) for item in self.inputs or [])]
         self._stop_beating()
-        self._apply(self.store.complete_version(self.project, self.name, self.uid, merged, self.aliases))
+        self._apply(self.store.complete_version(self.name, self.uid, merged, self.aliases))
         return self.version
 
     def fail(self) -> None:
         if self.started:
             self._stop_beating()
-            self.store.fail_version(self.project, self.name, self.uid)
+            self.store.fail_version(self.name, self.uid)
 
     def __enter__(self) -> "Publication":
         self.start()
@@ -213,24 +218,30 @@ def describe(version: dict) -> str:
     return f"{len(version['files'])} files, {size / 1e6:.1f} MB"
 
 
+def published(name: str, version: dict, before: int = 0) -> str:
+    """The line a publish prints: `published descent@v3 (3f9a2c1; 2 files, 0.1 MB)`, `descent@v3 (3f9a2c1) unchanged`,
+    or `pending descent@<uid> (3f9a2c1): ...` while the remote does not answer."""
+    short = refs.short_of(version)
+    if version.get("version") is None:
+        return (f"pending {name}@{version['uid']} ({short}): the remote does not answer; `cairn status` lists it, `cairn sync` "
+                "sends it")
+    if version["version"] <= before:
+        return f"{name}@v{version['version']} ({short}) unchanged"
+    return f"published {name}@v{version['version']} ({short}; {describe(version)})"
+
+
 def publish_folder(config: Config, folder: Path, name: str, label: str | None, aliases: list[str], meta: dict,
                    allow_incomplete: bool = False) -> None:
     """Publish one folder and print what happened."""
     store = open_repo(config)
+    target = _target(name)
     try:
-        before = max((v["version"] or 0 for v in versions_of(store, name)), default=0)
+        before = max((v["version"] or 0 for v in store.versions(target)), default=0)
     except StoreError:  # also a remote that does not answer: the version stays pending below
         before = 0
-    number = publish(name, folder, metadata=meta, aliases=aliases, label=label, store=store, config=config,
-                    allow_incomplete=allow_incomplete)
-    target = refs.parse(name)
-    if number is None:
-        return print(f"pending {target.name}: the remote does not answer; `cairn status` lists it, `cairn sync` sends it", flush=True)
-    if number <= before:
-        print(f"{target.name}@v{number} unchanged", flush=True)
-    else:
-        state = store.resolve(refs.exact(target.project or store.project, target.name, number))[2]
-        print(f"published {target.name}@v{number} ({describe(state)})", flush=True)
+    version = publish_version(store, target, folder, metadata=meta, aliases=aliases, label=label, config=config,
+                              allow_incomplete=allow_incomplete)
+    print(published(target, version.manifest, before), flush=True)
 
 
 def signature(folder: Path, config: Config) -> dict:
@@ -255,7 +266,7 @@ def watch_folder(config: Config, folder: Path, name: str, label: str | None, ali
 
 
 def _follow(config, folder, name, label, aliases, meta, command, interval, settle, tick, stopped) -> int:
-    pub = Publication(name, folder, metadata=meta, aliases=aliases, label=label, store=open_repo(config))
+    pub = Publication(name, folder, metadata=meta, aliases=aliases, label=label, _repo=open_repo(config))
     for attempt in range(5):  # a repo that errors; a remote that does not answer is no reason to wait
         try:
             pub.start()
@@ -265,11 +276,12 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
                 raise
             print(f"warning: could not start the version ({error}); retrying", file=sys.stderr, flush=True)
             time.sleep(1)
+    short = refs.default_short_id(pub.uid)
     if pub.version is None:
-        print(f"publishing {folder} as {pub.name}@{pub.uid} (running, pending: the remote does not answer yet) every {interval:g} s",
-              flush=True)
+        print(f"publishing {folder} as {pub.name}@{pub.uid} ({short}; running, pending: the remote does not answer yet) every "
+              f"{interval:g} s", flush=True)
     else:
-        print(f"publishing {folder} as {pub.name}@v{pub.version} (running) every {interval:g} s", flush=True)
+        print(f"publishing {folder} as {pub.name}@v{pub.version} ({short}; running) every {interval:g} s", flush=True)
     # what the command pulls is recorded in the folder it writes, unless the caller chose a file
     env = os.environ | {INPUTS_ENV: os.environ.get(INPUTS_ENV) or str(Path(folder).resolve() / INPUTS_FILE)}
     process = subprocess.Popen(command, env=env) if command else None
@@ -324,11 +336,10 @@ def _follow(config, folder, name, label, aliases, meta, command, interval, settl
             else:
                 number = pub.complete()
                 if number is None or pub.queued:
-                    print(f"pending {pub.name}@{pub.uid} (completed): the remote does not answer; it is sent when it does"
-                          " (`cairn status` lists it, `cairn sync` sends it)", flush=True)
+                    print(f"pending {pub.name}@{pub.uid} ({short}; completed): the remote does not answer; it is sent when it "
+                          "does (`cairn status` lists it, `cairn sync` sends it)", flush=True)
                 else:
-                    state = pub.store.resolve(refs.exact(pub.project, pub.name, number))[2]
-                    print(f"published {pub.name}@v{number} ({describe(state)})", flush=True)
+                    print(published(pub.name, pub.store.get_version(pub.name, pub.uid)), flush=True)
             return code
         except (StoreError, OSError) as error:
             if "can no longer change" in str(error):

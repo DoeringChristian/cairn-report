@@ -1,8 +1,9 @@
 """The HTTP client and folder helpers behind `Remote` and publishing.
 
-`Client` talks to a remote (bearer token, HTTPS unless the host is local or `allow_http`); `scan` and `entries_for`
-turn a folder into manifest entries (hashes from a store.hashes.HashCache); `upload_missing` sends only the blobs
-the remote lacks. Nothing here reads the configuration or knows about repos.
+`Client` talks to a server (bearer token, HTTPS unless the host is local or `allow_http`; the server may sit behind
+a path prefix, `https://host/prefix`); `split_remote` is the one place that reads a remote URL `<server>/<project>`;
+`scan` and `entries_for` turn a folder into manifest entries (hashes from a store.hashes.HashCache);
+`upload_missing` sends only the blobs the remote lacks. Nothing here reads the configuration or knows about repos.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 TOKEN_ENV = "CAIRN_TOKEN"
 SKIP_NAMES = {"__pycache__", ".DS_Store"}
@@ -184,17 +185,45 @@ def _message(method: str, path: str, status: int, data: bytes) -> str:
         return f"{method} {path}: HTTP {status} {data[:300].decode(errors='replace')}"
 
 
+def split_remote(url: str) -> tuple[str, str | None]:
+    """(server URL, project) of a remote URL: its last path segment is the project (`https://host/my-study`:
+    `https://host` and `my-study`; `https://host/prefix/my-study`: `https://host/prefix`). Without a path the project
+    is None (a server, not one of its projects)."""
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:
+        raise SystemExit(f"remote URL {url!r} must look like https://host[:port][/prefix]/<project>")
+    path = parsed.path.rstrip("/")
+    if not path:
+        return urlunparse(parsed._replace(path="")).rstrip("/"), None
+    head, _, project = path.rpartition("/")
+    return urlunparse(parsed._replace(path=head)).rstrip("/"), project
+
+
 class Client:
-    def __init__(self, url: str, token: str, allow_http: bool = False, timeout: float = 120):
+    """HTTP to one server, `url` (with a path prefix if it sits behind one: requests go to `<prefix>/api/...`)."""
+
+    def __init__(self, url: str, token: str, allow_http: bool = False, timeout: float = 120, token_source: str | None = None,
+                 token_places: str | None = None):
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
-            raise SystemExit(f"remote URL {url!r} must look like https://host[:port]")
-        if parsed.path not in ("", "/"):
-            raise SystemExit(f"remote URL {url!r}: serve the remote at the root of its host, without a path")
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:
+            raise SystemExit(f"server URL {url!r} must look like https://host[:port][/prefix]")
         if parsed.scheme == "http" and parsed.hostname not in LOCAL_HOSTS and not allow_http:
             raise SystemExit(f"refusing to send the token over plain HTTP to {parsed.hostname}; "
                              "use https://, an SSH tunnel to localhost, or [repo] allow_http (--allow-http)")
         self.url, self.parsed, self.token, self.timeout = url.rstrip("/"), parsed, token, timeout
+        self.base = parsed.path.rstrip("/")  # the server's path prefix ("" at the root of its host)
+        self.token_source = token_source  # where the token came from, for messages (never the token itself)
+        self.token_places = token_places  # where a token was looked for, when none was found
+
+    def refused(self, where: str | None = None) -> str:
+        """What a 401 means, naming where the token came from (never the token): `where` is the remote's address."""
+        where = where or self.url
+        if self.token:
+            return f"the token from {self.token_source or 'the caller'} was refused by {where}"
+        return f"{where} needs a token, and none was found ({self.token_places or 'set CAIRN_TOKEN'})"
+
+    def _headers(self, headers: dict | None) -> dict:
+        return {**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})}
 
     @property
     def _key(self) -> tuple:
@@ -257,7 +286,7 @@ class Client:
                 raise _no_answer(method, path, self.url, error) from error
             keep = False
             try:
-                connection.request(method, path, body=body, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})
+                connection.request(method, self.base + path, body=body, headers=self._headers(headers))
                 response = connection.getresponse()
                 if response.status in expect and stream_to is not None:
                     with stream_to.open("wb") as handle:
@@ -286,8 +315,7 @@ class Client:
         if stream_to is not None and response.status in expect:
             return response.status, b""
         if response.status == 401:
-            raise ClientError("the remote rejected the token" if self.token else
-                              "the remote needs a token: set CAIRN_TOKEN or [repo] token_file", 401)
+            raise ClientError(self.refused(), 401)
         if response.status not in expect:
             raise ClientError(_message(method, path, response.status, data), response.status, body=data)
         return response.status, data
@@ -300,15 +328,14 @@ class Client:
             raise _no_answer("GET", path, self.url, error) from error
         try:
             try:
-                connection.request("GET", path, headers={**({"Authorization": f"Bearer {self.token}"} if self.token else {}), **(headers or {})})
+                connection.request("GET", self.base + path, headers=self._headers(headers))
                 response = connection.getresponse()
             except (OSError, http.client.HTTPException) as error:
                 raise _no_answer("GET", path, self.url, error) from error
             found = {key.lower(): value for key, value in response.getheaders()}
             if response.status == 401:
-                data = response.read()
-                raise ClientError("the remote rejected the token" if self.token else
-                                  "the remote needs a token: set CAIRN_TOKEN or [repo] token_file", 401, found)
+                response.read()
+                raise ClientError(self.refused(), 401, found)
             if response.status not in expect:
                 raise ClientError(_message("GET", path, response.status, response.read()), response.status, found)
         except BaseException:

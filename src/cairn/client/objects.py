@@ -1,36 +1,37 @@
-"""The object API: a repo, its projects, their artifacts, and the artifacts' versions.
+"""The object API: the project's repo, its artifacts, and the artifacts' versions.
 
     import cairn
 
     repo = cairn.connect()                        # the project's repo (with its remote, if [repo] remote names one)
-    project = repo.project()                      # the configured project; repo.project("other") for another
-    crops = project.artifact("datasets/crops")
-    v3 = crops.version(3)                         # also "v3", an alias, a label, or a uid; crops.latest
-    v3.files, v3.metadata, v3.inputs, v3.consumers
+    crops = repo.artifact("datasets/crops")       # repo.artifacts(prefix="datasets/")
+    v3 = crops.version(3)                         # also "v3", an alias, a label, a uid, or a short id; crops.latest
+    v3.files, v3.metadata, v3.inputs, v3.consumers, v3.short_id
     with v3.open("tables/cases.csv") as handle:  # streams one file (recorded as an input, like pull)
         ...
     folder = v3.pull()                            # the whole version, read-only, in the repo
-    fit = project.artifact("fit").publish("outputs/fit", metadata={"loss": 0.1}, aliases=["best"])
-    fit.ref                                       # "study:fit@v4"; a pending version: number None, ref by uid
+    fit = repo.artifact("fit").publish("outputs/fit", metadata={"loss": 0.1}, aliases=["best"])
+    fit.ref                                       # "fit@v4"; a pending version: number None, ref by uid
     v3.delete(reason="bad crop")                  # a tombstone; refused for protected versions unless force=True
-    project.retention = [{"prefix": "runs/", "keep_last": 5}]   # applied by repo.gc(dry_run=False)
+    repo.retention = [{"prefix": "runs/", "keep_last": 5}]   # applied by repo.gc(dry_run=False)
 
-Objects are thin and lazy: a `Project` reads its record, an `Artifact` its summary, and a `Version` its
-manifest on first access and keep them. The backend is a LocalRepo (no remote) or a SyncedRepo (repo.py). With a
-remote, publishing goes through the outbox (outbox.py, sync.py): the version is committed there first, and when
-the remote does not answer, `publish` returns a pending `Version` (status `pending`, number None) that is usable at
-once (`pull`, `open`, as an input by its uid), and it is sent once the remote answers (a background uploader, the
-next command, `cairn sync`).
+A repo holds one project, so nothing here names one. Objects are thin and lazy: an `Artifact` reads its summary and
+a `Version` its manifest on first access and keep them. The backend is a client/repo.py ProjectRepo, without or with
+a remote. With a remote, publishing goes through the outbox (outbox.py, sync.py): the version is committed there
+first, and when the remote does not answer, `publish` returns a pending `Version` (status `pending`, number None) that
+is usable at once (`pull`, `open`, as an input by its uid), and it is sent once the remote answers (a background
+uploader, the next command, `cairn sync`).
+
+Every public method and property raises Cairn's errors from the caller's call (cairn/api.py).
 """
 
 from __future__ import annotations
 
 import io
 import socket
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..api import public, surface
 from ..config import Config, load_config
 from ..store import IncompleteRun, StoreError, read_inputs, record_input, refs, run_status
 from ..store.blobs import resolve_entry
@@ -55,11 +56,12 @@ def _source(local: Path) -> dict:
     return {"host": socket.gethostname(), "folder": str(local)}
 
 
+@surface
 class Repo:
     """The project's repo (`backend`: a client/repo.py ProjectRepo, with or without a remote)."""
 
     def __init__(self, backend: ProjectRepo):
-        if not isinstance(backend, ProjectRepo):  # a LocalRepo, a repo folder, a Remote, a remote's URL
+        if not isinstance(backend, ProjectRepo):  # a repo folder, a remote's URL
             from .open import as_repo
 
             backend = as_repo(backend)
@@ -70,57 +72,37 @@ class Repo:
 
     @property
     def remote(self) -> str | None:
-        """The remote's address (the source of truth for numbers, aliases, and deletions), else None."""
+        """The remote's address, `<server>/<project>` (the source of truth for numbers, aliases, and deletions), else None."""
         return self.backend.url
 
     @property
     def uid(self) -> str | None:
-        """The uid of the source of truth: the remote's repo, else this repo."""
+        """The uid of the source of truth: the remote's server, else this repo."""
         return self.backend.uid
 
     @property
     def root(self) -> Path:
         return self.backend.root
 
-    # ------------------------------------------------------------- projects
-
-    def projects(self) -> list["Project"]:
-        return [Project(self, item["name"], item) for item in self.backend.projects()]
-
-    def project(self, name: str | None = None) -> "Project":
-        """A project by name; None means the configured default (`[repo] project`)."""
-        name = name or self.backend.project
-        if name is None:
-            raise StoreError("no project named and the repo has no default")
-        return Project(self, refs.valid_project(name))
-
-    def create_project(self, name: str, title: str | None = None, description: str = "") -> "Project":
-        """Create a project (an existing one is returned unchanged)."""
-        return Project(self, name, self.backend.create_project(name, title, description))
-
-    # ------------------------------------------------------------ shortcuts
+    def artifacts(self, prefix: str | None = None) -> list["Artifact"]:
+        """The artifacts (names starting with `prefix`, e.g. "reports/"), sorted by name."""
+        found = [Artifact(self, item["name"], item) for item in self.backend.summaries()]
+        return sorted((item for item in found if not prefix or item.name.startswith(prefix)), key=lambda item: item.name)
 
     def artifact(self, name: str) -> "Artifact":
-        """`[project:]name`, the project defaulting to the configured one."""
-        ref = refs.parse(name)
-        if ref.selector or ref.path:
-            raise ValueError(f"an artifact name, not a reference: {name!r}")
-        return self.project(ref.project).artifact(ref.name)
+        """An artifact by name (lazy: it need not exist yet)."""
+        return Artifact(self, refs.valid_name(name))
 
     def version(self, ref: str, *, offline: bool = False) -> "Version":
-        """The version a reference names (`[project:]name[@selector]`), resolved now (with the offline fallbacks). An
-        exact reference (`@v<n>`, `@<uid>`) also names a running or failed version."""
-        parsed = refs.parse(ref)
-        try:
-            project, name, manifest = self.backend.resolve(parsed, offline)
-        except (Deleted, NotFound, Unreachable):
-            raise
-        except StoreError:
-            found = self._exact_version(ref) if parsed.exact else None
-            if found is None:
-                raise
-            return found
-        return Version(self.project(project).artifact(name), manifest)
+        """The version a reference names (`name[@selector]`, or a bare short id), resolved now (with the offline
+        fallbacks). An exact reference (`@v<n>`, `@<uid>`) or a short id also names a running or failed version; a
+        deleted one raises Deleted."""
+        name, manifest = self.backend.find(refs.parse(ref), offline)
+        version = Version(self.artifact(name), manifest)
+        if version.deleted:
+            raise Deleted(f"{version.ref} was deleted ({(manifest.get('deleted_at') or '')[:19]})"
+                          + (f": {manifest['reason']}" if manifest.get("reason") else ""))
+        return version
 
     def pull(self, ref: str, *, record: bool = True, offline: bool = False) -> Path:
         """A read-only local copy of the version (or of the file after `//`) a reference names."""
@@ -129,23 +111,30 @@ class Repo:
     def _exact_version(self, ref: str) -> "Version | None":
         """The version an exact reference names, whatever its status (a deleted one as its tombstone), else None."""
         try:
-            project, name, manifest = self.backend.resolve(refs.parse(ref))
-            return Version(self.project(project).artifact(name), manifest)
-        except (StoreError, ValueError):
-            pass
-        try:
-            parsed = refs.parse(ref)
-            project = parsed.project or self.backend.project
-            selector = parsed.version if parsed.version is not None else parsed.uid
-            if selector is None:
-                return None
-            return Version(self.project(project).artifact(parsed.name), self.backend.get_version(project, parsed.name, selector))
+            name, manifest = self.backend.find(refs.parse(ref))
         except (StoreError, ValueError):
             return None
+        return Version(self.artifact(name), manifest)
 
     def pending(self) -> list["Version"]:
         """The versions of this repo the remote does not have yet: pending, running, rejected (none without a remote)."""
         return [Version.from_record(self, record) for record in self.backend.pending()]
+
+    @property
+    def retention(self) -> list[dict]:
+        """The retention rules, [{prefix, keep_last, keep_days, keep_aliased}]; they act when `gc` runs."""
+        return self.backend.retention()
+
+    @retention.setter
+    def retention(self, rules: list[dict]) -> None:
+        self.backend.set_retention(rules)
+
+    def set_retention(self, prefix: str = "", *, keep_last: int | None = None, keep_days: float | None = None,
+                      keep_aliased: bool = True) -> list[dict]:
+        """Add or replace the rule for one artifact-name prefix ("" for every artifact); returns every rule."""
+        rules = [rule for rule in self.backend.retention() if rule["prefix"] != prefix]
+        rules.append({"prefix": prefix, "keep_last": keep_last, "keep_days": keep_days, "keep_aliased": keep_aliased})
+        return self.backend.set_retention(rules)
 
     def verify(self, ref: str | None = None, *, repair: bool = False):
         """Re-hash what this repo holds and return a `Report` (`.ok`, `.problems`, `.summary()`; `cairn verify`).
@@ -167,101 +156,40 @@ class Repo:
         return self.backend.gc(dry_run=dry_run, grace=grace)
 
 
-class Project:
-    def __init__(self, store: Repo, name: str, record: dict | None = None):
-        self.store, self.name, self._record = store, name, record
-
-    def __repr__(self) -> str:
-        return f"<cairn.Project {self.name}>"
-
-    def __eq__(self, other) -> bool:
-        return isinstance(other, Project) and other.store.backend is self.store.backend and other.name == self.name
-
-    __hash__ = object.__hash__
-
-    @property
-    def record(self) -> dict:
-        if self._record is None or "title" not in self._record:
-            self._record = self.store.backend.get_project(self.name)
-        return self._record
-
-    @property
-    def title(self) -> str:
-        return self.record.get("title") or self.name
-
-    @property
-    def description(self) -> str:
-        return self.record.get("description") or ""
-
-    def update(self, title: str | None = None, description: str | None = None) -> "Project":
-        self._record = self.store.backend.update_project(self.name, title, description)
-        return self
-
-    def artifacts(self, prefix: str | None = None) -> list["Artifact"]:
-        """The project's artifacts (names starting with `prefix`, e.g. "reports/"), sorted by name."""
-        found = [Artifact(self, item["name"], item) for item in self.store.backend.summaries(self.name)]
-        return sorted((item for item in found if not prefix or item.name.startswith(prefix)), key=lambda item: item.name)
-
-    def artifact(self, name: str) -> "Artifact":
-        return Artifact(self, refs.valid_name(name))
-
-    @property
-    def retention(self) -> list[dict]:
-        """The retention rules, [{prefix, keep_last, keep_days, keep_aliased}]; they act when `Store.gc` runs."""
-        return self.store.backend.retention(self.name)
-
-    @retention.setter
-    def retention(self, rules: list[dict]) -> None:
-        self.store.backend.set_retention(self.name, rules)
-
-    def set_retention(self, prefix: str = "", *, keep_last: int | None = None, keep_days: float | None = None,
-                      keep_aliased: bool = True) -> list[dict]:
-        """Add or replace the rule for one artifact-name prefix ("" for the whole project); returns every rule."""
-        rules = [rule for rule in self.retention if rule["prefix"] != prefix]
-        rules.append({"prefix": prefix, "keep_last": keep_last, "keep_days": keep_days, "keep_aliased": keep_aliased})
-        return self.store.backend.set_retention(self.name, rules)
-
-    def delete(self, *, force: bool = False, reason: str | None = None) -> dict:
-        """Delete the project: refused while it has versions that are not deleted, unless `force` (owner only on a server)."""
-        return self.store.backend.delete_project(self.name, reason=reason, force=force)
-
-
+@surface
 class Artifact:
-    def __init__(self, project: Project, name: str, summary: dict | None = None):
-        self.project, self.name, self._summary = project, name, summary
+    def __init__(self, repo: Repo, name: str, summary: dict | None = None):
+        self.repo, self.name, self._summary = repo, name, summary
 
     def __repr__(self) -> str:
-        return f"<cairn.Artifact {self.project.name}:{self.name}>"
-
-    @property
-    def store(self) -> Repo:
-        return self.project.store
+        return f"<cairn.Artifact {self.name}>"
 
     @property
     def backend(self):
-        return self.project.store.backend
+        return self.repo.backend
 
     @property
     def summary(self) -> dict:
         if self._summary is None:
-            self._summary = self.backend.summary(self.project.name, self.name)
+            self._summary = self.backend.summary(self.name)
         return self._summary
 
     @property
     def aliases(self) -> dict[str, int]:
-        return self.backend.aliases(self.project.name, self.name)
+        return self.backend.aliases(self.name)
 
     def versions(self) -> list["Version"]:
         """Every version, oldest first, whatever its status; this repo's versions the remote lacks come last (pending)."""
         try:
-            return [Version(self, manifest) for manifest in self.backend.versions(self.project.name, self.name)]
+            return [Version(self, manifest) for manifest in self.backend.versions(self.name)]
         except NotFound:
             return []
 
     def version(self, selector: int | str) -> "Version":
-        """A version by number (3 or "v3"), uid, alias, or label (completed versions only for the last two). Lazy."""
+        """A version by number (3 or "v3"), uid, short id, alias, or label (completed versions only for the last two).
+        Lazy."""
         if isinstance(selector, bool) or not isinstance(selector, (int, str)):
-            raise TypeError("a version is a number, 'v<n>', a uid, an alias, or a label")
+            raise TypeError("a version is a number, 'v<n>', a uid, a short id, an alias, or a label")
         text = f"v{selector}" if isinstance(selector, int) else selector
         refs.parse(f"{self.name}@{text}")  # validates it
         return Version(self, None, text)
@@ -277,11 +205,11 @@ class Artifact:
         if version.number is None:
             raise StoreError(f"{version.ref} is pending (the remote does not have it yet): alias it once it is sent"
                              " (or pass aliases= to publish)")
-        self.backend.set_alias(self.project.name, self.name, name, version.number)
+        self.backend.set_alias(self.name, name, version.number)
 
     def delete(self, *, force: bool = False, reason: str | None = None) -> dict:
         """Delete every version (all or none, under the rules of `Version.delete`); returns {deleted, skipped}."""
-        result = self.backend.delete_artifact(self.project.name, self.name, reason=reason, force=force)
+        result = self.backend.delete_artifact(self.name, reason=reason, force=force)
         self._summary = None
         return result
 
@@ -306,16 +234,16 @@ class Artifact:
         """
         local = Path(folder).resolve()
         if not local.is_dir():
-            raise ValueError(f"{folder} is not a folder")
+            raise StoreError(f"{folder} is not a folder")
         status = run_status(local)
         if status not in (None, "completed"):
             if not allow_incomplete:
                 raise IncompleteRun(f"{folder}/run.json says {status}; publish completed runs, or pass --allow-incomplete"
-                                 " (allow_incomplete=True)")
+                                    " (allow_incomplete=True)")
             metadata = {**(metadata or {}), "run_status": status}
         config = config or load_config()
         merged = [*read_inputs(local), *(str(item) for item in inputs or [])]
-        manifest = self.backend.publish_folder(self.project.name, self.name, local, exclude=config.repo.get("exclude", []),
+        manifest = self.backend.publish_folder(self.name, local, exclude=config.repo.get("exclude", []),
                                                project_root=config.project, link=_link, label=label or local.name,
                                                metadata=metadata, inputs=merged, aliases=aliases, source=_source(local), uid=_uid)
         return Version(self, manifest)
@@ -325,18 +253,18 @@ class Artifact:
         a context manager with the `add`/`add_*` writer; see `cairn.draft`)."""
         from .drafts import Draft
 
-        return Draft(f"{self.project.name}:{self.name}", label=label, metadata=metadata, aliases=aliases, watch=watch,
-                     store=self.store)
+        return Draft(self.name, label=label, metadata=metadata, aliases=aliases, watch=watch, _repo=self.repo)
 
     def publishing(self, folder: Path | str, *, metadata: dict | None = None, aliases=(), label: str | None = None,
                    inputs=None):
         """A running version that follows a folder while a job writes it (a `Publication`, a context manager)."""
         from .publishing import Publication
 
-        return Publication(f"{self.project.name}:{self.name}", folder, metadata=metadata, aliases=aliases, label=label,
-                           inputs=inputs, store=self.backend)
+        return Publication(self.name, folder, metadata=metadata, aliases=aliases, label=label, inputs=inputs,
+                           _repo=self.backend)
 
 
+@surface
 class Version:
     """One version of an artifact. `number` is None while it is pending: on this machine, not yet on the server."""
 
@@ -344,12 +272,14 @@ class Version:
         self.artifact, self._manifest, self._selector = artifact, manifest, selector
 
     @classmethod
-    def from_record(cls, store: Repo, record: dict) -> "Version":
+    def from_record(cls, repo: Repo, record: dict) -> "Version":
         """A version from an outbox entry (one the remote does not have yet)."""
-        return cls(store.project(record["project"]).artifact(record["name"]), manifest_of(record))
+        return cls(repo.artifact(record["name"]), manifest_of(record))
 
     def __repr__(self) -> str:
-        return f"<cairn.Version {self.ref if self._manifest is not None else f'{self.artifact.name}@{self._selector}'}>"
+        if self._manifest is None:
+            return f"<cairn.Version {self.artifact.name}@{self._selector}>"
+        return f"<cairn.Version {self.ref} ({self.short_id})>"
 
     def __eq__(self, other) -> bool:
         return isinstance(other, Version) and other.uid == self.uid
@@ -365,16 +295,16 @@ class Version:
 
     def _load(self) -> dict:
         artifact, selector = self.artifact, self._selector
-        project, name, backend = artifact.project.name, artifact.name, artifact.backend
+        backend = artifact.backend
         if refs.VERSION.fullmatch(selector) or UID.fullmatch(selector):  # any status, like versions()
-            return backend.get_version(project, name, int(selector[1:]) if refs.VERSION.fullmatch(selector) else selector)
-        return backend.resolve(Ref(project, name, selector))[2]
+            return backend.get_version(artifact.name, int(selector[1:]) if refs.VERSION.fullmatch(selector) else selector)
+        return backend.find(Ref(artifact.name, selector))[1]
 
     def refresh(self) -> "Version":
         """Read the manifest again (a pending version learns its number once the remote has it)."""
         uid = self.manifest["uid"]
         try:
-            self._manifest = self.artifact.backend.get_version(self.artifact.project.name, self.artifact.name, uid)
+            self._manifest = self.artifact.backend.get_version(self.artifact.name, uid)
         except (NotFound, Unreachable):
             if not self.manifest.get("pending"):
                 raise
@@ -391,9 +321,15 @@ class Version:
         return self.manifest["uid"]
 
     @property
+    def short_id(self) -> str:
+        """The first hex digits of the SHA-256 of the uid (7, more when needed to be unique in the project); any unique
+        prefix of 4 or more names the version (`name@<id>`, or a bare `<id>`)."""
+        return refs.short_of(self.manifest)
+
+    @property
     def ref(self) -> str:
-        """The exact reference: `project:name@v<n>`, or `project:name@<uid>` while the version is pending."""
-        return exact_ref(self.artifact.project.name, self.artifact.name, self.manifest)
+        """The exact reference: `name@v<n>`, or `name@<uid>` while the version is pending."""
+        return exact_ref(self.artifact.name, self.manifest)
 
     @property
     def pending(self) -> bool:
@@ -406,14 +342,14 @@ class Version:
 
     def delete(self, *, force: bool = False, reason: str | None = None) -> dict:
         """Delete this version: it becomes a tombstone (number and uid never used again), `latest` moves back, and
-        its blobs go at the next `Store.gc` unless other versions name them. Refused (Protected) when an alias
+        its blobs go at the next `Repo.gc` unless other versions name them. Refused (Protected) when an alias
         other than `latest` points at it, a version that is not deleted consumed it, or it is running, unless
         `force` (the owner token on a server)."""
         if self.number is None:
             raise StoreError(f"{self.ref} is pending (the remote does not have it yet): nothing to delete there")
         number = self.number
-        result = self.artifact.backend.delete_version(self.artifact.project.name, self.artifact.name, number, reason=reason, force=force)
-        self._manifest = self.artifact.backend.get_version(self.artifact.project.name, self.artifact.name, number)  # the tombstone
+        result = self.artifact.backend.delete_version(self.artifact.name, number, reason=reason, force=force)
+        self._manifest = self.artifact.backend.get_version(self.artifact.name, number)  # the tombstone
         return result
 
     label = property(lambda self: self.manifest.get("label"))
@@ -447,7 +383,7 @@ class Version:
     def run(self) -> "Version | None":
         """The run this version is an output of (the run among its inputs), else None."""
         for ref in self.inputs:
-            found = self.artifact.store._exact_version(ref)
+            found = self.artifact.repo._exact_version(ref)
             if found is not None and found.is_run:
                 return found
         return None
@@ -463,7 +399,7 @@ class Version:
         return self._through("consumers", _runs)
 
     def _through(self, side: str, runs: list | None) -> list["Version"]:
-        store = self.artifact.store
+        repo = self.artifact.repo
         found: list[Version] = []
         seen = {self.ref}
 
@@ -472,7 +408,7 @@ class Version:
                 if ref in seen:
                     continue
                 seen.add(ref)
-                version = store._exact_version(ref)
+                version = repo._exact_version(ref)
                 if version is None:
                     continue
                 if version.is_run:
@@ -503,13 +439,13 @@ class Version:
             raise StoreError(f"{self.ref} is {what} in this repo and the remote does not have it: it cannot be read")
 
     def _record(self, record: bool) -> None:
-        if record and (self.number is not None or self.pending):
+        if record and self.artifact.backend.own and (self.number is not None or self.pending):
             record_input(self.ref, self.uid)
 
     def pull(self, *, record: bool = True) -> Path:
         """The whole version, read-only (`<repo>/versions/<uid>/files/`); recorded as an input."""
         self._usable()
-        folder = self.artifact.backend.local_folder(self.artifact.project.name, self.artifact.name, self.manifest)
+        folder = self.artifact.backend.local_folder(self.artifact.name, self.manifest)
         self._record(record)
         return folder
 
@@ -518,7 +454,7 @@ class Version:
         self._usable()
         entry = resolve_entry(self.manifest["files"], path)
         if entry is None:
-            raise NotFound(f"{self.ref} has no file {path}")
+            raise NotFound(f"{self.ref} has no file {path}{self.artifact.backend.where}")
         from ..store.folders import cached, files_folder, touch, version_folder
 
         backend = self.artifact.backend
@@ -530,7 +466,7 @@ class Version:
             handle = local.open("rb")
         else:
             selector = f"v{self.number}" if self.number is not None else self.uid
-            read = backend.read_file(self.artifact.project.name, self.artifact.name, selector, path)
+            read = backend.read_file(self.artifact.name, selector, path)
             handle = io.BufferedReader(_Chunks(read))
         self._record(record)
         return handle
@@ -564,21 +500,20 @@ class _Chunks(io.RawIOBase):
 # -------------------------------------------------------------------- connect
 
 
-def connect(url_or_path: str | Path | None = None, *, token: str | None = None, project: str | None = None) -> Repo:
-    """A repo: None for the project's (with its remote, if `[repo] remote` names one), a remote's URL (with the project's
-    repo for its outbox and files, and as its cache when it is the project's own remote), or a repo folder on this
-    machine. `project` is the default project (default: the configured one). Connecting to a repo whose outbox holds
-    pending versions starts the background uploader."""
+@public("cairn.connect")
+def connect(path_or_url: str | Path | None = None, *, token: str | None = None) -> Repo:
+    """The project's repo (with its remote, if `[repo] remote` names one); for an admin or a test, a repo folder on this
+    machine or a remote project `<server>/<project>` (with the working directory's repo for its outbox and files).
+    Another project's repo never feeds this project's runs: its pulls record no inputs. Connecting to a repo whose
+    outbox holds pending versions starts the background uploader."""
     from .open import as_repo, open_remote
 
-    if isinstance(url_or_path, Repo):
-        return url_or_path
-    if isinstance(url_or_path, str) and url_or_path.startswith(("http://", "https://")):
-        backend = open_remote(url_or_path, token=token, project=project)
+    if isinstance(path_or_url, Repo):
+        return path_or_url
+    if isinstance(path_or_url, str) and path_or_url.startswith(("http://", "https://")):
+        backend = open_remote(path_or_url, token=token)
     else:
-        backend = as_repo(url_or_path)
-        if project:
-            backend.project = refs.valid_project(project)
+        backend = as_repo(path_or_url)
         if token is not None:
             backend.use_token(token)
     backend.resume()

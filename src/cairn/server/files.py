@@ -41,12 +41,12 @@ def sendfile_enabled() -> bool:
     return choice == "1" if choice in ("0", "1") else sys.platform.startswith("linux")
 
 
-def opened(store, project: str, name: str, selector: str | None, path: str, range_header: str | None):
-    """Resolve, open, and range-check a file (blocking: run it in a worker thread).
+def opened(store, name: str, selector: str | None, path: str, range_header: str | None):
+    """Resolve, open, and range-check a file of a project (`store`: a LocalProject; blocking: run it in a worker thread).
     Returns (sha256, immutable, descriptor, first, last, total, data): a body of at most SMALL bytes is read
     right away (`data`, with the descriptor closed), so a small request takes one trip to a worker thread.
     Raises NotFound or BadRange."""
-    entry, blob, immutable = store.open_file(project, name, selector, path)
+    entry, blob, immutable = store.open_file(name, selector, path)
     descriptor = os.open(blob, os.O_RDONLY)
     try:
         total = os.fstat(descriptor).st_size
@@ -72,16 +72,17 @@ def parse(raw_path: str) -> tuple[str, refs.Ref]:
     head, separator, inner = remainder.partition("//")
     if not separator:
         raise HttpError(404, "file URLs look like /files/<project>/<name>@v<n>//<path>")
-    return project, refs.parse(f"{project}:{head}//{inner}")
+    return project, refs.parse(f"{head}//{inner}")
 
 
 async def serve_file(app, request, principal: Principal, raw_path: str, query: dict):
     """The response for one file request (the app maps HttpError, NotFound, and BadRange to statuses)."""
     project, ref = parse(raw_path)
     allow(principal, project)
+    store = app.view(project)
     loop = asyncio.get_running_loop()
     sha, immutable, descriptor, first, last, total, data = await loop.run_in_executor(
-        app.executor, opened, app.store, project, ref.name, ref.selector, ref.path, request.headers.get("range"))
+        app.executor, opened, store, ref.name, ref.selector, ref.path, request.headers.get("range"))
     etag = f'"{sha}"'
     headers = {"ETag": etag, "X-Content-Type-Options": "nosniff", "Accept-Ranges": "bytes",
                "Cache-Control": "private, max-age=31536000, immutable" if immutable else "no-cache",

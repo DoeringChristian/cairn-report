@@ -505,9 +505,9 @@ class Build:
             if ref.path:
                 raise BuildError(f"{where}: {text!r} names a file; an input is a whole artifact version (use {name}/<file> in the report)")
             try:  # through the repo: its pending versions; with the remote down, its copies
-                project, artifact, version = store.resolve(ref)
-                exact = exact_ref(project, artifact, version)
-                folder = store.local_folder(project, artifact, version)
+                artifact, version = store.resolve(ref)
+                exact = exact_ref(artifact, version)
+                folder = store.local_folder(artifact, version)
             except StoreError as error:
                 raise BuildError(f"{where}: {error}") from error
             self.inputs[name] = {"requested": str(text), "resolved": exact, "uid": version["uid"], "files": len(version["files"]),

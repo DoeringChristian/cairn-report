@@ -1,12 +1,18 @@
 """`cairn server`: a repo (a LocalRepo folder) shared over HTTP, behind tokens: the remote of other machines' repos.
 Only a JSON API and file downloads, no pages (`cairn ui` explores a repo in a browser, locally or against this server).
 
+A server hosts many projects in its one repo folder: each is served at `<server>/<project>` as if it were its own
+repo (a LocalProject, store/project.py), and they share the folder's one database and one content-addressed
+`blobs/`, so a file several projects publish is stored once. Nothing reaches across projects: references and inputs
+name artifacts of the project they are sent to. Serving a project's own repo (`cairn server` in a project), its one
+project is served under the project folder's name (`own`).
+
     cairn server [repo] [--host 127.0.0.1] [--port 8800] [--max-blob-gb 50] [--no-auth] [--gc-interval 24h]
 
 Processes on the server's machine keep opening the repo directly, whether the server runs or not; the server is one
 more such process. A new repo gets a fresh owner token on first launch; every launch prints `Repo: <url>` and
 `Token: <owner token>` and the token file's path to the terminal (never into a URL). Scoped tokens (one project, read or
-write) are made with `cairn token create` (see tokens.py). Bind localhost, and put an
+write) are made with `cairn token create <repo> --project <name>` (see tokens.py). Bind localhost, and put an
 HTTPS reverse proxy in front of anything else: the server speaks plain HTTP.
 
 Artifact names are slash paths (`datasets/crops`), so every route says where the name ends:
@@ -14,6 +20,8 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
     API (JSON, `Authorization: Bearer <token>`; a name is ONE percent-encoded path segment, `datasets%2Fcrops`)
       GET  /api/v2/repo                                          {uid, version}: the repo's uid and the server's version
       GET  /api/v2/projects                                      [{..., artifacts, updated}]   POST {name, title?, description?}
+                                                                 (creating needs the owner token; a project-scoped token
+                                                                 only reaches its existing project)
       GET  /api/v2/projects/<p>                                  PATCH {title?, description?}
       GET  /api/v2/projects/<p>/artifacts                        [{name, latest, versions, aliases, updated, metadata}]
       GET  /api/v2/projects/<p>/artifacts/<name>                 that summary plus `latest_version` (its manifest, or null)
@@ -27,8 +35,9 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
                                                                  -> {version, uid, created}  (created=false: nothing changed,
                                                                  or this uid was published already)
       POST /api/v2/projects/<p>/artifacts/<name>/aliases         {alias, version}
-      GET  /api/v2/resolve?ref=<ref>                             {project, name, version: manifest}
-      GET  /api/v2/lineage?ref=<ref>                             {ref, inputs, consumers, deleted, nodes: {ref: {status, kind}}}
+      GET  /api/v2/projects/<p>/resolve?ref=<ref>                {name, version: manifest}  (409 + `candidates`: an ambiguous short id)
+      GET  /api/v2/projects/<p>/ids?id=<hex>[&name=<name>]       {versions: [{name, version, uid, short_id, status}]}
+      GET  /api/v2/projects/<p>/lineage?ref=<ref>                {ref, inputs, consumers, deleted, nodes: {ref: {status, kind, short_id}}}
       POST /api/v2/blobs/missing {sha256: [...]}                 PUT /api/v2/blobs/<sha256> (streamed, hash-verified)
     Deleting (a write token of the project; `force=1` and gc need the owner token; 409 + `protected` when refused)
       DELETE /api/v2/projects/<p>/artifacts/<name>/versions/<n>  [?force=1&reason=...] -> {deleted: [refs], skipped: []}
@@ -40,7 +49,7 @@ Artifact names are slash paths (`datasets/crops`), so every route says where the
       GET  /files/<p>/<name>[@v<n>|@uid|@alias|@label]//<path>   ETag, Range, immutable for `@v<n>` or `@uid` of a
                                                                  completed version, `?download=1` for an attachment
 
-References in the API are `project:name[@selector]` (the project is required: the server has no default).
+References in the API are `name[@selector]` (or a bare short id) inside the project of the route.
 A client may supply a version's `uid` (UUIDv7) when it creates it: sending the same version again is
 answered with the version it made (a repo sending its outbox can retry safely), and a known uid with different content
 is refused with 409.
@@ -75,7 +84,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote
 
 from .._version import __version__
-from ..store import BadRange, Conflict, Deleted, LocalRepo, MissingBlobs, NotFound, Protected, Ref, StoreError, refs
+from ..store import (OWN, Ambiguous, BadRange, Conflict, Deleted, LocalProject, LocalRepo, MissingBlobs, NotFound, Protected, StoreError,
+                     refs)
 from ..store.gc import GRACE, describe_bytes, parse_duration
 from ..store.blobs import SHA256, clean_entries
 from ..store.db import ServerLock
@@ -138,6 +148,8 @@ def _translate(error: Exception) -> Answer:
         return _json(409, {"error": f"upload these blobs first ({error})", "missing": error.missing})
     if isinstance(error, Protected):
         return _json(409, {"error": str(error), "protected": error.protected})
+    if isinstance(error, Ambiguous):
+        return _json(409, {"error": str(error), "candidates": error.candidates})
     if isinstance(error, NotFound):
         return _error(404, str(error))
     if isinstance(error, Conflict):
@@ -165,8 +177,9 @@ class StoreApp:
     one dispatch is cheaper than a middleware stack). API work runs in worker threads (the store blocks on
     files); uploads and downloads stream on the event loop with their disk work in worker threads."""
 
-    def __init__(self, store: LocalRepo, auth: Auth, max_blob: int, workers: int = WORKERS):
-        self.store, self.auth, self.max_blob = store, auth, max_blob
+    def __init__(self, store: LocalRepo, auth: Auth, max_blob: int, workers: int = WORKERS, own: str | None = None):
+        """`own`: the name the repo folder's own project (store/local.py OWN) is served under (None: it is not)."""
+        self.store, self.auth, self.max_blob, self.own = store, auth, max_blob, own
         self.executor = ThreadPoolExecutor(workers, thread_name_prefix="cairn-store")
         self.log = default_log
         self.zero_copy_sends = 0
@@ -279,16 +292,27 @@ class StoreApp:
             return Answer(304, b"", {key: value for key, value in answer.headers.items() if key != "Content-Type"})
         return answer
 
-    def _ref(self, query: dict, principal: Principal) -> Ref:
-        ref = refs.parse(query.get("ref", [""])[0])
-        if ref.project is None:
-            raise ValueError("the reference needs a project: project:name[@selector]")
-        allow(principal, ref.project)
-        return ref
+    def key(self, project: str) -> str:
+        """The core's name of a served project (OWN for the repo's own one)."""
+        if self.own is not None and project == self.own:
+            return OWN
+        return refs.valid_project(project)
+
+    def view(self, project: str) -> LocalProject:
+        """The served project `project` as its own repo."""
+        return LocalProject(self.store, self.key(project))
+
+    def _public(self, record: dict) -> dict | None:
+        """A project record as clients see it: the own project under its served name; None for one not served."""
+        if record["name"] != OWN:
+            return record
+        if self.own is None:
+            return None
+        return {**record, "name": self.own, "title": record.get("title") or self.own}
 
     def _listing(self, project: str) -> Answer:
         """The artifact listing, serialized once per change of the project (LocalRepo.summaries_stamped)."""
-        stamp, summaries = self.store.summaries_stamped(project)
+        stamp, summaries = self.view(project).summaries_stamped()
         cached = self._listings.get(project)
         if cached is None or cached[0] != stamp:
             body = json.dumps(summaries).encode()
@@ -313,53 +337,47 @@ class StoreApp:
             case ["repo"]:
                 return _json(200, {"uid": store.uid, "version": __version__})
             case ["projects"]:
-                return _json(200, [item for item in store.overviews() if principal.can(item["name"])])
-            case ["projects", project]:
-                allow(principal, project)
-                return _json(200, store.get_project(project))
-            case ["projects", project, "artifacts"]:
-                allow(principal, project)
-                store.get_project(project)
+                listed = [self._public(item) for item in store.overviews()]
+                return _json(200, [item for item in listed if item is not None and principal.can(item["name"])])
+        if segments[3:4] != ["projects"] or len(segments) < 5:
+            raise HttpError(404, "no such API route")
+        project = segments[4]
+        allow(principal, project)
+        view = self.view(project)
+        match segments[5:]:
+            case []:
+                return _json(200, self._public(view.record()))
+            case ["artifacts"]:
+                view.record()
                 return self._listing(project)
-            case ["projects", project, "retention"]:
-                allow(principal, project)
-                return _json(200, {"project": project, "rules": store.retention(project)})
-            case ["projects", project, "artifacts", name]:
-                allow(principal, project)
-                summary = store.summary(project, name)
+            case ["retention"]:
+                return _json(200, {"project": project, "rules": view.retention()})
+            case ["artifacts", name]:
+                summary = view.summary(name)
                 if not summary["versions"]:
-                    raise NotFound(f"no artifact {project}:{name}")
+                    raise NotFound(f"no artifact {name}")
                 latest = summary["latest"]
-                return _json(200, {**summary, "latest_version": store.get_version(project, name, latest) if latest else None})
-            case ["projects", project, "artifacts", name, "versions"]:
-                allow(principal, project)
-                return _json(200, store.versions(project, name))
-            case ["projects", project, "artifacts", name, "versions", number] if number.isdigit() or UID.fullmatch(number):
-                allow(principal, project)
-                version = store.get_version(project, name, int(number) if number.isdigit() else number)
+                return _json(200, {**summary, "latest_version": view.get_version(name, latest) if latest else None})
+            case ["artifacts", name, "versions"]:
+                return _json(200, view.versions(name))
+            case ["artifacts", name, "versions", number] if number.isdigit() or UID.fullmatch(number):
+                version = view.get_version(name, int(number) if number.isdigit() else number)
                 return self._manifest(version, version)
-            case ["projects", project, "artifacts", name, "versions", number, "files"] if number.isdigit() or UID.fullmatch(number):
-                allow(principal, project)
-                version = store.get_version(project, name, int(number) if number.isdigit() else number)
+            case ["artifacts", name, "versions", number, "files"] if number.isdigit() or UID.fullmatch(number):
+                version = view.get_version(name, int(number) if number.isdigit() else number)
                 return self._manifest(version, {"files": version["files"]})
-            case ["projects", project, "artifacts", name, "aliases"]:
-                allow(principal, project)
-                return _json(200, store.aliases(project, name))
+            case ["artifacts", name, "aliases"]:
+                return _json(200, view.aliases(name))
             case ["resolve"]:
-                ref = self._ref(query, principal)
-                project, name, version = store.resolve(ref)
-                return _json(200, {"project": project, "name": name, "version": version})
-            case ["lineage"]:
-                ref = self._ref(query, principal)
-                if ref.exact:  # any status: a deleted version keeps its edges, a running run already has consumers
-                    project, name, version = ref.project, ref.name, store.get_version(ref.project, ref.name, ref.uid or ref.version)
-                else:
-                    project, name, version = store.resolve(ref)
-                found = store.lineage(Ref(project, name, f"v{version['version']}"), marks=True)
-                nodes = found.pop("nodes", {})
-                visible = {key: [item for item in items if principal.can(refs.parse(item).project)] for key, items in found.items()}
-                nodes = {item: mark for item, mark in nodes.items() if principal.can(refs.parse(item).project)}
-                return _json(200, {"ref": refs.exact(project, name, version["version"]), **visible, "nodes": nodes})
+                name, version = view.resolve(refs.parse(query.get("ref", [""])[0]))
+                return _json(200, {"name": name, "version": version})
+            case ["ids"]:
+                name = query.get("name", [None])[0]
+                return _json(200, {"versions": view.ids(query.get("id", [""])[0], refs.valid_name(name) if name else None)})
+            case ["lineage"]:  # any status for an exact reference or a short id: a deleted version keeps its edges
+                name, version = view.find(refs.parse(query.get("ref", [""])[0]))
+                exact = refs.exact(name, version["version"])
+                return _json(200, {"ref": exact, **view.lineage(exact, marks=True)})
         raise HttpError(404, "no such API route")
 
     def _post(self, principal: Principal, route: list[str], payload: dict) -> Answer:
@@ -383,11 +401,18 @@ class StoreApp:
                 return _json(200, self.gc(dry_run, grace, by=principal.name))
             case ["projects"]:
                 name = payload.get("name")
-                exists = isinstance(name, str) and any(item["name"] == name for item in store.projects())
+                if not isinstance(name, str):
+                    raise ValueError("a project is {name, title?, description?}")
+                key = self.key(name)
+                exists = any(item["name"] == key for item in store.projects())
                 if principal.project is not None and not (exists and principal.project == name):
-                    raise HttpError(403, "this token cannot create projects")
-                record = store.create_project(name, payload.get("title"), payload.get("description") or "")
-                return _json(200 if exists else 201, record)
+                    raise HttpError(403, f"this token cannot create projects (only the owner token makes {name!r})")
+                record = store.create_project(key, payload.get("title"), payload.get("description") or "")
+                return _json(200 if exists else 201, self._public(record))
+        if route[:1] != ["projects"] or len(route) < 2:
+            raise HttpError(404, "no such API route")
+        view = self.view(route[1])
+        match route:
             case ["projects", project, "artifacts", name, "versions"]:
                 allow(principal, project, write=True)
                 source = payload.get("source")
@@ -396,8 +421,8 @@ class StoreApp:
                 label = payload.get("label")
                 if label is not None and not isinstance(label, str):
                     raise ValueError("label must be text")
-                number = store.start_version(project, name, label, payload.get("metadata"), source, uid=self._uid(payload))
-                uid = store.get_version(project, name, number)["uid"]
+                number = view.start_version(name, label, payload.get("metadata"), source, uid=self._uid(payload))
+                uid = view.get_version(name, number)["uid"]
                 store.beat(uid, owner=False)  # a client's running version: alive while it syncs (see reap_schedule)
                 return _json(201, {"version": number, "uid": uid})
             case ["projects", project, "artifacts", name, "versions", number, action] if number.isdigit():
@@ -408,19 +433,18 @@ class StoreApp:
                     missing = store.missing(entries)
                     if missing:
                         return _json(409, {"error": "upload these blobs first", "missing": missing})
-                    store.add_files(project, name, number, entries)  # no entries: a keep-alive of a running version
-                    store.beat(store.get_version(project, name, number)["uid"], owner=False)
+                    view.add_files(name, number, entries)  # no entries: a keep-alive of a running version
+                    store.beat(view.get_version(name, number)["uid"], owner=False)
                     return _json(200, {"files": len(entries)})
                 if action == "metadata":
-                    store.set_metadata(project, name, number, payload.get("metadata"))
-                    store.beat(store.get_version(project, name, number)["uid"], owner=False)
+                    view.set_metadata(name, number, payload.get("metadata"))
+                    store.beat(view.get_version(name, number)["uid"], owner=False)
                     return _json(200, {"version": number})
                 if action == "complete":
-                    store.complete_version(project, name, number, self._inputs(principal, project, payload.get("inputs")),
-                                           digest=self._digest(payload))
+                    view.complete_version(name, number, self._inputs(payload.get("inputs")), digest=self._digest(payload))
                     return _json(200, {"version": number})
                 if action == "fail":
-                    store.fail_version(project, name, number)
+                    view.fail_version(name, number)
                     return _json(200, {"version": number})
             case ["projects", project, "artifacts", name, "publish"]:
                 allow(principal, project, write=True)
@@ -433,19 +457,19 @@ class StoreApp:
                     raise ValueError("aliases must be a list of names")
                 if payload.get("source") is not None and not isinstance(payload["source"], dict):
                     raise ValueError("source must be an object")
-                before = store.last_number(project, name)
-                number = store.publish(project, name, entries, label=payload.get("label"), metadata=payload.get("metadata"),
-                                       inputs=self._inputs(principal, project, payload.get("inputs")), aliases=aliases,
-                                       source=payload.get("source"), uid=self._uid(payload), digest=self._digest(payload))
+                before = view.last_number(name)
+                number = view.publish(name, entries, label=payload.get("label"), metadata=payload.get("metadata"),
+                                      inputs=self._inputs(payload.get("inputs")), aliases=aliases,
+                                      source=payload.get("source"), uid=self._uid(payload), digest=self._digest(payload))
                 created = number > before  # new versions are numbered after every existing one
-                return _json(201 if created else 200, {"version": number, "uid": store.get_version(project, name, number)["uid"],
+                return _json(201 if created else 200, {"version": number, "uid": view.get_version(name, number)["uid"],
                                                        "created": created})
             case ["projects", project, "artifacts", name, "aliases"]:
                 allow(principal, project, write=True)
                 alias, number = payload.get("alias"), payload.get("version")
                 if not isinstance(alias, str) or isinstance(number, bool) or not isinstance(number, int):
                     raise ValueError("an alias is {alias: text, version: number}")
-                store.set_alias(project, name, alias, number)
+                view.set_alias(name, alias, number)
                 return _json(200, {"alias": alias, "version": number})
         raise HttpError(404, "no such API route")
 
@@ -456,35 +480,38 @@ class StoreApp:
             for key in ("title", "description"):
                 if payload.get(key) is not None and not isinstance(payload[key], str):
                     raise ValueError(f"{key} must be text")
-            return _json(200, self.store.update_project(project, payload.get("title"), payload.get("description")))
+            return _json(200, self._public(self.view(project).update(payload.get("title"), payload.get("description"))))
         raise HttpError(404, "no such API route")
 
     def _delete(self, principal: Principal, route: list[str], query: dict, payload: dict) -> Answer:
         """Deleting versions, artifacts, and projects: a write token of the project; forcing needs the owner token."""
         force = query.get("force", [""])[0].lower() in ("1", "true", "yes") or payload.get("force") is True
         reason = query.get("reason", [None])[0] or payload.get("reason")
-        store = self.store
+        if route[:1] != ["projects"] or len(route) < 2:
+            raise HttpError(404, "no such API route")
+        view = self.view(route[1])
         match route:
             case ["projects", project, "artifacts", name, "versions", number] if number.isdigit() or UID.fullmatch(number):
                 allow(principal, project, write=True)
                 _owner_for_force(principal, force)
-                return _json(200, store.delete_version(project, name, int(number) if number.isdigit() else number, reason=reason,
-                                                       force=force, by=principal.name))
+                return _json(200, view.delete_version(name, int(number) if number.isdigit() else number, reason=reason,
+                                                      force=force, by=principal.name))
             case ["projects", project, "artifacts", name]:
                 allow(principal, project, write=True)
                 _owner_for_force(principal, force)
-                return _json(200, store.delete_artifact(project, name, reason=reason, force=force, by=principal.name))
+                return _json(200, view.delete_artifact(name, reason=reason, force=force, by=principal.name))
             case ["projects", project]:
                 allow(principal, project, write=True)
                 _owner_for_force(principal, force)
-                return _json(200, store.delete_project(project, reason=reason, force=force, by=principal.name))
+                return _json(200, {**self.store.delete_project(view.project, reason=reason, force=force, by=principal.name),
+                                   "project": project})
         raise HttpError(404, "no such API route")
 
     def _put_json(self, principal: Principal, route: list[str], payload: dict) -> Answer:
         match route:
             case ["projects", project, "retention"]:
                 allow(principal, project, write=True)
-                return _json(200, {"project": project, "rules": self.store.set_retention(project, payload.get("rules"))})
+                return _json(200, {"project": project, "rules": self.view(project).set_retention(payload.get("rules"))})
         raise HttpError(404, "no such API route")
 
     def gc(self, dry_run: bool = True, grace=GRACE, by: str = "owner") -> dict:
@@ -503,19 +530,14 @@ class StoreApp:
     def _uid(payload: dict) -> str | None:
         return None if payload.get("uid") is None else valid_uid(payload["uid"])
 
-    def _inputs(self, principal: Principal, project: str, items) -> list[str]:
-        """Input references with the version's project filled in; a scoped token may only name its own project."""
+    @staticmethod
+    def _inputs(items) -> list[str]:
+        """Input references: versions of the project the version is sent to (a reference names no project)."""
         if items is None:
             return []
         if not isinstance(items, list) or not all(isinstance(item, str) for item in items):
             raise ValueError("inputs must be a list of references")
-        qualified = []
-        for item in items:
-            ref = refs.parse(item)
-            ref = Ref(ref.project or project, ref.name, ref.selector, ref.path)
-            allow(principal, ref.project)
-            qualified.append(str(ref))
-        return qualified
+        return [str(refs.parse(item)) for item in items]
 
     # ------------------------------------------------------------------ uploads (event loop + worker threads)
 
@@ -710,10 +732,11 @@ class StoreServer:
 
 
 def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
-                no_auth: bool = False, allow_network_fs: bool = False) -> StoreServer:
+                no_auth: bool = False, allow_network_fs: bool = False, own: str | None = None) -> StoreServer:
     """A bound server (not yet serving) for a repo that has its owner token. With no_auth every request acts as the
     owner, so it is refused on any address but this machine's loopback. A repo on a network filesystem is refused
-    (by LocalRepo) unless `allow_network_fs` (this server is then its only writer; see store/fs.py)."""
+    (by LocalRepo) unless `allow_network_fs` (this server is then its only writer; see store/fs.py). `own`: the name
+    the repo's own project is served under (a project's repo; None for a server's repo, which has none)."""
     _require_extra()
     if no_auth and host not in LOCAL_HOSTS:
         raise SystemExit("--no-auth serves every project to anyone who can connect: only with a loopback --host")
@@ -724,10 +747,11 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     lock.acquire()  # one server per root, and other processes leave its metadata alone (store/db.py)
     try:
         try:
-            store = LocalRepo(root, allow_network_fs=allow_network_fs)
+            store = LocalRepo(root, allow_network_fs=allow_network_fs, where="")
         except StoreError as error:
             raise SystemExit(f"cairn: {error}") from None
-        app = StoreApp(store, Auth(read_token(root / "token"), Tokens(root), no_auth), max_blob)
+        app = StoreApp(store, Auth(read_token(root / "token"), Tokens(root), no_auth), max_blob,
+                       own=refs.valid_project(own) if own is not None else None)
         server = StoreServer(app, host, port, app.auth.owner_token)
     except BaseException:
         lock.release()
@@ -738,24 +762,27 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
 
 def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
                 no_auth: bool = False, ui_port: int | None = None, allow_network_fs: bool = False, gc_interval: float | None = None,
-                gc_grace: float = GRACE) -> None:
+                gc_grace: float = GRACE, own: str | None = None) -> None:
     """Serve a store; a new root (no token yet) is initialized first. Prints the owner token, which clients
     and `cairn ui` log in with, to the terminal only: never into a URL. With `ui_port` (0: any free
     port), `cairn ui` runs as a child process beside the store and stops with it. With `gc_interval` (seconds),
-    garbage collection (retention rules, then blobs older than `gc_grace`) runs that often."""
+    garbage collection (retention rules, then blobs older than `gc_grace`) runs that often. `own`: the name the repo's own
+    project is served under (`cairn server` in a project: `<server>/<project folder name>`)."""
     _require_extra()
     try:
         LocalRepo(root, allow_network_fs=allow_network_fs)  # refused on a network filesystem before anything is written
     except StoreError as error:
         raise SystemExit(f"cairn: {error}") from None
     created = None if (root / "token").exists() else init_root(root)
-    server = make_server(root, host, port, max_blob=max_blob, no_auth=no_auth, allow_network_fs=allow_network_fs)
+    server = make_server(root, host, port, max_blob=max_blob, no_auth=no_auth, allow_network_fs=allow_network_fs, own=own)
     if host not in LOCAL_HOSTS:
         print("warning: the server speaks plain HTTP; expose it only through an HTTPS reverse proxy or a tunnel", flush=True)
     if created:
         print(f"Created the repo {root.resolve()} with a new owner token ({created}, owner-only)", flush=True)
     actual = server.server_address[1]
     print(f"Repo: http://{host}:{actual}/ (the repo {root.resolve()})", flush=True)
+    if own is not None:
+        print(f"  this project's repo: other machines set [repo] remote = \"http://{host}:{actual}/{own}\"", flush=True)
     child = None
     if ui_port is not None:
         child, line = start_ui(host, actual, ui_port, server.owner_token, no_auth)
@@ -770,7 +797,7 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         print(f"Token: {server.owner_token}", flush=True)
         print(f"  stored in {(root / 'token').resolve()} (owner-only)", flush=True)
         print("  clients read it from CAIRN_TOKEN or [repo] token_file, and `cairn ui` logs in with it;"
-              " `cairn token create` makes project-scoped tokens", flush=True)
+              " `cairn token create <repo> --project <name>` makes project-scoped tokens", flush=True)
     reap_schedule(server.app)
     if gc_interval:
         gc_schedule(server.app, gc_interval, gc_grace)
