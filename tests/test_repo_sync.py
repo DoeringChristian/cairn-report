@@ -821,6 +821,53 @@ def test_an_output_of_a_run_that_failed_before_anything_was_sent_is_kept(server,
     assert run["status"] == "failed" and run["version"] == 1 and checkpoint["inputs"] == [run["id"]]
 
 
+KILLED_AFTER_ITS_OUTPUT = """
+import os, pathlib, signal, time, cairn
+run = cairn.init(name="train", system=False, code=False)
+pathlib.Path("started").write_text(run.id)
+while not pathlib.Path("go").exists():  # meanwhile the remote went away
+    time.sleep(0.05)
+with cairn.draft("checkpoint") as checkpoint:
+    checkpoint.add_json("state", {"step": 1})
+pathlib.Path("published").write_text(checkpoint.version.id)
+os.kill(os.getpid(), signal.SIGKILL)  # the job dies after its output: no exit handler, the run stays running
+"""
+
+
+def test_an_output_of_a_run_killed_after_it_is_sent_before_the_run_is_failed(server, tmp_path):
+    """A run the remote has (running), killed after its output was published offline: the next sync fails the run
+    (its process is gone) and sends the output first, while the run is still running on the remote, then the failure.
+    Failing the run first would make the remote refuse the output for good (an input that failed)."""
+    server.start()
+    project = project_at(tmp_path, "study", server.url)
+    (project / "job.py").write_text(KILLED_AFTER_ITS_OUTPUT)
+    process = subprocess.Popen(
+        [sys.executable, "job.py"], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    deadline = time.time() + 60
+    while not (project / "started").exists() and time.time() < deadline:
+        time.sleep(0.05)
+    run_id = (project / "started").read_text()
+    for _ in range(100):  # created on the remote at once: it has its number
+        if [v["status"] for v in remote_versions(server, "runs/train")] == ["running"]:
+            break
+        time.sleep(0.1)
+    assert [v["status"] for v in remote_versions(server, "runs/train")] == ["running"]
+    server.stop()
+    (project / "go").write_text("1")
+    process.communicate(timeout=60)
+    assert process.returncode == -signal.SIGKILL
+    output_id = (project / "published").read_text()
+    assert sorted(outbox(project)) == sorted([run_id, output_id])
+    server.start()
+    synced = cairn_cli(project, "sync")
+    assert synced.returncode == 0 and "rejected" not in synced.stdout + synced.stderr, synced.stdout + synced.stderr
+    [run] = remote_versions(server, "runs/train")
+    [checkpoint] = remote_versions(server, "checkpoint")
+    assert run["status"] == "failed" and checkpoint["status"] == "completed" and checkpoint["inputs"] == [run_id]
+    assert outbox(project) == []
+
+
 def test_a_script_adopts_the_repos_own_versions_before_it_reads(server, tmp_path, monkeypatch):
     import cairn.client.repo as repo_module
 

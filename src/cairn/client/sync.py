@@ -74,6 +74,11 @@ def _input_ids(record: dict) -> list[str]:
     return found
 
 
+def _outputs(run: dict, records: list[dict]) -> list[str]:
+    """The ids of the pending entries that name `run` as an input (a run's outputs)."""
+    return [record["id"] for record in records if record["id"] != run["id"] and run["id"] in _input_ids(record)]
+
+
 def _when(record: dict) -> tuple:
     """Publish order: when the version became final (else when it started), then when it started, then its name."""
     return (record.get("completed") or record.get("created") or "", record.get("created") or "", record["name"])
@@ -436,7 +441,9 @@ class Sync:
         a time.monotonic() value) once that time has passed: what is left waits for the next sync.
 
         First the repo's own earlier versions are adopted (see `adopt`). A running entry whose owner is gone
-        (`Outbox.dead`) is failed first. Returns a report: {"sent": [entries], "rejected": [entries], "waiting":
+        (`Outbox.dead`) is failed first, before the order is made, so it goes after its outputs; a failed run waits
+        while an output of it is still pending (another sender has it, or it waits): the remote must take the output
+        while the run still runs there, since a failed version is refused as an input. Returns a report: {"sent": [entries], "rejected": [entries], "waiting":
         [entries still pending or running], "failed": [entries failed here], "adopted": count, "lines": [what happened]}.
         """
         result = {"sent": [], "rejected": [], "waiting": [], "failed": [], "adopted": 0, "lines": []}
@@ -448,6 +455,12 @@ class Sync:
             return result
         if result["adopted"]:
             say(f"adopted {result['adopted']} versions this repo numbered itself (the remote renumbers them)")
+        for record in self.pending():  # first fail the running entries whose owner is gone, so the order sees them
+            if record["sync"] == "running":  # failed: a failed run goes after its outputs, which name it
+                why = self.outbox.dead(record, self.timeout)
+                if why is not None and self._fail(record, why) is not None:
+                    result["failed"].append(record)
+                    say(f"failing {record['name']} ({self.short(record['id'])}): {why}")
         records = self.ordered(self.pending())
         for index, record in enumerate(records):
             if deadline is not None and time.monotonic() > deadline:
@@ -456,30 +469,14 @@ class Sync:
                 say(f"{len(left)} versions left for the next sync (out of time)")
                 break
             if record["sync"] == "running":
-                why = self.outbox.dead(record, self.timeout)
-                if why is None:
-                    result["waiting"].append(record)  # its own process sends it
+                result["waiting"].append(record)  # its own process sends it
+                continue
+            if record["kind"] == "running" and record["status"] == "failed":
+                if any((self.outbox.load(id) or {}).get("sync") == "pending" for id in _outputs(record, records)):
+                    # an output of it was not sent (another sender has it, or it waits): the remote must get the output
+                    # while the run still runs there; the failure follows at the next sync
+                    result["waiting"].append(record)
                     continue
-                claimed = self.outbox.claim(record["id"], self.timeout)  # its owner may be saving it right now
-                if claimed is None:
-                    continue
-                try:
-                    current = self.outbox.load(record["id"])
-                    if (
-                        current is None
-                        or current["sync"] != "running"
-                        or self.outbox.dead(current, self.timeout) is None
-                    ):
-                        continue
-                    record = current
-                    record.update(
-                        sync="pending", status="failed", error=f"failed by {hostname()}: {why}", completed=now()
-                    )
-                    self.outbox.save(record)  # a queued failure, so nothing stays running for good
-                finally:
-                    self.outbox.release(claimed)
-                result["failed"].append(record)
-                say(f"failing {record['name']} ({self.short(record['id'])}): {why}")
             try:
                 sent = self.send(record)
             except (NotRecorded, Waiting) as error:  # this entry waits; the others need not
@@ -501,6 +498,24 @@ class Sync:
             what = "sent failed" if record["status"] == "failed" else "sent"
             say(f"{what} {record['name']}@v{record['number']} ({self.short(record['id'])})")
         return result
+
+    def _fail(self, record: dict, why: str) -> dict | None:
+        """Fail a running entry whose owner is gone (a queued failure, so nothing stays running for good), after claiming
+        it (its owner may be saving it right now); the entry as failed, None when it changed meanwhile."""
+        claimed = self.outbox.claim(record["id"], self.timeout)
+        if claimed is None:
+            return None
+        try:
+            current = self.outbox.load(record["id"])
+            if current is None or current["sync"] != "running" or self.outbox.dead(current, self.timeout) is None:
+                return None
+            current.update(sync="pending", status="failed", error=f"failed by {hostname()}: {why}", completed=now())
+            self.outbox.save(current)
+        finally:
+            self.outbox.release(claimed)
+        record.clear()
+        record.update(current)
+        return record
 
     def adopt(self) -> int:
         """Hand the versions this repo numbered itself (before it had a remote) to the outbox, oldest first: completed
