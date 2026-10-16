@@ -51,8 +51,8 @@ def start(project, *args):
     """Start `cairn <args>` in the project; returns the process and its lines up to the login link."""
     process = subprocess.Popen([sys.executable, "-m", "cairn", *args], cwd=project, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True)
-    lines = read_until(process, lambda line: line.startswith("Log in:"))
-    assert lines and lines[-1].startswith("Log in:"), lines
+    lines = read_until(process, lambda line: line.startswith("  Log in "))
+    assert lines and lines[-1].startswith("  Log in "), lines
     return process, lines
 
 
@@ -78,7 +78,7 @@ def projects(browser, base):
 
 
 def link_of(lines):
-    return re.search(r"Log in: (\S+)", lines[-1]).group(1)
+    return re.search(r"Log in +(\S+)", lines[-1]).group(1)
 
 
 def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(project):
@@ -90,7 +90,7 @@ def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(pr
         time.sleep(0.05)
     server, lines = start(project, "server", "--port", "0")
     try:
-        assert any(line.startswith("Created the repo") for line in lines)  # an existing repo gets its owner token
+        assert any("(created, with a new owner token)" in line for line in lines)  # an existing repo gets its owner token
         (project / "go").touch()  # the run finishes while the server serves the repo
         out, err = slow.communicate(timeout=120)
         assert slow.returncode == 0, err
@@ -100,7 +100,7 @@ def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(pr
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "res@v1"
         listed = run(project, sys.executable, "-m", "cairn", "artifacts")
-        assert "res\tv1" in listed.stdout and "runs/slow\tv1" in listed.stdout, listed
+        assert re.search(r"\nres +v1 ", listed.stdout) and re.search(r"\nruns/slow +v1 ", listed.stdout), listed
 
         link = link_of(lines)
         base = link.split("login?")[0]
@@ -111,14 +111,14 @@ def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(pr
         with opener().open(link) as again:  # the link works once
             assert again.url.endswith("/login")
 
-        port = re.search(r"Repo: http://127.0.0.1:(\d+)/", "\n".join(lines)).group(1)
+        port = re.search(r"API +http://127.0.0.1:(\d+)/", "\n".join(lines)).group(1)
         second = subprocess.Popen([sys.executable, "-m", "cairn", "server", str(project / "other-repo"), "--port", port,
                                    "--no-ui"], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         shown = read_until(second, lambda line: line.startswith("Serving;"))
         try:  # a taken port moves the second server to the next free one, and says so before its address
             text = "\n".join(shown)
-            assert f"port {port} is in use; serving on " in text, shown
-            moved = re.search(r"Repo: http://127.0.0.1:(\d+)/", text).group(1)
+            assert f"port {port} in use; using " in text, shown
+            moved = re.search(r"API +http://127.0.0.1:(\d+)/", text).group(1)
             assert int(moved) > int(port) and f"cairn remote set http://127.0.0.1:{moved}/<project>" in text
         finally:
             stop(second)

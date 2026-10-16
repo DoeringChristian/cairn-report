@@ -16,6 +16,7 @@ from ..client.remote import Remote, Server
 from ..config import Config, load_config
 from ..store import OWN, LocalProject, LocalRepo, NotFound, Unauthorized, refs
 from ..store.tokens import read_token
+from ..term import short_path
 from .sessions import Session
 
 
@@ -108,15 +109,15 @@ class LocalBackend:
     def __init__(self, root: Path, no_auth: bool, store=None, owner: str | None = None):
         root = Path(root).expanduser().resolve()
         if not root.is_dir():
-            raise SystemExit(f"no repo folder {root}")
-        self.root, self.describe = root, str(root)
+            raise SystemExit(f"cairn: no repo folder {short_path(root)}")
+        self.root, self.describe = root, short_path(root)
         self.store = store if store is not None else FolderProjects(LocalRepo(root, where=""), _own_name(root))
         self.owner = ""
         if not no_auth and owner is not None:  # a project's own UI (see open_backend)
             self.owner = owner
         elif not no_auth:
             if not (root / "token").is_file():
-                raise SystemExit(f"{root} has no owner token (not a repo?); use --no-auth to browse it without a login")
+                raise SystemExit(f"cairn: {short_path(root)} has no owner token (not a repo?); --no-auth browses it without a login")
             self.owner = read_token(root / "token")
 
     def anonymous(self) -> Session:

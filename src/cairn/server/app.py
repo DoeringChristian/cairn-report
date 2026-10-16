@@ -94,6 +94,7 @@ from .auth import Auth, HttpError
 from .files import serve_file
 from ..hosts import LOCAL_HOSTS, url_host
 from .spawn import forward, start_ui, stop
+from ..term import field, short_path, warn
 
 try:  # the [server] extra
     import uvicorn
@@ -113,7 +114,7 @@ METHODS = ("GET", "POST", "PATCH", "PUT", "DELETE")
 
 def _require_extra() -> None:
     if MISSING is not None:
-        raise SystemExit(f"`cairn server` needs the server extra (Starlette and uvicorn): pip install \"cairn[server]\" ({MISSING})")
+        raise SystemExit(f"cairn: `cairn server` needs the server extra: pip install \"cairn[server]\" ({MISSING})")
 
 
 class Answer:
@@ -207,10 +208,8 @@ class StoreApp:
         finally:
             if self.log is not None:
                 path = scope.get("raw_path") or scope["path"].encode()
-                query = scope.get("query_string") or b""
-                target = path.decode("latin-1") + ("?" + query.decode("latin-1") if query else "")
-                self.log(f'"{scope["method"]} {target} HTTP/{scope.get("http_version", "1.1")}" {status[0] or "-"} -',
-                         scope.get("client"))
+                target = path.decode("latin-1")  # no query string: a login code or a filter stays out of the log
+                self.log(f'{scope["method"]} {target}  {status[0] or "-"}', scope.get("client"))
 
     async def handle(self, request: Request):
         raw = (request.scope.get("raw_path") or request.scope["path"].encode()).decode("latin-1")
@@ -624,7 +623,7 @@ def reap_schedule(app: StoreApp, every: float = REAP_EVERY, timeout: float = RUN
 def default_log(line: str, client) -> None:
     """One line per request on stderr, without the token."""
     address = client[0] if client else "-"
-    sys.stderr.write(f"[{time.strftime('%d/%b/%Y %H:%M:%S')}] {address} {line}\n")
+    sys.stderr.write(f"{time.strftime('%H:%M:%S')}  {address}  {line}\n")
 
 
 PORT_TRIES = 20  # a taken port moves the server to the next free one of these (the startup block shows it)
@@ -651,7 +650,7 @@ class StoreServer:
                 if error.errno != errno.EADDRINUSE:
                     raise
         else:
-            raise SystemExit(f"ports {port}-{port + PORT_TRIES - 1} on {host} are all in use; choose one with --port")
+            raise SystemExit(f"cairn: ports {port}-{port + PORT_TRIES - 1} on {host} all in use; choose one with --port")
         self.server_address = self.socket.getsockname()[:2]
         if port and self.server_address[1] != port:
             self.moved_from = port
@@ -719,10 +718,10 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
     the repo's own project is served under (a project's repo; None for a server's repo, which has none)."""
     _require_extra()
     if no_auth and host not in LOCAL_HOSTS:
-        raise SystemExit("--no-auth serves every project to anyone who can connect: only with a loopback --host")
+        raise SystemExit("cairn: --no-auth needs a loopback --host (it serves every project to anyone)")
     root = root.resolve()
     if not (root / "token").is_file():
-        raise SystemExit(f"{root} is not a repo with a token; `cairn server {root}` creates it")
+        raise SystemExit(f"cairn: {short_path(root)} is not a repo with a token (`cairn server {short_path(root)}` creates it)")
     lock = ServerLock(root)
     lock.acquire()  # one server per root, and other processes leave its metadata alone (store/db.py)
     try:
@@ -741,6 +740,7 @@ def make_server(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
 
 
 READY = "Serving; Ctrl-C stops it."
+PLAIN_HTTP = "plain HTTP: use a VPN (Tailscale), an SSH tunnel, or an HTTPS proxy"
 
 
 def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob: int = 50 * 1024**3,
@@ -758,40 +758,44 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         raise SystemExit(f"cairn: {error}") from None
     created = None if (root / "token").exists() else init_root(root)
     server = make_server(root, host, port, max_blob=max_blob, no_auth=no_auth, allow_network_fs=allow_network_fs, own=own)
-    if created:
-        print(f"Created the repo {root.resolve()} with a new owner token ({created}, owner-only)", flush=True)
     actual = server.server_address[1]
     here = f"http://{url_host(host)}:{actual}/"  # this machine's name for 0.0.0.0, which nobody can connect to
     if server.moved_from:
-        print(f"port {server.moved_from} is in use; serving on {actual}", flush=True)
-    print(f"Repo: {here} (the repo {root.resolve()})", flush=True)
-    child = None
+        print(f"port {server.moved_from} in use; using {actual}", flush=True)
+    child, lines = None, []
     if ui_port is not None:
         child, lines = start_ui(host, actual, ui_port, server.owner_token, no_auth)
         if child is None:
-            print("warning: the UI did not start (see above); the server keeps running", file=sys.stderr, flush=True)
-        else:
-            for line in lines:  # its address and the login link, before anything else
-                print(line, flush=True)
-            threading.Thread(target=forward, args=(child,), daemon=True).start()
+            warn("the UI did not start (see above); the server keeps running")
+            lines = []
+    notices = [line for line in lines if not line.startswith("  ")]  # the UI's own notices (a moved port) go first
+    for line in notices:
+        print(line, flush=True)
+    token_file = short_path(root / "token")
+    rows = [("API", here)]
+    block_lines = [line for line in lines if line.startswith("  ")]  # its address and login link, aligned like these
     if no_auth:
-        print("Authentication is off (--no-auth): every request acts as the owner; for local testing only", flush=True)
+        rows.append(("Auth", "off (--no-auth): every request acts as the owner"))
     else:
-        print(f"Token: {server.owner_token}", flush=True)
-        print(f"  stored in {(root / 'token').resolve()} (owner-only)", flush=True)
+        rows.append(("Token", f"{server.owner_token}   ({token_file})"))
+    print(field("Cairn server", short_path(root) + ("   (created, with a new owner token)" if created else "")), flush=True)
+    print(field("  API", here), flush=True)
+    for line in block_lines:
+        print(line, flush=True)
+    for key, value in rows[1:]:
+        print(field(f"  {key}", value), flush=True)
+    if child is not None:
+        threading.Thread(target=forward, args=(child,), daemon=True).start()
     project = own if own is not None else "<project>"
-    plain = host not in LOCAL_HOSTS
-    print(f"Other machines: cairn remote set {here}{project}", flush=True)
+    print(f"Clients:  cairn remote set {here}{project}", flush=True)
     if not no_auth:
-        print(f"  and the token: copy {(root / 'token').resolve()} to their .cairn/token or ~/.config/cairn/token,"
-              " or set CAIRN_TOKEN", flush=True)
-    if plain:
-        print("warning: plain HTTP on a network address: use it over a VPN (Tailscale, WireGuard), an SSH tunnel, "
-              "or an HTTPS reverse proxy", flush=True)
+        print(f"          token: copy {token_file} to their .cairn/token, or set CAIRN_TOKEN", flush=True)
+    if host not in LOCAL_HOSTS:
+        warn(PLAIN_HTTP)
     reap_schedule(server.app)
     if gc_interval:
         gc_schedule(server.app, gc_interval, gc_grace)
-        print(f"Garbage collection every {gc_interval / 3600:g} h (grace {gc_grace / 3600:g} h)", flush=True)
+        print(f"gc every {gc_interval / 3600:g} h (grace {gc_grace / 3600:g} h)", flush=True)
     print(READY, flush=True)  # always the startup block's last line
     previous = None
     if threading.current_thread() is threading.main_thread():  # SIGTERM stops the UI child too

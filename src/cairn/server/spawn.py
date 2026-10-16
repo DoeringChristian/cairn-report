@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 from ..hosts import LOCAL_HOSTS  # noqa: F401  (app imports it from here)
+from ..term import warn
 
 PARENT_ENV = "CAIRN_UI_PARENT"  # set for a UI the server spawned: the pid it belongs to
 
@@ -33,10 +34,11 @@ def start_ui(host: str, port: int, ui_port: int, owner_token: str, no_auth: bool
         env["CAIRN_TOKEN"] = owner_token
     env[PARENT_ENV] = str(os.getpid())  # the UI exits when this process is gone, even after a SIGKILL
     child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, text=True)
-    lines = []  # its startup lines, up to the login link (or the no-auth notice), so the server prints them in order
+    lines = []  # its startup lines, up to the login link (with no auth: its address), so the server prints them in order
+    last = "  UI " if no_auth else "  Log in "
     for line in child.stdout:
         lines.append(line.rstrip())
-        if line.startswith(("Log in:", "Authentication is off")):
+        if line.startswith(last):
             return child, lines
     child.wait()
     return None, None
@@ -48,7 +50,7 @@ def forward(child) -> None:
         print(line.rstrip(), flush=True)
     code = child.wait()
     if code not in (0, -signal.SIGTERM, -signal.SIGINT):
-        print(f"warning: the UI stopped (exit code {code}); the server keeps running", file=sys.stderr, flush=True)
+        warn(f"the UI stopped (exit code {code}); the server keeps running")
 
 
 def stop(child) -> None:

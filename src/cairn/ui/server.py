@@ -53,6 +53,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from ..hosts import LOCAL_HOSTS, url_host
+from ..term import cause, field, request_line, warn
 from .._version import __version__
 from ..store import BadRange, Deleted, FileRead, Forbidden, NotFound, Ref, StoreError, Unauthorized, refs
 from ..store.blobs import resolve_entry, valid_path
@@ -540,7 +541,7 @@ class UIHandler(BaseHTTPRequestHandler):
             raise
         except Exception as error:  # noqa: BLE001  (the headers are sent: end the connection, the zip stays incomplete)
             self.close_connection = True
-            sys.stderr.write(f"zip of {project}:{ref.name}@{exact} broke off: {error}\n")
+            sys.stderr.write(f"zip of {project}:{ref.name}@{exact} broke off: {cause(error)}\n")
             return
         sink.finish()
 
@@ -749,7 +750,11 @@ class UIHandler(BaseHTTPRequestHandler):
             pass
 
     def log_message(self, format, *args):  # one line per request, without the session
-        sys.stderr.write(f"{self.log_date_time_string()} {self.address_string()} {format % args}\n")
+        sys.stderr.write(f"{time.strftime('%H:%M:%S')}  {self.address_string()}  {format % args}\n")
+
+    def log_request(self, code="-", size="-"):  # the request log's line, the same as the API's
+        status = getattr(code, "value", code)
+        sys.stderr.write(request_line(self.address_string(), self.command or "-", (self.path or "").split("?")[0], status) + "\n")
 
 
 class _ChunkedSink(io.RawIOBase):
@@ -801,7 +806,7 @@ def make_ui_server(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1
     a browser's cookie from an earlier launch carries. With no_auth there is no login and every request uses the
     backend's own access, so it is refused on any address but this machine's loopback."""
     if no_auth and host not in LOCAL_HOSTS:
-        raise SystemExit("--no-auth shows the repo to anyone who can connect: only with a loopback --host")
+        raise SystemExit("cairn: --no-auth needs a loopback --host (it shows the repo to anyone)")
     handler = type("Handler", (UIHandler,), {
         "backend": backend, "state": {"token": login_token, "login": login_token, "session": None}, "login_codes": set(),
         "lock": threading.Lock(), "no_auth": no_auth,
@@ -836,29 +841,36 @@ def login_link(server: ThreadingHTTPServer, base: str) -> str:
     return f"{base}login?code={code}"
 
 
-PLAIN_HTTP_WARNING = ("warning: plain HTTP on a network address: use it over a VPN (Tailscale, WireGuard), an SSH tunnel, "
-                      "or an HTTPS reverse proxy")
+PLAIN_HTTP_WARNING = "plain HTTP: use a VPN (Tailscale), an SSH tunnel, or an HTTPS proxy"
 
 def serve_ui(backend: LocalBackend | RemoteBackend, host: str = "127.0.0.1", port: int = 8801, no_auth: bool = False,
              login_token: str = "", open_browser: bool = False) -> None:
-    """Serve the UI. With `login_token`, print a one-time login link for it (and open it with `open_browser`)."""
+    """Serve the UI. With `login_token`, print a one-time login link for it (and open it with `open_browser`).
+    Beside `cairn server` (CAIRN_UI_PARENT set) it prints only its lines of the server's startup block."""
     try:
         server = make_ui_server(backend, host, port, no_auth=no_auth, login_token=login_token)
     except OSError as error:
         if not port or error.errno != errno.EADDRINUSE:
             raise
-        print(f"port {port} is in use; taking a free one", flush=True)
         server = make_ui_server(backend, host, 0, no_auth=no_auth, login_token=login_token)
+        print(f"port {port} in use; using {server.server_address[1]}", flush=True)
     base = f"http://{url_host(host)}:{server.server_address[1]}/"  # this machine's name for 0.0.0.0
-    print(f"UI: {base} (repo: {backend.describe})", flush=True)
-    if host not in LOCAL_HOSTS and not os.environ.get("CAIRN_UI_PARENT"):  # beside `cairn server`, it warns for both
-        print(PLAIN_HTTP_WARNING, flush=True)
-    if no_auth:
-        print("Authentication is off (--no-auth): everyone who can connect sees the repo; for local use only", flush=True)
+    beside = bool(os.environ.get("CAIRN_UI_PARENT"))  # the server prints the rest of the block (and the warnings)
+    if beside:
+        print(field("  UI", base), flush=True)
+    else:
+        print(field("Cairn UI", base), flush=True)
+        print(field("  Repo", backend.describe), flush=True)
+        if no_auth:
+            print(field("  Auth", "off (--no-auth): everyone who can connect sees the repo"), flush=True)
     opening = base
     if login_token and not no_auth:
         opening = login_link(server, base)
-        print(f"Log in: {opening}  (works once)", flush=True)
+        print(field("  Log in", f"{opening}   (works once)"), flush=True)
+    if host not in LOCAL_HOSTS and not beside:
+        warn(PLAIN_HTTP_WARNING)
+    if not beside:
+        print("Serving; Ctrl-C stops it.", flush=True)
     if open_browser:
         import webbrowser
 

@@ -142,7 +142,7 @@ def test_a_large_download_streams_without_loading_into_memory(tmp_path, sendfile
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=environment)
     try:
         for line in process.stdout:
-            if line.startswith("Token:"):
+            if line.startswith("  Token "):
                 break
         assert request(port, token, "POST", "/api/v2/projects", {"name": "p"})[0] == 201
         with big.open("rb") as handle:  # streamed up, hashed while it arrives

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import cairn as store
+from cairn.term import short_path
 from cairn.cli import main
 from cairn.client.http import Client
 from cairn import BadRange, LocalRepo, Remote, StoreError
@@ -71,7 +72,7 @@ def use_remote(env, server, project="study"):
 
 
 def blob_gets(server):
-    return sum(line.startswith('"GET /files/') for line in server.requests)
+    return sum(line.startswith("GET /files/") for line in server.requests)
 
 
 # --------------------------------------------------------------------- auth
@@ -114,14 +115,15 @@ def test_serve_creates_a_new_store_and_prints_its_token(tmp_path, capsys):
         serve_store(root, port=0)
         token = (root / "token").read_text().strip()
         out = capsys.readouterr().out
-        assert f"Token: {token}" in out and "Created the repo" in out and "Repo: http://127.0.0.1:" in out
+        assert re.search(rf"\n  Token +{token} ", out) and "(created, with a new owner token)" in out
+        assert re.search(r"\n  API +http://127.0.0.1:\d+/", out), out
         assert oct((root / "token").stat().st_mode & 0o777) == "0o600"
         serve_store(root, port=0)  # a second launch reuses it and prints the same token
         out = capsys.readouterr().out
-        assert f"Token: {token}" in out and "Created the repo" not in out
-        assert f"stored in {(root / 'token').resolve()} (owner-only)" in out  # the path at every launch
+        assert re.search(rf"\n  Token +{token} ", out) and "(created" not in out
+        assert f"({short_path(root / 'token')})" in out  # the path at every launch
         serve_store(root, host="0.0.0.0", port=0)
-        assert "plain HTTP" in capsys.readouterr().out
+        assert "warning: plain HTTP" in capsys.readouterr().err
     finally:
         module.StoreServer.serve_forever = original
 
