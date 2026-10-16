@@ -126,8 +126,8 @@ def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(pr
 def test_cairn_ui_creates_the_project_repo_and_logs_in_with_a_link(project):
     ui, lines = start(project, "ui", "--no-browser", "--port", "0")
     try:
-        assert any(line.startswith("Created an owner token for the repo") for line in lines)
-        assert (project / ".cairn" / "token").is_file() and (project / ".cairn" / "repo.json").is_file()
+        assert (project / ".cairn" / "repo.json").is_file()
+        assert not (project / ".cairn" / "token").exists()  # never on disk: a client would send it to the remote
         assert (project / ".cairn" / ".gitignore").read_text().strip() == "*"
         link = link_of(lines)
         browser = opener()

@@ -972,7 +972,8 @@ cairn ui --repo /srv/cairn                 # a repo folder on this machine (a se
 cairn ui --no-browser                      # print the login link without opening it
 ```
 
-For the project's repo, `cairn ui` creates it (with an owner token) if it is new and opens it directly,
+For the project's repo, `cairn ui` creates it if it is new and opens it directly (it writes no token: the
+login link carries one that lives only as long as that `cairn ui`),
 whether a `cairn server` serves it or not; with a remote it reads through the remote and shows the
 versions still waiting for it as **pending** (a `pending` badge, their uid instead of `vN`). It prints a
 one-time `Log in:` link and opens it in the browser, so there is no token to paste; for a remote the link
@@ -1069,7 +1070,7 @@ never edited. The repo is private to its owner (mode 700).
 ├── versions/<uid>/files/        read-only folders that pulls return (made from the blobs; `cairn prune` trims them)
 ├── drafts/                      open and kept drafts and runs: <name>/<uid>/ and <name>/<uid>.draft.json (`cairn drafts`)
 ├── build/  share/               built report pages, `cairn share` pages
-├── token  tokens.jsonl          the owner token and scoped tokens (`cairn server`, `cairn ui`)
+├── token  tokens.jsonl          the owner token and scoped tokens (`cairn server`); a client's token for the remote
 ├── heartbeats/<uid>             running versions' heartbeats (without a remote)
 ├── server.lock                  held by the one `cairn server` serving this repo
 └── tmp/                         uploads in progress, the hash cache

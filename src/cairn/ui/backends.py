@@ -7,13 +7,14 @@ the repo interface without a project in its calls (store/interface.py). A backen
 from __future__ import annotations
 
 import hmac
+import secrets
 from pathlib import Path
 
 from ..client.http import Client, ClientError, split_remote
 from ..client.remote import Remote, Server
 from ..config import Config, load_config
 from ..store import OWN, LocalProject, LocalRepo, NotFound, Unauthorized, refs
-from ..store.tokens import OWNER, Tokens, init_root, read_token
+from ..store.tokens import OWNER, Tokens, read_token
 from .sessions import Session
 
 
@@ -103,13 +104,15 @@ class LocalBackend:
     """A repo on this machine. Login tokens are the repo's owner token and its scoped tokens; `store` is what every
     session reads through: the project's repo as its one project, or a repo folder's projects."""
 
-    def __init__(self, root: Path, no_auth: bool, store=None):
+    def __init__(self, root: Path, no_auth: bool, store=None, owner: str | None = None):
         root = Path(root).expanduser().resolve()
         if not root.is_dir():
             raise SystemExit(f"no repo folder {root}")
         self.root, self.describe = root, str(root)
         self.store = store if store is not None else FolderProjects(LocalRepo(root, where=""), _own_name(root))
-        if not no_auth:
+        if not no_auth and owner is not None:  # a project's own UI: a token for this launch only, never on disk
+            self.owner, self.tokens = owner, Tokens(root)
+        elif not no_auth:
             if not (root / "token").is_file():
                 raise SystemExit(f"{root} has no owner token (not a repo?); use --no-auth to browse it without a login")
             self.owner, self.tokens = read_token(root / "token"), Tokens(root)
@@ -196,6 +199,8 @@ def open_backend(remote: str | None = None, repo: str | Path | None = None, conf
     config = config or load_config()
     root = Path(config.cairn_dir)
     store = open_repo(config)  # makes the repo if it is new
-    if not no_auth and not (root / "token").is_file():
-        print(f"Created an owner token for the repo {root} ({init_root(root)}, owner-only)", flush=True)
-    return LocalBackend(root, no_auth, OneProject(project_label(config), store))
+    # The project's own UI never writes <repo>/token: that file is a client's token for the remote (and a server's
+    # owner token), so a token made here would be sent to the remote. Without one, this launch logs in with a
+    # random token that only lives in this process (the one-time link carries it).
+    owner = None if (root / "token").is_file() else secrets.token_urlsafe(32)
+    return LocalBackend(root, no_auth, OneProject(project_label(config), store), owner=owner)
