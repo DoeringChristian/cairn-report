@@ -3,6 +3,7 @@ import { Link, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { api, paths, useApi, type Me, type Project, type Summary } from "./api";
 import { Field, Hero } from "./components";
 import { ArtifactPage } from "./pages/Artifact";
+import { PalettePage } from "./pages/Palette";
 import { ProjectPage } from "./pages/Project";
 import { ProjectsPage } from "./pages/Projects";
 import { artifactHref, isReport, isRunName, reportHref } from "./util";
@@ -53,7 +54,7 @@ function Rail() {
       {project && <RailSection label="Runs" items={runs.map(a => ({ key: a.name, title: a.name.slice("runs/".length), to: artifactHref(project, a.name), plain: true, current: a.name === here }))} />}
       <div className="rail-note">
         {me.data?.scope === "project" && <>Token for project <b>{me.data.project}</b><br /></>}
-        {me.data?.auth && <a href="/logout">Log out</a>}
+        <span className="rail-links"><Link to="/palette">Components</Link>{me.data?.auth && <a href="/logout">Log out</a>}</span>
       </div>
     </aside>
   );
@@ -108,6 +109,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<ProjectsPage />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/palette" element={<PalettePage />} />
         <Route path="/p/:project" element={<ProjectPage />} />
         <Route path="/p/:project/a/*" element={<ArtifactRoute />} />
         <Route path="*" element={<NotFound />} />

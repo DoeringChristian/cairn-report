@@ -1,4 +1,4 @@
-// The UI's component palette: pages compose these; new UI starts here.
+// The UI's component palette: pages compose these; new UI starts here (see README.md, and /palette for the look).
 export { Button, IconButton, LinkButton, RowActions, ToggleGroup } from "./Button";
 export type { ButtonProps, LinkButtonProps } from "./Button";
 export { Card, Panel } from "./Card";

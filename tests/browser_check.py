@@ -275,6 +275,35 @@ def check_touch_lightbox(browser, ui: str, token: str, shots: Path, problems: li
     context.close()
 
 
+def check_palette(page, shots: Path, tag: str) -> None:
+    """The palette page, reached from the rail's footer link (the server serves the app at / and /p/...)."""
+    page.locator(".rail-note").get_by_role("link", name="Components").click()
+    page.wait_for_url("**/palette")
+    page.get_by_role("heading", name="Components", exact=True).wait_for()
+    for y in range(0, page.evaluate("document.documentElement.scrollHeight"), 600):  # the lazy images load as they come near
+        page.evaluate(f"window.scrollTo(0, {y})")
+        page.wait_for_timeout(60)
+    page.wait_for_function("[...document.querySelectorAll('main img')].every(i => i.complete && i.naturalWidth > 0)")
+    page.evaluate("window.scrollTo(0, 0)")
+    page.wait_for_load_state("networkidle")
+    page.screenshot(path=str(shots / f"{tag}-palette.png"), full_page=True)
+    page.get_by_role("button", name="Open the gallery").click()
+    page.locator(LIGHTBOX + "[open]").wait_for()
+    wait_image(page)
+    page.screenshot(path=str(shots / f"{tag}-palette-lightbox.png"))
+    page.keyboard.press("Escape")
+    page.locator(LIGHTBOX + "[open]").wait_for(state="detached")
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.wait_for_timeout(300)
+    sw = page.evaluate("[document.documentElement.scrollWidth, window.innerWidth]")
+    assert sw[0] <= sw[1], f"{tag} palette at phone width: horizontal page scroll {sw}"
+    wide = page.evaluate("""() => [...document.querySelectorAll('main *')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1
+        && !e.closest('.table-wrap, .tabs, pre, svg, table'); }).map(e => e.tagName + '.' + e.className).slice(0, 5)""")
+    assert not wide, f"{tag} palette at phone width: elements stick out: {wide}"
+    page.screenshot(path=str(shots / f"{tag}-palette-phone.png"), full_page=True)
+    page.set_viewport_size({"width": 1280, "height": 900})
+
+
 def run(keep: bool) -> int:
     from playwright.sync_api import sync_playwright
 
@@ -521,6 +550,9 @@ def run(keep: bool) -> int:
                     page.locator(".rail-toggle").click()
                     assert page.locator(".rail .report-list:not([hidden])").first.is_hidden(), "Browse closes them again"
 
+        page.goto(ui + "/")
+        check_palette(page, shots, "light")
+
         responsive("phone", 390, 844)
         responsive("tablet", 820, 1180)
         page.set_viewport_size({"width": 1280, "height": 900})
@@ -536,6 +568,8 @@ def run(keep: bool) -> int:
         page.locator(".graph-node").first.wait_for()
         shot("14-dark-artifact")
         page.on("console", lambda m: m.type == "error" and problems.append(f"console error (dark): {m.text}"))
+        page.goto(ui + "/")
+        check_palette(page, shots, "dark")
         check_touch_lightbox(browser, ui, token, shots, problems)
         browser.close()
 

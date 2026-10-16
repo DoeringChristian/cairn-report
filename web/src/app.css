@@ -8,6 +8,7 @@
 .action-button.primary { color: white; background: var(--accent); border-color: var(--accent); text-decoration: none; }
 .action-button.primary:hover { color: white; background: var(--accent); filter: brightness(.9); }
 main a, .rail-note a { color: var(--accent); }
+.rail-links { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .code-chips code { margin-right: 8px; }
 .muted { color: var(--muted); }
 .mono { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -208,3 +209,15 @@ body > #root main, #root main { margin: 0 auto; align-self: start; }
   .app-lightbox .lightbox-ref { width: 40px; height: 40px; }
 }
 
+/* The palette page (/palette, pages/Palette.tsx): only the frame around each specimen. */
+.palette-specimen { margin: 22px 0 0; }
+.palette-name { margin: 0 0 10px; font-size: 13px; overflow-wrap: anywhere; }
+.palette-name code { color: var(--accent); font-weight: 700; }
+.palette-demo > .app-panel:first-child, .palette-demo > .app-metrics, .palette-demo > .table-card:first-child { margin-top: 0; }
+.palette-demo > .metric-grid { margin-bottom: 0; }
+.palette-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.palette-pills .pill { margin: 0; }
+.palette-row { display: inline-flex; align-items: center; gap: 8px; }
+.palette-dark { display: flex; gap: 10px; padding: 16px; border-radius: 10px; background: #0c110ff2; color: white; }
+.palette-dark button.icon { position: static; }
+.palette-form { margin-top: 0; }
