@@ -748,6 +748,12 @@ def main(argv: list[str] | None = None) -> None:
         from .client.open import existing_repo
 
         existing_repo(load_config(args.project))
+    elif args.run in READING_COMMANDS:
+        from .client.open import existing_repo
+
+        config = load_config(args.project)
+        if not config.found:
+            existing_repo(config)
     syncing = args.run in REPO_COMMANDS and not getattr(args, "offline", False)  # --offline: never ask the remote
     if syncing:
         sync_quietly(args)
@@ -763,6 +769,8 @@ def main(argv: list[str] | None = None) -> None:
 
 
 LOOKING_COMMANDS = {cmd_status, cmd_verify, cmd_prune, cmd_sync}
+READING_COMMANDS = {cmd_artifacts, cmd_versions, cmd_show, cmd_pull, cmd_alias, cmd_delete, cmd_drafts}  # need versions: no repo
+# found (nothing above the working directory, no $CAIRN_DIR) is refused, never made in a random folder
 REPO_COMMANDS = {cmd_publish, cmd_pull, cmd_project, cmd_project_delete, cmd_artifacts, cmd_versions, cmd_show, cmd_alias, cmd_delete,
                  cmd_retention, cmd_gc, cmd_status, cmd_prune, cmd_verify, cmd_build, cmd_drafts, cmd_finalize_study}
 
