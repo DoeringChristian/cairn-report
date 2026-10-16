@@ -250,14 +250,16 @@ class LocalRepo:
     def _beat_file(self, uid: str) -> Path:
         return self.root / "heartbeats" / valid_uid(uid)
 
-    def beat(self, uid: str) -> None:
+    def beat(self, uid: str, owner: bool = True) -> None:
         """The owner of a running version says it is alive (never raises: a missed beat only makes the version
-        look dead later)."""
+        look dead later). `owner=False`: another process vouches for it (a server, for a client's version that it
+        syncs), so only its age counts, not whether this process lives."""
         path = self._beat_file(uid)
         try:
             path.parent.mkdir(exist_ok=True)
             temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-            temporary.write_text(json.dumps({"time": time.time(), "host": socket.gethostname(), "pid": os.getpid()}))
+            who = {"host": socket.gethostname(), "pid": os.getpid()} if owner else {"host": None, "pid": None}
+            temporary.write_text(json.dumps({"time": time.time(), **who}))
             os.replace(temporary, path)
         except OSError:
             pass

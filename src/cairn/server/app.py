@@ -398,7 +398,7 @@ class StoreApp:
                     raise ValueError("label must be text")
                 number = store.start_version(project, name, label, payload.get("metadata"), source, uid=self._uid(payload))
                 uid = store.get_version(project, name, number)["uid"]
-                store.beat(uid)  # a client's running version: alive while it syncs (see reap_schedule)
+                store.beat(uid, owner=False)  # a client's running version: alive while it syncs (see reap_schedule)
                 return _json(201, {"version": number, "uid": uid})
             case ["projects", project, "artifacts", name, "versions", number, action] if number.isdigit():
                 allow(principal, project, write=True)
@@ -409,11 +409,11 @@ class StoreApp:
                     if missing:
                         return _json(409, {"error": "upload these blobs first", "missing": missing})
                     store.add_files(project, name, number, entries)  # no entries: a keep-alive of a running version
-                    store.beat(store.get_version(project, name, number)["uid"])
+                    store.beat(store.get_version(project, name, number)["uid"], owner=False)
                     return _json(200, {"files": len(entries)})
                 if action == "metadata":
                     store.set_metadata(project, name, number, payload.get("metadata"))
-                    store.beat(store.get_version(project, name, number)["uid"])
+                    store.beat(store.get_version(project, name, number)["uid"], owner=False)
                     return _json(200, {"version": number})
                 if action == "complete":
                     store.complete_version(project, name, number, self._inputs(principal, project, payload.get("inputs")),

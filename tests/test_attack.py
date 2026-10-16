@@ -116,7 +116,11 @@ def stray_repos(base: Path, allowed: set[Path]) -> list[Path]:
 def check_numbers(repo: LocalRepo, project: str = "study") -> dict[str, list[dict]]:
     """Every artifact's versions are numbered 1..n without a gap or a duplicate, and every uid is unique."""
     everything, uids = {}, []
-    for name in repo.artifacts(project) + _deleted_only(repo, project):
+    try:
+        names = repo.artifacts(project) + _deleted_only(repo, project)
+    except cairn.NotFound:  # no project: nothing was ever made
+        return {}
+    for name in names:
         versions = repo.versions(project, name)
         numbers = [version["version"] for version in versions]
         assert numbers == list(range(1, len(numbers) + 1)), (name, numbers)
@@ -814,4 +818,341 @@ def test_a_remote_added_while_a_version_runs_takes_over_everything_once(tmp_path
     verify_clean(project, env)
     again = cli(project, "sync", env=env)
     assert again.returncode == 0 and len(remote.versions("study", "data")) == 5
+    server.stop()
+
+
+# ====================================================================== 2. SIGKILL at chosen and at random points
+
+KILL_HOOK = '''
+import os, signal
+point = os.environ.get("CAIRN_KILL_AT")
+if point:
+    import cairn.client.sync as sync
+    import cairn.client.remote as remote
+    import cairn.store.outbox as outbox
+    import cairn.store.local as local
+    import cairn.store.blobs as blobs
+    import cairn.store.folders as folders
+
+    def die():
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    def after(module, name, check=lambda *a, **k: True):
+        original = getattr(module, name)
+        def patched(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if check(*args, **kwargs):
+                die()
+            return result
+        setattr(module, name, patched)
+
+    def before(module, name):
+        original = getattr(module, name)
+        def patched(*args, **kwargs):
+            die()
+        setattr(module, name, patched)
+
+    if point == "outbox-written":  # the entry's files are written under the scratch name, not renamed yet
+        original_rename = os.rename
+        def rename(source, target, *args, **kwargs):
+            if ".tmp-" in str(source) and "/outbox/" in str(target):
+                die()
+            return original_rename(source, target, *args, **kwargs)
+        os.rename = rename
+    elif point == "staged":  # the first blob is in the repo, nothing else
+        after(blobs.BlobStore, "stage_file")
+    elif point == "blobs-sent":  # the blobs are on the remote, the manifest is not
+        after(sync.Sync, "_upload")
+    elif point == "answered":  # the remote numbered the version; the repo has not recorded it
+        after(remote.Remote, "publish")
+        after(remote.Remote, "complete_version")
+    elif point == "recorded":  # the repo has the remote's number; the outbox entry is still there
+        after(sync.Sync, "record")
+    elif point == "removing":  # the entry is marked sent, its folder not removed yet
+        original_remove = folders.remove
+        def remove(folder):
+            if "/outbox/" in str(folder):
+                die()
+            return original_remove(folder)
+        outbox.remove = remove
+    elif point == "committing":  # inside the repo's publish transaction
+        after(local.LocalRepo, "_completed")
+    elif point == "started":  # a running version was created on the remote
+        after(remote.Remote, "start_version")
+    elif point == "files-added":  # a running version's files were sent
+        after(remote.Remote, "add_files")
+'''
+
+KILL_PUBLISH = """
+import pathlib, sys, cairn
+folder = pathlib.Path(sys.argv[1])
+version = cairn.connect().project().artifact("data").publish(folder)
+print(version.uid, version.number)
+"""
+
+KILL_RUN = """
+import sys, cairn
+run = cairn.init(name="victim", code=False, system=False)
+for step in range(5):
+    run.add({"loss": 1.0 / (step + 1), "step": step})
+with cairn.draft("out") as out:
+    out.add_json("v", {"step": 5})
+run.finish()
+print(run.uid, out.version.uid)
+"""
+
+
+def kill_env(tmp_path: Path, **extra) -> dict:
+    hook = tmp_path / "kill-hook"
+    hook.mkdir(exist_ok=True)
+    (hook / "sitecustomize.py").write_text(KILL_HOOK)
+    env = base_env(**extra)
+    env["PYTHONPATH"] = os.pathsep.join([str(hook), env.get("PYTHONPATH", "")])
+    return env
+
+
+def outbox_of(project: Path) -> list[str]:
+    folder = project / ".cairn" / "outbox"
+    return sorted(path.name for path in folder.iterdir() if ".tmp-" not in path.name) if folder.is_dir() else []  # scratch: prune's
+
+
+@pytest.mark.parametrize("point", ["outbox-written", "staged", "blobs-sent", "answered", "recorded", "removing", "started",
+                                   "files-added"])
+def test_sigkill_at_each_step_of_a_sync_loses_and_doubles_nothing(tmp_path, point):
+    """A publish and a run (with a draft) are killed at one step of writing or sending; the next command recovers: the
+    remote has every version that got that far exactly once, failed runs are failed, the outbox is empty, verify is clean."""
+    server = RealServer(tmp_path / "remote").start()
+    env = base_env(CAIRN_TOKEN=server.token)
+    killing = kill_env(tmp_path, CAIRN_TOKEN=server.token, CAIRN_KILL_AT=point)
+    project = project_at(tmp_path, "study", server.url)
+    script(project, "publish.py", KILL_PUBLISH)
+    script(project, "run.py", KILL_RUN)
+    finished, killed = [], 0
+    for index in range(3):
+        data = project / f"d{index}"
+        data.mkdir()
+        (data / "a.txt").write_text(f"version {index}")
+        (data / "big.bin").write_bytes(os.urandom(3 << 20))
+        result = subprocess.run([sys.executable, "publish.py", str(data)], cwd=project, capture_output=True, text=True,
+                                env=killing, timeout=120)
+        if result.returncode == -signal.SIGKILL:
+            killed += 1
+        else:
+            assert result.returncode == 0, result.stderr
+            finished.append(result.stdout.split()[0])
+        run = subprocess.run([sys.executable, "run.py"], cwd=project, capture_output=True, text=True, env=killing, timeout=120)
+        if run.returncode == -signal.SIGKILL:
+            killed += 1
+        else:
+            assert run.returncode == 0, run.stderr
+            finished += run.stdout.split()
+    assert killed, f"nothing was killed at {point}"
+    status = cli(project, "status", env=env)  # any command recovers
+    assert status.returncode == 0, status.stderr
+    synced = cli(project, "sync", env=env)
+    assert synced.returncode == 0, synced.stdout + synced.stderr
+    left = outbox_of(project)
+    if left:  # only folders a crash kept from being removed after they were sent: prune removes them
+        assert point == "removing" and all(json.loads((project / ".cairn" / "outbox" / uid / "manifest.json").read_text())["sync"]
+                                           == "synced" for uid in left), (point, left)
+        assert cli(project, "prune", env=env).returncode == 0
+    assert outbox_of(project) == [], (point, outbox_of(project), cli(project, "status", env=env).stdout)
+    assert "nothing pending" in cli(project, "status", env=env).stdout
+
+    remote = LocalRepo(server.root)
+    everything = check_numbers(remote)
+    on_remote = {version["uid"]: version for versions in everything.values() for version in versions}
+    for uid in finished:  # nothing finished is lost
+        assert on_remote[uid]["status"] == "completed", (point, on_remote.get(uid))
+    assert not [v for v in on_remote.values() if v["status"] == "running"], point  # killed runs are failed, not running
+    assert len({version["uid"] for version in on_remote.values()}) == len(on_remote)
+    data = everything.get("data", [])
+    assert len({tuple(sorted((f["path"], f["sha256"]) for f in v["files"])) for v in data}) == len(data)  # no double version
+    local = LocalRepo(project / ".cairn")
+    for name, versions in everything.items():
+        mine = {v["uid"]: v["version"] for v in local.versions("study", name)} if name in local.artifacts("study") else {}
+        assert all(on_remote[uid]["version"] == number for uid, number in mine.items()), name
+    verify_clean(project, env)
+    assert cli(project, "verify", "--repo", str(server.root)).returncode == 0
+    assert not stray_repos(tmp_path, {project / ".cairn", server.root})
+    server.stop()
+
+
+RANDOM_PUBLISH = """
+import os, pathlib, sys, cairn
+folder = pathlib.Path(sys.argv[1])
+folder.mkdir(parents=True)
+(folder / "a.txt").write_text(sys.argv[1])
+(folder / "big.bin").write_bytes(os.urandom(int(sys.argv[2]) << 20))
+version = cairn.connect().project().artifact(sys.argv[3]).publish(folder)
+print("DONE", version.uid, flush=True)
+"""
+
+RANDOM_RUN = """
+import sys, time, cairn
+run = cairn.init(name="victim", code=False, system=False, watch=True)
+for step in range(int(sys.argv[1])):
+    run.add({"loss": 1.0 / (step + 1), "step": step})
+    time.sleep(0.01)
+with cairn.draft("out") as out:
+    out.add_json("v", {"steps": sys.argv[1]})
+run.finish()
+print("DONE", run.uid, out.version.uid, flush=True)
+"""
+
+KILLS = int(os.environ.get("CAIRN_ATTACK_KILLS", "25"))
+
+
+@pytest.mark.parametrize("remote", [False, True], ids=["no-remote", "remote"])
+def test_random_sigkills_of_concurrent_writers_gc_syncs_and_the_server(tmp_path, remote):
+    """KILLS rounds: two or three of (a publish with a 1-30 MB file, a live run with a draft, `cairn gc --grace 0`,
+    `cairn sync`, `cairn prune`) run at once and a random subset is SIGKILLed after a random delay; with a remote, the
+    server is SIGKILLed and restarted at random too. Afterwards the repo (and remote) hold every finished version once,
+    numbers are contiguous, no version stays running, and verify is clean."""
+    rng = random.Random(1234 + remote)
+    server = RealServer(tmp_path / "remote").start() if remote else None
+    env = base_env(**({"CAIRN_TOKEN": server.token} if server else {}))
+    project = project_at(tmp_path, "study", server.url if server else None)
+    script(project, "publish.py", RANDOM_PUBLISH)
+    script(project, "run.py", RANDOM_RUN)
+    finished, outputs, counter = [], [], 0
+    for round_ in range(KILLS):
+        kinds = rng.sample(["publish", "publish", "run", "gc", "sync", "prune"], rng.randint(2, 3))
+        processes = []
+        for kind in kinds:
+            counter += 1
+            if kind == "publish":
+                argv = ["publish.py", f"w/{counter}", rng.randint(1, 30), rng.choice(["data", "other"])]
+            elif kind == "run":
+                argv = ["run.py", rng.randint(5, 200)]
+            elif kind == "gc":
+                argv = ["-m", "cairn", "gc", "--grace", "0"]
+            elif kind == "sync":
+                argv = ["-m", "cairn", "sync"]
+            else:
+                argv = ["-m", "cairn", "prune", "--older-than", "0s"]
+            processes.append((kind, spawn(project, *argv, env=env)))
+        time.sleep(rng.uniform(0.05, 0.8))
+        if server and rng.random() < 0.3:
+            server.stop(kill=True)
+            time.sleep(rng.uniform(0, 0.5))
+            server.start()
+        for kind, process in processes:
+            if rng.random() < 0.6:
+                process.send_signal(signal.SIGKILL)
+        for kind, process in processes:
+            out, err = finish(process, 300)
+            outputs.append((kind, process.returncode, out, err))
+            if process.returncode == 0:
+                for line in out.splitlines():
+                    if line.startswith("DONE "):
+                        finished += line.split()[1:]
+            elif process.returncode != -signal.SIGKILL and kind in ("publish", "run"):
+                raise AssertionError(f"{kind} failed without being killed: {err[-3000:]}")
+    problems = [f"{kind}: {line}" for kind, code, out, err in outputs if code == 0 for line in bad_lines(err) if "Traceback" in line
+                or "locked" in line]
+    assert not problems, "\n".join(problems[:20])
+    status = cli(project, "status", env=env)
+    assert status.returncode == 0, status.stderr
+    if server:
+        synced = cli(project, "sync", env=env)
+        assert synced.returncode == 0, synced.stdout + synced.stderr
+        assert cli(project, "prune", env=env).returncode == 0  # outbox folders whose removal a kill interrupted
+        assert outbox_of(project) == [], cli(project, "status", env=env).stdout
+        assert "nothing pending" in cli(project, "status", env=env).stdout
+    truth = LocalRepo(server.root if server else project / ".cairn")
+    everything = check_numbers(truth)
+    known = {version["uid"]: version for versions in everything.values() for version in versions}
+    for uid in finished:
+        assert known[uid]["status"] == "completed", known.get(uid)
+    running = [version for version in known.values() if version["status"] == "running"]
+    assert not running, running
+    print(f"\n{KILLS} rounds ({'remote' if server else 'no remote'}): {len(finished)} finished, "
+          f"{sum(1 for _, code, _, _ in outputs if code == -signal.SIGKILL)} killed, {len(known)} versions in the source of truth, "
+          f"{sum(1 for v in known.values() if v['status'] == 'failed')} failed")
+    verify_clean(project, env)
+    if server:
+        assert cli(project, "verify", "--repo", str(server.root)).returncode == 0
+        server.stop()
+    assert not stray_repos(tmp_path, {project / ".cairn", tmp_path / "remote"})
+
+
+# ====================================================================== 7. servers started and stopped, two servers, a taken port
+
+LIVE_UNTIL = """
+import pathlib, sys, time, cairn
+run = cairn.init(name=sys.argv[1], code=False, system=False, watch=True)
+pathlib.Path(f"{sys.argv[1]}.started").write_text(run.uid)
+step = 0
+while not pathlib.Path("stop").exists():
+    run.add({"step": step})
+    step += 1
+    time.sleep(0.05)
+with cairn.draft(f"{sys.argv[1]}-out") as out:
+    out.add_json("steps", {"steps": step})
+run.finish()
+print("DONE", run.uid, out.version.uid, step, flush=True)
+"""
+
+
+def test_a_server_stopped_and_killed_mid_run_changes_nothing_for_runs(tmp_path):
+    """A client's live run and a run on the server's own machine (the server's repo opened directly) keep going while
+    the server is stopped, SIGKILLed, and started again; both complete, nothing is failed, every step is kept."""
+    server = RealServer(tmp_path / "remote").start()
+    env = base_env(CAIRN_TOKEN=server.token)
+    client = project_at(tmp_path, "client", server.url, extra="heartbeat_timeout = 600\n")
+    beside = project_at(tmp_path, "beside", extra=f'[cairn]\ndir = "{server.root}"\n'.replace("[cairn]", "\n[cairn]"))
+    for project in (client, beside):
+        script(project, "live.py", LIVE_UNTIL)
+    remote_run = spawn(client, "live.py", "remote-run", env=env)
+    local_run = spawn(beside, "live.py", "local-run", env=env)
+    for project, name, process in ((client, "remote-run", remote_run), (beside, "local-run", local_run)):
+        deadline = time.time() + 60
+        while not (project / f"{name}.started").exists():
+            assert time.time() < deadline and process.poll() is None, finish(process)
+            time.sleep(0.05)
+    time.sleep(1.5)  # the client's run is on the server, running, with files
+    server.stop()  # SIGTERM
+    time.sleep(1.5)
+    server.start()
+    time.sleep(1.5)
+    server.stop(kill=True)
+    time.sleep(1.5)
+    server.start()
+    time.sleep(2)
+    for project in (client, beside):
+        (project / "stop").write_text("")
+    results = {}
+    for name, process in (("remote-run", remote_run), ("local-run", local_run)):
+        out, err = finish(process, 300)
+        assert process.returncode == 0, err
+        assert not [line for line in bad_lines(err) if "Traceback" in line], err
+        _, run_uid, out_uid, steps = out.split()
+        results[name] = (run_uid, out_uid, int(steps))
+    synced = cli(client, "sync", env=env)
+    assert synced.returncode == 0, synced.stdout + synced.stderr
+    remote = LocalRepo(server.root)
+    check_numbers(remote)
+    for name, (run_uid, out_uid, steps) in results.items():
+        run = remote.get_version("study", f"runs/{name}", run_uid)
+        assert run["status"] == "completed", (name, run.get("error"))
+        lines = b"".join(remote.read_file("study", f"runs/{name}", run_uid, "metrics.jsonl").chunks).decode().splitlines()
+        assert len(lines) == steps, (name, len(lines), steps)
+        assert remote.get_version("study", f"{name}-out", out_uid)["inputs"] == [f"study:runs/{name}@v{run['version']}"]
+    assert outbox_of(client) == []
+    verify_clean(client, env)
+    assert cli(client, "verify", "--repo", str(server.root)).returncode == 0
+
+    second = spawn(tmp_path, "-m", "cairn", "server", server.root, "--port", free_port(), "--no-ui")
+    out, err = finish(second, 60)
+    assert second.returncode != 0 and "already served" in out + err, out + err  # two servers on one repo: refused
+    taken = socket.socket()
+    taken.bind(("127.0.0.1", 0))
+    taken.listen(1)
+    other = project_at(tmp_path, "other")
+    third = spawn(other, "-m", "cairn", "server", tmp_path / "other-remote", "--port", taken.getsockname()[1], "--no-ui")
+    out, err = finish(third, 60)
+    taken.close()
+    assert third.returncode != 0 and str(taken.getsockname()[1] if False else "") in out + err, out + err
+    assert "in use" in (out + err).lower() or "address already" in (out + err).lower(), out + err  # never a silent move
     server.stop()
