@@ -35,25 +35,25 @@ def finish_and_sync(run):
 
 def test_the_first_use_pull_or_draft_starts_the_run(configured, env):
     dataset = published_dataset(env)
-    assert cairn.run() is None
+    assert not cairn.run
     used = cairn.use("datasets/toy@latest")
-    run = cairn.run()
+    run = cairn.client.runs.current()
     assert isinstance(run, cairn.Run) and run.name == f"runs/{runs.default_name()}"
     assert isinstance(used, cairn.Version) and used == dataset and used.ref == "study:datasets/toy@v1"
     assert (used.path / "x.txt").read_text() == "1"  # materialized on first use
     store = cairn.connect()
     running = store.version(run.ref)
     assert running.status == "running" and running.metadata == {"kind": "run"} and running.uid == run.uid
-    assert cairn.pull("datasets/toy@v1").is_dir() and cairn.run() is run  # one run
+    assert cairn.pull("datasets/toy@v1").is_dir() and cairn.run == run  # one run
     version = finish_and_sync(run)
-    assert version.status == "completed" and version.inputs == [dataset.ref] and cairn.run() is None
+    assert version.status == "completed" and version.inputs == [dataset.ref] and not cairn.run
     assert dataset.consumers == [version.ref]
 
 
 def test_one_run_per_process(env):
     (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
     run = cairn.init(name="train", config={"lr": 0.1}, metadata={"note": "first"}, system=False, code=False)
-    assert run.name == "runs/train" and cairn.init() is run and cairn.init(name="train") is run and cairn.run() is run
+    assert run.name == "runs/train" and cairn.init() is run and cairn.init(name="train") is run and cairn.run == run
     with pytest.raises(cairn.StoreError, match="one run per process"):
         cairn.init(name="other")
     with cairn.draft("model") as model:
@@ -61,19 +61,19 @@ def test_one_run_per_process(env):
     assert model.run_ref == run.ref
     version = run.finish()
     assert version.metadata == {"kind": "run", "note": "first", "config": {"lr": 0.1}} and version.label == run.label
-    assert cairn.run() is None
+    assert not cairn.run
     implicit = cairn.draft("again")  # after finish(), a new run starts
-    assert cairn.run() is not run
+    assert cairn.run != run
     cairn.init(config={"lr": 0.2}, metadata={"note": "late"})  # the run the draft started takes them now
-    assert cairn.connect().version(cairn.run().ref).metadata == {"kind": "run", "config": {"lr": 0.2}, "note": "late"}
-    assert cairn.run().config == {"lr": 0.2}
+    assert cairn.connect().version(cairn.run.ref).metadata == {"kind": "run", "config": {"lr": 0.2}, "note": "late"}
+    assert cairn.run.config == {"lr": 0.2}
     implicit.discard()
 
 
 def test_init_after_an_implicit_start_updates_the_running_run(configured, env):
     dataset = published_dataset(env)
     cairn.use("datasets/toy@latest")  # starts the run implicitly
-    run = cairn.run()
+    run = cairn.client.runs.current()
     assert cairn.connect().version(run.ref).metadata == {"kind": "run"}
     assert cairn.init(config={"lr": 0.1}, metadata={"note": "late"}) is run
     assert cairn.init(metadata={"extra": 1}) is run and run.config == {"lr": 0.1}
@@ -160,7 +160,7 @@ def test_a_subprocess_of_a_run_records_in_that_run(env):
     (env / "cairn.toml").write_text('[repo]\nproject = "study"\n')
     data = published_dataset(env)
     run = cairn.init(name="parent", system=False, code=False)
-    child = "import cairn; cairn.use('datasets/toy@v1'); d = cairn.draft('child-out'); d.add({'x': 1}); d.publish(); assert cairn.run() is None"
+    child = "import cairn; cairn.use('datasets/toy@v1'); d = cairn.draft('child-out'); d.add({'x': 1}); d.publish(); assert not cairn.run"
     subprocess.run([sys.executable, "-c", child], check=True, cwd=env, env=dict(os.environ))
     version = run.finish()
     assert version.inputs == [data.ref] and version.consumers == ["study:child-out@v1"]
@@ -447,7 +447,7 @@ class Toy:
     def run(self, output_dir):
         if self.pull:
             cairn.use(self.pull)
-        run = cairn.run()
+        run = cairn.client.runs.current()
         assert run is not None and run.path == output_dir
         print("training", flush=True)
         run.add({"score": 1.0, "step": 0})
@@ -535,3 +535,24 @@ def test_a_hydra_sweep_is_a_run_per_trial_and_a_summary_run(run_project):
     assert [v.ref for v in summary.upstream()] == [first.ref, second.ref]
     assert [v.inputs for v in store.project().artifact("models/toy").versions()] == [[trial0.ref], [trial1.ref]]
     assert drafts.drafts() == []
+
+
+def test_cairn_run_is_the_current_run_from_anywhere(env):
+    from cairn import run as imported_early
+
+    assert not cairn.run and repr(cairn.run).startswith("<cairn.run: no run")
+    with pytest.raises(RuntimeError, match=r"call cairn.init\(\) first"):
+        cairn.run.add({"loss": 1.0})
+
+    def deep_inside_the_training_code(step):
+        cairn.run.add({"loss": 1.0 / (step + 1), "step": step})  # no run passed in
+
+    run = cairn.init(name="anywhere")
+    assert cairn.run == run and imported_early == run and cairn.run.name == "runs/anywhere"
+    for step in range(3):
+        deep_inside_the_training_code(step)
+    imported_early.add({"loss": 0.1, "step": 3})
+    cairn.run.finish()
+    assert not cairn.run
+    version = cairn.connect().version(run.ref)
+    assert version.status == "completed" and "metrics.jsonl" in {f.path for f in version.files}

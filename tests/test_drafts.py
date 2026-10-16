@@ -36,9 +36,9 @@ def run_ref(run, number=None):
 def test_a_draft_publishes_its_folder_on_exit(configured, env, monkeypatch):
     dataset = published_dataset(env)
     monkeypatch.setenv("CAIRN_INPUTS", str(env / "outer-inputs.jsonl"))
-    assert cairn.run() is None
+    assert not cairn.run
     with cairn.draft("descent", aliases=["best"], metadata={"seed": 0}) as model:
-        run = cairn.run()  # opening the draft started the process's run
+        run = cairn.client.runs.current()  # opening the draft started the process's run
         assert isinstance(run, cairn.Run) and run.name.startswith("runs/") and run.record["metadata"]["kind"] == "run"
         assert model.path.is_dir() and not any(model.path.iterdir())  # fresh and empty
         assert model.path.parent.parent == env / ".cairn" / "drafts" and model.path.name == model.uid
@@ -50,7 +50,7 @@ def test_a_draft_publishes_its_folder_on_exit(configured, env, monkeypatch):
         model.add_json("final", {"loss": 0.25})
         (model.path / "model.pt").write_bytes(b"weights")
         folder_ = model.path
-    assert cairn.current_draft() is None and cairn.run() is run  # the run goes on until the process ends
+    assert cairn.current_draft() is None and cairn.run == run  # the run goes on until the process ends
     version = model.version
     assert isinstance(version, cairn.Version) and version.number == 1 and version.ref == "study:descent@v1"
     assert version.uid == model.uid and LABEL.fullmatch(version.label) and version.metadata == {"seed": 0}
@@ -85,7 +85,7 @@ def test_an_exception_keeps_the_folder_and_publishes_nothing(configured, env, ca
     assert (run.path / "partial.txt").read_text() == "half"
     assert f"kept the draft {run.path}" in capsys.readouterr().err
     assert run.version is None and cairn.connect().project().artifact("descent").versions() == []
-    assert os.environ["CAIRN_INPUTS"] == str(cairn.run().path / ".cairn-inputs.jsonl")  # the run goes on
+    assert os.environ["CAIRN_INPUTS"] == str(cairn.run.path / ".cairn-inputs.jsonl")  # the run goes on
     [kept] = [item for item in drafts.drafts() if item.record.get("kind") != "run"]
     assert (kept.uid, kept.state, kept.record["error"]) == (run.uid, "kept", "RuntimeError: diverged")
 
@@ -118,7 +118,7 @@ def test_nested_drafts_are_outputs_of_the_one_run(env):
     assert cairn.current_draft() is inner
     inner.discard()
     assert cairn.current_draft() is None and not outer.path.exists() and not inner.path.exists()
-    run = cairn.run()
+    run = cairn.client.runs.current()
     assert {outer.run_ref, inner.run_ref, innermost.run_ref} == {run.ref}
     assert innermost.version.inputs == [f"study:{run.name}@v1"]
 
@@ -135,7 +135,7 @@ def test_drafts_get_exactly_the_run_and_pulls_inside_go_to_the_run(configured, e
             (evaluation.path / "scores.json").write_text("{}")
         assert evaluation.version.number == 1
     assert not hasattr(model, "use")  # no explicit linking any more
-    run = cairn.run()
+    run = cairn.client.runs.current()
     number = store.version(run.ref).number
     assert model.version.inputs == evaluation.version.inputs == [f"study:{run.name}@v{number}"]
     finished = run.finish()
@@ -148,7 +148,7 @@ def test_drafts_get_exactly_the_run_and_pulls_inside_go_to_the_run(configured, e
 def test_a_failed_run_keeps_the_edge_to_its_outputs(configured, env):
     with cairn.draft("model") as model:
         (model.path / "w.txt").write_text("w")
-    run = cairn.run()
+    run = cairn.client.runs.current()
     run.finish(RuntimeError("diverged"))
     store = cairn.connect()
     if store.remote:
@@ -231,7 +231,7 @@ def test_cli_lists_publishes_and_discards_kept_drafts(configured, env, capsys):
                     (run.path / "run.json").write_text(json.dumps({"status": "failed"}))
                 raise RuntimeError(name)
     capsys.readouterr()
-    cairn.run().finish()  # this process's run: it is a draft too, until it ends
+    cairn.run.finish()  # this process's run: it is a draft too, until it ends
     capsys.readouterr()
     main(["drafts"])
     listed = capsys.readouterr().out.splitlines()

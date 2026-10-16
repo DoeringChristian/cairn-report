@@ -540,7 +540,7 @@ def load(where: Path | str, store=None) -> Draft:
 
 def current_draft() -> Draft | None:
     """The draft this process writes into: the innermost open one, else the one the working directory lies in (a
-    Hydra job whose run dir is `${cairn.draft:...}`, or a subprocess of one), else None. The run is `cairn.run()`."""
+    Hydra job whose run dir is `${cairn.draft:...}`, or a subprocess of one), else None. The run is `cairn.run`."""
     if _ACTIVE:
         return _ACTIVE[-1]
     found = find(Path.cwd())

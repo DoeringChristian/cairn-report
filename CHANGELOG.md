@@ -5,6 +5,8 @@
 This release introduces the design in `docs/architecture.md`. It is the new layout: Cairn was not in use
 before it, so there is no migration and no compatibility code, and a project starts a fresh repo.
 
+- **`cairn.run` is the process's run from anywhere** (it was the function `cairn.run()`): `cairn.run.add(...)`
+  after `cairn.init()`, with no run to pass around. With no run, using it raises; `bool(cairn.run)` is False.
 - **The repo is `.cairn/` itself**: `repo.json`, `metadata.sqlite3`, `blobs/<aa>/<sha256>`, `outbox/<uid>/`,
   read-only folders under `versions/<uid>/files/`, `drafts/`, `build/`, `share/`, `token`, `server.lock`, `tmp/`.
   There is no `.cairn/store`, `.cairn/pending`, or `.cairn/cache` any more, and a server's repo has the same

@@ -346,7 +346,9 @@ with cairn.draft("models/student") as model:      # an output of the run
 - **A run** is a version of the artifact `runs/<name>`, with `metadata.kind = "run"` and
   `metadata.config` (`metadata=` adds more). The name defaults to the script's stem (`python -m pkg.mod`:
   the module's name; an interactive session: `interactive`). There is one run per process:
-  `cairn.init()` again returns it (another name raises), `cairn.run()` returns it or None. If
+  `cairn.init()` again returns it (another name raises), and `cairn.run` is it from anywhere in the
+  process, so nothing passes the run around: `cairn.run.add({"loss": loss})` (with no run, using it
+  raises, and `bool(cairn.run)` is False). If
   `cairn.init` was not called, the first `cairn.use`, `cairn.pull`, or `cairn.draft` starts one; call
   `init` first to give it a name and a config, or later: `cairn.init(config=..., metadata=...)` on a
   running run adds them to its metadata (in the repo too), whoever started it. `run.finish()` ends it
@@ -486,7 +488,7 @@ hydra:
 - `run_experiment` calls `cairn.init(name=cfg.run.name, config=<the resolved job config>,
   metadata={"overrides": [...]})`, requires the source snapshot, instantiates `cfg.experiment`, calls its
   `run(output_dir)`, and finishes the run when it returns (failed, with the traceback, when it raises).
-  The experiment gets the run with `cairn.run()` (`run.add(...)`) and publishes its outputs with
+  The experiment logs with `cairn.run.add(...)` and publishes its outputs with
   `cairn.draft(...)`.
 - `${cairn.run:}` (an OmegaConf resolver, registered when `cairn.runs.hydra` is imported, and cached so
   every resolution in a job and every trial of a sweep gets the same folder) reserves a run folder: the

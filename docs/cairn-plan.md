@@ -135,7 +135,7 @@ The config file becomes `cairn.toml`; a `cairn-report.toml` is an error that ask
      every process that uses or publishes artifacts is a run, `cairn.init(name, config=...)` or implicitly the
      first `use`/`pull`/`draft`: a draft of `runs/<name>` (`metadata.kind = "run"`) whose version is running
      from the start and completes at exit (atexit via threading's exit callbacks, so thread pools still work;
-     failed on an unhandled exception or SIGTERM, `logs/error.txt`). One run per process (`cairn.run()`,
+     failed on an unhandled exception or SIGTERM, `logs/error.txt`). One run per process (`cairn.run`,
      `run.finish()`). Its folder: the writer's files, `code/` (the source snapshot, client/code.py, moved out of
      runs/snapshot.py so it needs no Hydra), `environment/` (pip-freeze.txt, pixi.lock), `logs/` (an fd-level tee of
      stdout and stderr), `system/info.json` and `system/metrics.jsonl` (client/system.py); no run.json. With a

@@ -233,7 +233,7 @@ def test_pull_records_inputs_in_cwd_and_env(env, tmp_path, monkeypatch):
     assert len((env / ".cairn-inputs.jsonl").read_text().splitlines()) == 1
     # cairn.pull starts the process's run: the run's inputs file, and the inherited one is still told
     assert store.pull("datasets/crops@v1", store=s).is_dir()
-    run = store.run()
+    run = store.client.runs.current()
     assert os.environ["CAIRN_INPUTS"] == str(run.path / ".cairn-inputs.jsonl")
     assert [json.loads(line)["ref"] for line in target.read_text().splitlines()] == ["study:datasets/crops@v1"] * 2
     assert json.loads((run.path / ".cairn-inputs.jsonl").read_text())["ref"] == "study:datasets/crops@v1"

@@ -90,11 +90,49 @@ def _store(store) -> "Repo":
     return repo
 
 
-def run() -> "Run | None":
-    """This process's run (`cairn.init()`, or the one the first use/pull/draft started), else None."""
-    from .client import runs
+class _CurrentRun:
+    """`cairn.run`: this process's run (`cairn.init()`, or the one the first use/pull/draft started), wherever the
+    code is, so nothing has to pass the run around: `cairn.run.add({"loss": loss})`. Every attribute is the current
+    run's; with no run, using one raises (`bool(cairn.run)` is False then). `from cairn import run` works the same."""
 
-    return runs.current()
+    __slots__ = ()
+
+    @staticmethod
+    def _get() -> "Run":
+        from .client import runs
+
+        current = runs.current()
+        if current is None:
+            raise RuntimeError("no run in this process: call cairn.init() first")
+        return current
+
+    def __getattr__(self, name: str):
+        return getattr(self._get(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        setattr(self._get(), name, value)
+
+    def __bool__(self) -> bool:
+        from .client import runs
+
+        return runs.current() is not None
+
+    def __eq__(self, other) -> bool:
+        from .client import runs
+
+        current = runs.current()
+        return current is (other._get() if isinstance(other, _CurrentRun) else other) if current is not None else other is None
+
+    __hash__ = object.__hash__
+
+    def __repr__(self) -> str:
+        from .client import runs
+
+        current = runs.current()
+        return repr(current) if current is not None else "<cairn.run: no run (cairn.init() starts one)>"
+
+
+run = _CurrentRun()
 
 
 def _start_run(store) -> None:

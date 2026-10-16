@@ -4,7 +4,7 @@
     python descent.py --learning-rate 0.08
 
 The process is a run (`cairn.init`): a version of `runs/descent` that records the config, what it used (the
-dataset `datasets/quadratic`, at its exact version), the loss curve (`run.add`), its output, code, packages, and
+dataset `datasets/quadratic`, at its exact version), the loss curve (`cairn.run.add`), its output, code, packages, and
 the machine. The result goes into a draft, a fresh folder Cairn manages (in .cairn/drafts/), which becomes
 `descent@v<n>` when the block ends, with the run as its input. The run completes when the script exits. A plain
 script on purpose: Cairn needs no framework.
@@ -33,7 +33,7 @@ def trajectory(points: np.ndarray, A: np.ndarray):
 
 
 def main(config: dict) -> "cairn.Version":
-    run = cairn.init(name="descent", config=config)            # runs/descent@v<n>, running until the script exits
+    cairn.init(name="descent", config=config)                  # runs/descent@v<n>, running until the script exits
     data = cairn.use(config["dataset"])                         # an input of the run, at its exact version
     problem = json.loads((data.path / "problem.json").read_text())
     A, x, rate = np.array(problem["A"]), np.array(problem["x0"]), config["learning_rate"]
@@ -41,7 +41,7 @@ def main(config: dict) -> "cairn.Version":
     for step in range(config["steps"]):
         x = x - rate * A @ x
         points.append(x.copy())
-        run.add({"loss": float(0.5 * x @ A @ x), "step": step})  # the loss curve, in the run's metrics.jsonl
+        cairn.run.add({"loss": float(0.5 * x @ A @ x), "step": step})  # the loss curve, in the run's metrics.jsonl
     loss = float(0.5 * x @ A @ x)
     print(f"final loss {loss:.3e} after {config['steps']} steps")  # also in the run's logs/stdout.txt
     with cairn.draft("descent") as result:                      # the result artifact: an output of the run

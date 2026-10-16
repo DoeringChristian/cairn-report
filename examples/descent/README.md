@@ -28,17 +28,17 @@ Run these from this folder: Cairn uses the repo of the folder it runs in (the ne
 `cairn.toml` upward), so from elsewhere the commands would use another repo.
 
 `descent.py` is a run: `cairn.init` makes the process a version of `runs/descent` (running until the
-script exits), `cairn.use` records the dataset's exact version as the run's input, `run.add` logs the
+script exits), `cairn.use` records the dataset's exact version as the run's input, `cairn.run.add` logs the
 loss curve into the run, and the result goes into a draft, which becomes `descent@v<n>` with the run
 as its one input:
 
 ```python
-run = cairn.init(name="descent", config=config)            # runs/descent@v<n>
+cairn.init(name="descent", config=config)                  # runs/descent@v<n>
 data = cairn.use(config["dataset"])                         # datasets/quadratic@v1, an input of the run
 problem = json.loads((data.path / "problem.json").read_text())
 for step in range(config["steps"]):
     ...
-    run.add({"loss": loss, "step": step})                   # the run's metrics.jsonl
+    cairn.run.add({"loss": loss, "step": step})             # the run's metrics.jsonl, from anywhere
 with cairn.draft("descent") as result:                      # the result artifact, an output of the run
     result.add_json("final", {...}, {"dataset": data.ref})
     result.add_figure("trajectory", trajectory, {"steps": ...}, points, A)

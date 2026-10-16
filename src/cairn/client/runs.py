@@ -10,7 +10,7 @@
 A `Run` is a draft (cairn/client/drafts.py) of the artifact `runs/<name>`, with `metadata.kind = "run"` and
 `metadata.config`. The name defaults to the script's stem (`python -m pkg.mod`: the module's name; an interactive
 session: `interactive`). There is one current run per process: a second `init()` returns it (adding its `config` and `metadata`, and refusing another
-name), `cairn.run()` returns it or None. Its version is created at once (running), so the outputs published while
+name), and `cairn.run` is it from anywhere (with none, using it raises). Its version is created at once (running), so the outputs published while
 it runs name it by its uid; with a remote it is synced every `[repo] interval` seconds (`watch`, the default
 there) with a heartbeat, so the UI shows it live; without one it is written when it ends (`watch=True` to follow it).
 
@@ -295,7 +295,7 @@ class Run(Draft):
 
 
 def current() -> Run | None:
-    """The run of this process, or None (`cairn.run()`)."""
+    """The run of this process, or None (what `cairn.run` stands for)."""
     return _CURRENT
 
 
