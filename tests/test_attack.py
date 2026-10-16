@@ -1600,3 +1600,44 @@ def test_a_file_that_grows_between_its_listing_and_its_hash_is_recorded_as_kept(
     kept = (tmp_path / "repo" / "blobs" / entry["sha256"][:2] / entry["sha256"]).read_bytes()
     assert sha(kept) == entry["sha256"] and len(kept) == entry["size"] == 1500
     assert str(folder / "log.txt") not in cache.entries
+
+
+SWEPT_RUN = """
+import pathlib, time, cairn
+import cairn.store.local as local
+
+original, swept = local.LocalRepo.add_files, []
+def add_files(self, *args, **kwargs):  # a `cairn gc` sweep lands between the staging of a file and its version's write
+    if not swept and args[3]:
+        swept.append(self.gc(dry_run=False, grace=0))
+    return original(self, *args, **kwargs)
+local.LocalRepo.add_files = add_files
+
+run = cairn.init(name="swept", code=False, system=False, watch=True)
+for step in range(40):
+    run.add({"step": step})
+    (run.path / "files").mkdir(exist_ok=True)
+    (run.path / "files" / f"f{step}.txt").write_text(str(step))
+    time.sleep(0.2)
+run.finish()
+print("DONE", run.uid, swept[0]["blobs"] if swept else None)
+"""
+
+
+def test_a_gc_sweep_between_staging_and_a_live_sync_does_not_lose_the_run(tmp_path):
+    """A live run's sync whose staged blob a concurrent sweep removed (MissingBlobs) stages again; the run keeps its
+    heartbeat, so a short heartbeat timeout does not fail it while it runs."""
+    project = project_at(tmp_path, "study-swept", extra="heartbeat_timeout = 2\n")
+    script(project, "swept.py", SWEPT_RUN)
+    run = spawn(project, "swept.py")
+    while run.poll() is None:  # other processes open the repo meanwhile, and fail runs whose heartbeat stopped
+        cli(project, "status")
+        time.sleep(0.5)
+    out, err = finish(run)
+    assert run.returncode == 0, err
+    _, uid, swept = out.split()
+    assert swept != "None" and int(swept) >= 1  # the sweep did remove a staged blob
+    version = LocalRepo(project / ".cairn").get_version("study", "runs/swept", uid)
+    assert version["status"] == "completed", version.get("error")
+    assert len([entry for entry in version["files"] if entry["path"].startswith("files/")]) == 40
+    verify_clean(project)

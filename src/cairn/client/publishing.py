@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 
 from ..config import Config, load_config
-from ..store import INPUTS_ENV, INPUTS_FILE, StoreError, read_inputs, refs
+from ..store import INPUTS_ENV, INPUTS_FILE, MissingBlobs, StoreError, read_inputs, refs
 from .http import scan
 from .open import as_repo, open_repo, versions_of
 
@@ -146,13 +146,18 @@ class Publication:
     def sync(self) -> int:
         """Add the files that are new or changed since the last sync; returns how many."""
         self.start()
-        entries, sources = self.store.stage(self.local, self.exclude, self.config.project)
-        fresh = [entry for entry in entries if self._sent.get(entry["path"]) != (entry.get("sha256"), entry.get("link"))]
-        try:
-            self.store.add_files(self.project, self.name, self.uid, fresh)
-        except StoreError:
-            self._stop_beating()  # failed meanwhile (its heartbeat expired, or the repo failed it): this job lost it
-            raise
+        for attempt in range(3):
+            entries, sources = self.store.stage(self.local, self.exclude, self.config.project)
+            fresh = [entry for entry in entries if self._sent.get(entry["path"]) != (entry.get("sha256"), entry.get("link"))]
+            try:
+                self.store.add_files(self.project, self.name, self.uid, fresh)
+                break
+            except MissingBlobs:  # garbage collection removed a staged blob meanwhile: stage again (the version is fine)
+                if attempt == 2:
+                    raise
+            except StoreError:
+                self._stop_beating()  # failed meanwhile (its heartbeat expired, or the repo failed it): this job lost it
+                raise
         self.store.restage(entries, sources)
         self._sent.update({entry["path"]: (entry.get("sha256"), entry.get("link")) for entry in fresh})
         self._apply(self.store.get_version(self.project, self.name, self.uid))
