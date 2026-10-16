@@ -93,8 +93,8 @@ before it, so there is no migration and no compatibility code, and a project sta
     heartbeat_timeout, allow_network_fs, exclude), `[reports]` (dir, output_dir), `[style]` (css,
     template_dir); paths are relative to the folder holding `.cairn/`. `cairn.toml` and `[cairn] dir` are
     gone; the project root is the nearest folder with `.cairn/repo.json`. `cairn init` writes a commented
-    template. `cairn remote` shows the remote, `cairn remote set <url>` checks and writes it (the next command
-    syncs and adopts the repo's own versions), `cairn remote remove` drops it.
+    template. `cairn remote` shows the remote, `cairn remote set <url>` checks and writes it, then checks the token with the remote and asks for it when there
+    is none or it is refused, saving it to `.cairn/token` (the next command syncs and adopts the repo's own versions), `cairn remote remove` drops it.
   - **One token, no scopes:** the server's `<repo>/token` reaches every project and creates one on first sync.
     `cairn token`, `tokens.jsonl`, project-scoped and read-only tokens, and `[repo] token_file` are removed.
   - **UI login without timeouts:** the login link works once and does not expire; the session cookie is an HMAC

@@ -343,6 +343,7 @@ def cmd_remote(args) -> None:
             print(f"created the repo {config.cairn_dir}")
         set_remote(config.source, url)
         print(f"remote: {url}")
+        _check_token(load_config(args.directory), url)
         if url != current:
             print("The next cairn command that uses the repo syncs with it (or run `cairn sync` now): versions this repo "
                   "numbered itself are adopted, sent oldest first and renumbered by the remote (their uids stay, so "
@@ -354,6 +355,61 @@ def cmd_remote(args) -> None:
     print(f"removed the remote {current}: this repo is the source of truth again. Versions keep their numbers (copies of "
           "the remote's too), and pending ones stay pending: they wait in the outbox, unnumbered, until a remote is "
           "set again.")
+
+
+def _check_token(config, url: str) -> None:
+    """After `cairn remote set`: ask the remote whether the token is accepted; when there is none or it is refused,
+    ask for it (on a terminal) and keep it in the repo's token file (owner-only), where the next commands find it."""
+    import getpass
+
+    from .client.http import ClientError
+    from .client.open import client, find_token, remote_parts
+
+    server = remote_parts(url)[0]
+    token, source, _ = find_token(config)
+
+    def answer(candidate: str) -> str:
+        try:
+            client(config, server, token=candidate, timeout=10).request("GET", "/api/v2/repo")
+            return "ok"
+        except ClientError as error:
+            if error.unreachable:
+                return "unreachable"
+            if error.status in (401, 403):
+                return "refused"
+            raise SystemExit(f"cairn: the remote answered {error.status}: {error}") from None
+
+    state = answer(token)
+    if state == "ok":
+        return print(f"token: accepted by {server}" + (f" (from {source})" if source else " (it needs none)"))
+    if state == "unreachable":
+        return print(f"warning: {server} does not answer now; the token is checked when it does (the next command "
+                     "syncs then)")
+    told = f"the token from {source} was refused by {server}" if token else f"no token for {server}"
+    if source == "$CAIRN_TOKEN":
+        return print(f"warning: {told}: $CAIRN_TOKEN wins over every token file, so set it to the server's token "
+                     "or unset it")
+    target = Path(config.cairn_dir) / "token"
+    if not sys.stdin.isatty():
+        return print(f"warning: {told}. Copy the server's token file (its repo's `token`) to {target} or "
+                     "~/.config/cairn/token, or set CAIRN_TOKEN")
+    print(f"{told}.")
+    for _ in range(3):
+        candidate = getpass.getpass(f"Token for {server} (`cairn server` prints it; empty to skip): ").strip()
+        if not candidate:
+            return print(f"skipped: copy the server's token to {target} later, or set CAIRN_TOKEN")
+        state = answer(candidate)
+        if state == "ok":
+            temporary = target.with_name(f".token.{os.getpid()}.tmp")
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w") as handle:
+                handle.write(candidate + "\n")
+            os.replace(temporary, target)
+            return print(f"token: accepted, saved to {target} (owner-only)")
+        if state == "unreachable":
+            return print(f"warning: {server} stopped answering; nothing saved")
+        print("refused; try again")
+    raise SystemExit(f"cairn: no token accepted by {server}; nothing saved")
 
 
 def cmd_sync(args) -> None:

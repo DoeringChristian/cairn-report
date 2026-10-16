@@ -615,8 +615,9 @@ cairn remote                                          # prints it (or "no remote
 cairn remote remove                                   # the repo is the source of truth again
 ```
 
-`cairn remote set` checks the URL and writes `[remote] url` into `.cairn/config.toml` (see
-"Configuration"); the next command syncs, and the versions this repo numbered itself are adopted (sent
+`cairn remote set` checks the URL, writes `[remote] url` into `.cairn/config.toml`, and asks the remote
+whether the token is accepted: with none or a refused one, it asks for the token (on a terminal) and saves it
+to `.cairn/token` (owner-only; see "Configuration"). The next command syncs, and the versions this repo numbered itself are adopted (sent
 oldest first and numbered by the remote). After `cairn remote remove` versions keep their numbers and
 pending ones stay pending. Plain HTTP to another machine works; each process warns once that the token
 is sent unencrypted.

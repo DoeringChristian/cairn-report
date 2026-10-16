@@ -354,3 +354,33 @@ def test_serving_the_projects_own_repo_names_it_after_the_folder(study, tmp_path
     cairn.connect()
     assert own_project(None, study / ".cairn") == "study"  # `cairn server .cairn`
     assert own_project(None, tmp_path / "srv") is None  # a server's repo folder has no own project
+
+
+def test_cairn_remote_set_checks_the_token_and_asks_for_it(server, tmp_path, monkeypatch, capsys):
+    from cairn.cli import main
+
+    folder = tmp_path / "client"
+    folder.mkdir()
+    monkeypatch.chdir(folder)
+    main(["init"])
+    main(["remote", "set", f"{server.url}/demo"])  # $CAIRN_TOKEN holds the server's token
+    assert f"token: accepted by {server.url} (from $CAIRN_TOKEN)" in capsys.readouterr().out
+    monkeypatch.setenv("CAIRN_TOKEN", "wrong")
+    main(["remote", "set", f"{server.url}/demo"])
+    assert "$CAIRN_TOKEN wins over every token file" in capsys.readouterr().out
+    monkeypatch.delenv("CAIRN_TOKEN")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))  # no ~/.config/cairn/token
+    main(["remote", "set", f"{server.url}/demo"])  # not a terminal: says what to do, saves nothing
+    out = capsys.readouterr().out
+    assert f"no token for {server.url}" in out and "Copy the server's token file" in out
+    assert not (folder / ".cairn" / "token").exists()
+    answers = iter(["nope", server.token])  # on a terminal: a refused try, then the right token
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: next(answers))
+    main(["remote", "set", f"{server.url}/demo"])
+    out = capsys.readouterr().out
+    assert "refused; try again" in out and "token: accepted, saved to" in out
+    saved = folder / ".cairn" / "token"
+    assert saved.read_text().strip() == server.token and oct(saved.stat().st_mode & 0o777) == "0o600"
+    main(["remote", "set", f"{server.url}/demo"])
+    assert f"token: accepted by {server.url} (from {saved})" in capsys.readouterr().out
