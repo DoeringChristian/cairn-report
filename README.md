@@ -27,13 +27,13 @@ cd my-project                       # the project folder (its repo is .cairn/ he
 cairn init                          # optional: the repo, .cairn/ (any command that writes makes it too)
 cairn publish data/crops datasets/crops   # a folder becomes version v1 of "datasets/crops" in the repo, .cairn/
 cairn pull datasets/crops@latest    # prints the path of a read-only local copy
-cairn ui                            # explore projects, versions, files and lineage in the browser
+cairn ui                            # explore the artifacts, versions, files and lineage in the browser
 cairn server                        # or: serve the repo to other machines (the UI starts beside it)
 ```
 
 Nothing needs to run: the repo is a folder. `cairn ui` creates it if needed, prints a one-time login
-link and opens it in the browser. `cairn server` serves the same folder to other machines, whose
-projects name it as their remote (`[repo] remote`); the project's own scripts and commands keep
+link and opens it in the browser. `cairn server` serves the same folder to other machines, which name its
+project as their remote (`[repo] remote = "http://host:8800/my-project"`); the project's own scripts and commands keep
 opening the folder directly, whether the server runs or not. In Python a job is a run that uses some
 versions and publishes others (see "Runs: the Python API"):
 
@@ -80,12 +80,18 @@ The design is fixed in [`docs/architecture.md`](docs/architecture.md); in short:
   directly: scripts, CLI commands, `cairn ui`, and `cairn server`, which is just another such process.
   Any number of processes may read and write at once; each write is one SQLite transaction, so a version
   is stored whole or not at all, and numbers are contiguous however many processes publish.
-- **A project has one repo and at most one remote** (`[repo] remote = "https://..."`, a `cairn server`).
+- **A project has one repo and at most one remote** (`[repo] remote = "https://host/my-study"`: the
+  project `my-study` on a `cairn server`). Locally there are no projects: the repo holds its project only,
+  and references name artifacts without one (`descent@v3`, `datasets/crops@best`). A server hosts many
+  projects in one repo folder, each at `<server>/<project>` as if it were its own repo; they share its one
+  database and one content-addressed `blobs/`, so a file several projects publish is stored once. There is
+  no cross-project access: a dataset several projects need is published in each of them.
   Every write goes to the repo first, and the repo sends it to the remote by itself. There is no push or
   pull command to remember and no switching between modes: the same code runs with and without a remote,
   online and offline.
 - **One source of truth for numbers, aliases, and deletions:** the remote if there is one, else the repo.
-  A version's **uid** (a UUIDv7) is its identity everywhere; `vN` is the source of truth's name for it.
+  A version's **uid** (a UUIDv7) is its identity everywhere; `vN` is the source of truth's name for it, and
+  its **short id** (`3f9a2c1`: the first hex digits of the SHA-256 of the uid) names it too.
   A version made while the remote does not answer is **pending**: it has its uid and no number, is
   usable at once by its uid (and as `@latest`), waits in the repo's **outbox**, and gets the remote's
   number when the remote takes it. Versions used from the remote are copied into the repo, so the repo
@@ -221,13 +227,13 @@ A report declares the artifacts it reads in its front matter, by local name:
 ---
 title: Descent
 inputs:
-  descent: descent@latest          # [project:]name[@vN|@alias|@label], as in `cairn.pull`
+  descent: descent@latest          # name[@vN|@<short id>|@alias|@label], as in `cairn.pull`
   crops: datasets/crops@v3
 ---
 ```
 
 Local names are lower-case identifiers (`[a-z_][a-z0-9_]*`). At build time each
-reference is resolved to an exact version (`project:name@vN`, or `project:name@<uid>`
+reference is resolved to an exact version (`name@vN`, or `name@<uid>`
 for a version of this repo that is still pending; aliases only resolve
 completed versions), materialized read-only in the repo,
 and exposed in `python exec` blocks as `inputs`, an object whose attributes and
@@ -514,12 +520,13 @@ hydra:
 
 ## The repo
 
-The repo holds **artifacts**: named, versioned folders inside a **project**. A name is a
+The repo holds the project's **artifacts**: named, versioned folders. A name is a
 slash path (`descent`, `datasets/crops`); reports are the artifacts `reports/<slug>`. A
 version is immutable once completed (until it is deleted: see below) and records its files (by content hash), metadata,
 the exact versions it consumed (`inputs`), and where it was published from. Aliases
 (`latest` moves by itself; `best`, `paper` by hand) and labels select versions:
-`[project:]name[@v3|@uid|@alias|@label][//file]`.
+`name[@v3|@uid|@<short id>|@alias|@label][//file]`, or a bare short id. A reference never names a
+project: it is always one of the project the repo (or the remote, `<server>/<project>`) holds.
 
 Every version also has a **uid**, a UUIDv7 made where the version is created and kept everywhere:
 `datasets/crops@0192f3a4-5b6c-7d8e-9f01-23456789abcd` names that version as exactly as `@v3`. A selector in
@@ -527,7 +534,16 @@ the canonical lowercase UUIDv7 form is always a uid, so no alias or label may ta
 `v<n>` is the source of truth's readable name; the uid is the identity, so it also names a pending version
 (one the remote has not numbered yet). Every repo has a uid too (`repo.json`).
 
-The repo's SQLite database (`metadata.sqlite3`: projects, versions, aliases and every alias move, who
+Every version also has a **short id**: the first 7 hex digits of the SHA-256 of its uid, more when needed to
+tell it apart from the project's other versions, fixed when the version is made and the same in the repo and
+on the remote. `cairn versions`, `cairn show`, the messages that print published versions (`published
+descent@v3 (3f9a2c1; ...)`), and the UI show it. `name@<id>` and a bare `<id>` name a version by any unique
+prefix of 4 or more digits (`cairn show 3f9a`, `cairn.use("descent@3f9a2c1")`), also a running or pending one;
+the full uid works too. Names, numbers, aliases, and labels are matched first (a label `abcd` wins over the
+id prefix `abcd`; a bare `abcd` names the artifact `abcd` if there is one), and an ambiguous prefix is an
+error that lists the candidates (name, `vN`, short id).
+
+The repo's SQLite database (`metadata.sqlite3`: versions, aliases and every alias move, who
 consumed which version) and its file contents, named by their SHA-256 (`blobs/`), live side by side. Every
 change is one transaction, so a publish is stored whole or not at all, even if the process is killed halfway.
 A publish clones files into the repo where the filesystem can (APFS `clonefile`, Btrfs/XFS `FICLONE`), so
@@ -536,13 +552,15 @@ metadata as readable JSON Lines, for backups and inspection.
 
 ### The remote: `cairn server`
 
-To share a repo with other machines, serve it over HTTP; other projects name it as their remote. The two
-halves are separate:
+To share a repo with other machines, serve it over HTTP; other machines name one of its projects as their
+remote, `<server>/<project>` (the last path segment is the project, also behind a path prefix:
+`https://host/prefix/my-study`). The first sync with the owner token creates a project the server does not
+have; a project-scoped token only reaches its existing project. The two halves are separate:
 
 - the **server** (`cairn server`) serves a repo: a JSON API and file downloads, bearer tokens, no pages;
 - the **UI** (`cairn ui`) is a separate process that explores a repo in a browser: the project's (which
-  reads through its remote, if it has one), a repo folder, or a remote, so it can run on a laptop against
-  a remote on a cluster.
+  reads through its remote, if it has one; one project), a repo folder or a server (their projects), or one
+  project on a server (`--remote <server>/<project>`), so it can run on a laptop against a remote on a cluster.
 
 ```bash
 cairn server                 # the project's repo (.cairn): on 127.0.0.1:8800, its UI on 127.0.0.1:8801
@@ -550,8 +568,10 @@ cairn server /srv/cairn      # any repo folder; put an HTTPS reverse proxy in fr
 cairn server /srv/cairn --no-ui [--port 8800] [--max-blob-gb 50]     # the server alone
 ```
 
-Without a folder, `cairn server` serves the project's repo, creating it if needed; a project with
-`[repo] remote` is refused (its repo is a copy of that remote's). The server is just one more process
+Without a folder, `cairn server` serves the project's repo, creating it if needed, with its project at
+`<server>/<project folder name>`; a project with `[repo] remote` is refused (its repo is a copy of that
+remote's). A server's own repo folder (`cairn server /srv/cairn`) has no project of its own: its projects are
+the ones clients sync to it. The server is just one more process
 that opens the repo: the project's scripts and commands on the same machine keep opening the folder
 directly while it runs, and starting or stopping it changes nothing for them. One server per repo
 (`server.lock`). A taken port is an error, never a silent move, because clients' `[repo] remote` names it.
@@ -585,7 +605,7 @@ nice python bench/bench_store.py --size-mb 1024 --clients 32   # elsewhere; see 
 ```
 
 ```bash
-cairn token create /srv/cairn --project my-study --write --name cluster   # printed once
+cairn token create /srv/cairn --project my-study --write --name cluster   # printed once; makes the project if new
 cairn token list /srv/cairn       # names, projects, access: never token values
 cairn token revoke /srv/cairn cluster
 ```
@@ -599,8 +619,7 @@ In a project that uses a remote:
 
 ```toml
 [repo]
-remote = "https://cairn.example.org"              # the source of truth (omit: the repo is)
-project = "my-study"                              # default: the folder name
+remote = "https://cairn.example.org/my-study"     # <server>/<project>: the source of truth (omit: the repo is)
 token_file = "secrets/cairn-token"                # optional (chmod 600): see "The token" below
 allow_http = false                                # plain HTTP to a non-local remote (default: refused)
 exclude = [".submitit/**/*.pkl"]                  # never published: gitignore-style globs on project paths
@@ -636,13 +655,10 @@ cairn pull x@latest --into DIR [--no-record]               # copy it into DIR in
 
 ```bash
 cairn init [FOLDER]                                        # create a repo (see "Finding the repo")
-cairn project list                                         # projects, artifact counts, last update
-cairn project create my-study --title "My study" [--description ...]
-cairn project show my-study                                # its title, description, and artifacts
-cairn project edit my-study --description "..."
-cairn artifacts [--prefix reports/] [--project other]      # latest version, version count, aliases
-cairn versions datasets/crops                              # number (or pending), status, label, created, uid, size
-cairn show datasets/crops@paper                            # metadata, files, inputs, consumers
+cairn artifacts [--prefix reports/]                        # latest version, version count, aliases
+cairn versions datasets/crops                              # number (or pending), short id, status, label, created, uid, size
+cairn show datasets/crops@paper                            # short id, metadata, files, inputs, consumers
+cairn show 3f9a2c1                                         # a version by its short id (any unique 4+ digits)
 cairn status                                               # what waits for the remote: pending, running, rejected
 cairn sync [--watch]                                       # send it now (and mirror the remote's aliases)
 cairn pull datasets/crops@paper --offline                  # never ask the remote: the repo answers
@@ -670,27 +686,26 @@ is exempt: it publishes a running job by design.
 
 ### The Python API
 
-`cairn.connect()` opens the project's repo, with its remote if `[repo] remote` names one (or
-`cairn.connect("https://...", token=...)` for a remote with the project's repo, or
-`cairn.connect("path/to/repo")` for a repo folder on this machine; `project=` sets the default project).
-Objects are thin and lazy: they fetch on first access and keep what they fetched.
+`cairn.connect()` opens the project's repo, with its remote if `[repo] remote` names one. For an admin or a
+test, `cairn.connect("path/to/.cairn")` opens another repo folder and `cairn.connect("https://host/other",
+token=...)` another remote project; what they pull never becomes an input of this project's runs. Objects
+are thin and lazy: they fetch on first access and keep what they fetched.
 
 ```python
 import cairn
 
 repo = cairn.connect()
-project = repo.project()                        # the configured project; repo.project("other"), repo.projects()
-project.update(description="Denoising study")   # repo.create_project("new", title="New")
-crops = project.artifact("datasets/crops")      # project.artifacts(prefix="datasets/")
+crops = repo.artifact("datasets/crops")         # repo.artifacts(prefix="datasets/")
+repo.version("3f9a2c1")                         # any reference, also a bare short id
 
-v3 = crops.version(3)                           # or "v3", an alias, a label, or a uid; crops.latest, crops.versions()
-v3.ref, v3.uid, v3.label, v3.status, v3.created, v3.metadata, v3.inputs, v3.consumers
+v3 = crops.version(3)                           # or "v3", an alias, a label, a uid, a short id; crops.latest, crops.versions()
+v3.ref, v3.short_id, v3.uid, v3.label, v3.status, v3.created, v3.metadata, v3.inputs, v3.consumers
 [(f.path, f.size, f.sha256) for f in v3.files]
 with v3.open("tables/cases.csv") as handle:     # streams one file without pulling the version; recorded as an input
     header = handle.readline()
 folder = v3.pull()                              # <repo>/versions/<uid>/files/, read-only; recorded as an input
 
-fit = project.artifact("models/fit")
+fit = repo.artifact("models/fit")
 v = fit.publish("runs/fit", metadata={"loss": 0.1}, aliases=["best"], inputs=[v3.ref])   # -> Version
 fit.alias("paper", v)
 with fit.publishing("runs/live") as running:    # a running version that follows a folder while a job writes it
@@ -709,7 +724,24 @@ The functions `cairn.pull`, `cairn.publish`, `cairn.alias`, `cairn.versions`, `c
 number, or None while the version is pending). The object API alone (`Version.pull()`, `open()`)
 starts no run: inside one, what it reads is the run's input; outside, it is recorded in `$CAIRN_INPUTS`
 or the working folder's `.cairn-inputs.jsonl`, which `cairn publish` carries along as the folder's
-inputs.
+inputs. None of them takes a `store=`: they work on the project's repo.
+
+**Errors.** Cairn's own errors (`cairn.StoreError` and its kinds: `NotFound`, `Ambiguous`, `Conflict`,
+`Deleted`, `Protected`, `Unreachable`, `Forbidden`, `Unauthorized`, `InvalidRef`, `NoRun`, ...) are raised from
+the function or method you called, so the traceback ends at your line and that one call, then a message that
+names what was looked for and where:
+
+```text
+Traceback (most recent call last):
+  File "train.py", line 3, in <module>
+    data = cairn.use("datasets/quadratic@latest")
+  File ".../cairn/api.py", line 43, in cairn.use
+    raise error.with_traceback(None) from None  # a Cairn error: its message says what and where
+cairn.store.errors.NotFound: no artifact datasets/quadratic in the repo /work/study/.cairn (found from the working directory)
+```
+
+(`... on the remote https://host/my-study` with a remote.) Any other exception keeps its full traceback, and
+`CAIRN_DEBUG=1` shows every frame of Cairn's own errors too.
 
 ### Deleting and garbage collection
 
@@ -720,7 +752,6 @@ into the repo; they need the remote to answer.
 ```bash
 cairn delete datasets/crops@v3 --reason "wrong crop size"   # one version (also @uid, @alias, @label)
 cairn delete --artifact scratch/tmp                          # every version of an artifact (all or none)
-cairn project delete old-study [--force]                     # refused while it has versions, unless --force
 cairn delete datasets/crops@v1 --force                       # a protected version too (the owner token on a remote)
 ```
 
@@ -734,21 +765,21 @@ keeps its edges, and marks the node deleted. `latest` moves back to the newest c
 Some versions are **protected**, and a deletion that touches one is refused (409) unless forced:
 
 - an alias other than `latest` points at it (forcing removes the alias);
-- it is an input of a version that is not deleted, in any project: a report's pinned input, a model's
+- it is an input of a version that is not deleted: a report's pinned input, a model's
   dataset (forcing keeps the consumer's input edge, marked deleted);
 - it is running.
 
-**Retention rules** say what `cairn gc` deletes by itself, per project or per artifact-name prefix
+**Retention rules** say what `cairn gc` deletes by itself, per artifact-name prefix
 (the longest matching prefix wins). A version is kept if it is among the `keep_last` newest of its
 artifact, or younger than `keep_days`, or the artifact's `latest`; aliased versions are kept and take
 no `keep_last` place (`--no-keep-aliased`: they take a place, and are still never deleted). Rules never
 delete protected versions: those are skipped and reported.
 
 ```bash
-cairn retention set my-study --prefix runs/ --keep-last 5 --keep-days 30
-cairn retention set my-study --keep-last 20          # every other artifact
-cairn retention show my-study
-cairn retention clear my-study --prefix runs/
+cairn retention set --prefix runs/ --keep-last 5 --keep-days 30
+cairn retention set --keep-last 20                   # every other artifact
+cairn retention show
+cairn retention clear --prefix runs/
 cairn gc --dry-run                                   # the project's repo (or its remote): what would be deleted and freed
 cairn gc [--grace 24h]                               # apply the rules, then sweep the blobs
 cairn gc /srv/cairn --dry-run                        # a repo folder on this machine
@@ -756,7 +787,7 @@ cairn server /srv/cairn --gc-interval 24h [--grace 24h]   # also collect garbage
 ```
 
 `cairn gc` first applies the retention rules, then sweeps the blobs: a blob that no version (other
-than deleted ones) names in any project, and whose file is older than the **grace period** (24 h by
+than deleted ones) names, in any project of the repo folder, and whose file is older than the **grace period** (24 h by
 default), is removed; the output says how many bytes were freed. The grace period protects uploads
 in progress: a client uploads the blobs before it commits the version that names them, and blobs an
 outbox entry needs are never garbage. The sweep re-checks every candidate inside the same transaction
@@ -767,12 +798,12 @@ complete and downloadable. Stale temporary uploads (untouched for the grace peri
 go too. A dry run changes nothing. On a remote, deleting needs a write token for the project,
 while `--force` and `gc` need the owner token.
 
-The same in Python: `version.delete(reason=..., force=False)`, `artifact.delete()`, `project.delete()`,
-`project.retention = [{"prefix": "runs/", "keep_last": 5}]` (or `project.set_retention("runs/",
+The same in Python: `version.delete(reason=..., force=False)`, `artifact.delete()`,
+`repo.retention = [{"prefix": "runs/", "keep_last": 5}]` (or `repo.set_retention("runs/",
 keep_last=5)`), and `repo.gc(dry_run=True, grace="24h")`, which returns what was (or would be)
 deleted, the protected versions it skipped, and the blobs and bytes freed. The API routes are
 `DELETE /api/v2/projects/<p>/artifacts/<name>/versions/<n>` (`?force=1&reason=...`),
-`DELETE .../artifacts/<name>`, `DELETE /api/v2/projects/<p>`, `GET`/`PUT /api/v2/projects/<p>/retention`,
+`DELETE .../artifacts/<name>`, `DELETE /api/v2/projects/<p>` (a server admin's), `GET`/`PUT /api/v2/projects/<p>/retention`,
 and `POST /api/v2/gc {dry_run, grace}`.
 
 After `cairn delete` here, the repo holds the tombstone too, so exact references to it fail here as
@@ -800,7 +831,7 @@ does not change the version. Then it is sent. If the remote answers, the version
 **pending** version (its uid is set, its number is None) that is usable at once: `cairn.pull`,
 `Version.open`, and a report's `inputs:` resolve it by uid, by an alias it was published with, by its
 label, or as `latest` (when it is newer than what the remote has), with a warning that it is pending.
-Its uid-exact reference `project:name@<uid>` is what lineage records until the remote numbers it.
+Its uid-exact reference `name@<uid>` is what lineage records until the remote numbers it; its short id names it too.
 
 **Sending** (any `cairn` command at its start and end, a process that left something pending in the
 background and at exit, `cairn sync`): for each outbox entry, in dependency order (an entry after the
@@ -897,7 +928,7 @@ The object API returns the same as a report: `cairn.connect().verify(ref=None, r
 The safe setup:
 
 - run `cairn server` on a machine with a local disk (not on a compute node, and with its repo not on a
-  shared filesystem), behind HTTPS, and set `[repo] remote` in the project;
+  shared filesystem), behind HTTPS, and set `[repo] remote = "https://host/my-study"` in the project;
 - the project lives on persistent storage, so its repo `.cairn/` is there too. On a network filesystem
   (NFS, Lustre, GPFS, ...) the repo has no database: jobs keep each version in its own outbox folder
   (one writer each) and the blobs it needs (written once and renamed into place, safe on NFS), and read
@@ -926,8 +957,8 @@ spans folders, a leading `/` anchors to the project root.
 The server's API lives under `/api/v2/` (`GET /api/v2/repo` answers its uid and version) and its
 files under `/files/<project>/<name>@vN//<path>` (or `@<uid>`)
 (ETag, Range, `Content-Security-Policy: sandbox`); the routes are listed in
-`cairn/server/__init__.py`. Besides publishing and resolving it answers what a viewer needs:
-projects with their artifact count and last update, an artifact's summary with its latest version and
+`cairn/server/app.py`. Besides publishing and resolving it answers what a viewer needs:
+the projects with their artifact count and last update, an artifact's summary with its latest version and
 aliases, a version's file list, and lineage. Tokens are bearer tokens only: the server has no
 cookies, no login page and no HTML. It never runs pushed code.
 
@@ -935,7 +966,8 @@ cookies, no login page and no HTML. It never runs pushed code.
 
 ```bash
 cairn ui                                   # the project's repo (with its remote, if it has one), on 127.0.0.1:8801
-cairn ui --remote https://cairn.example.org  # a remote, e.g. from a laptop against a cluster-side server
+cairn ui --remote https://cairn.example.org  # a server's projects, e.g. from a laptop against a cluster-side server
+cairn ui --remote https://cairn.example.org/my-study  # one project on it
 cairn ui --repo /srv/cairn                 # a repo folder on this machine (a server's)
 cairn ui --no-browser                      # print the login link without opening it
 ```
@@ -944,14 +976,15 @@ For the project's repo, `cairn ui` creates it (with an owner token) if it is new
 whether a `cairn server` serves it or not; with a remote it reads through the remote and shows the
 versions still waiting for it as **pending** (a `pending` badge, their uid instead of `vN`). It prints a
 one-time `Log in:` link and opens it in the browser, so there is no token to paste; for a remote the link
-logs in with `CAIRN_TOKEN` or `[repo] token_file`, if set. A taken port (a server's own UI on 8801) moves
+logs in with the token a client finds (see "The token"), if any. A taken port (a server's own UI on 8801) moves
 it to a free one.
 
 The UI opens a repo only through the repo interface, so it does no work in the server. It prints
 `UI: <url> (repo: <url or folder>)` and serves a React app (built files in the package, no Node
 needed) in the look of the reports (their stylesheet, tokens and class names):
 
-- `/` projects (title, description, artifacts, last update);
+- `/` projects (title, description, artifacts, last update): for the project's repo exactly one, named after
+  the project folder (or the remote's project); for a server or a server's repo folder, its projects;
 - `/p/<project>/` the project: a search box (names, titles, status, aliases), then the tabs
   "Reports" (title, status, summary, latest version, an Open report link), "Artifacts" (latest,
   aliases, versions, updated), and "Runs" (the `runs/` artifacts: latest completed version, config
@@ -978,10 +1011,12 @@ needed) in the look of the reports (their stylesheet, tokens and class names):
   while it is sent: nothing is held in memory or written to disk.
 
 The app talks to the UI process through `/ui-api/` (GET unless noted), a session-scoped passthrough
-to the repo interface: `me` (scope: `owner`, `project`, or `remote` when a remote decides),
+to the repo interface: `me` (scope: `owner`, `project`, or `remote` when a remote decides; `mode`: `local`
+for one project, named `home`, or `server` for many),
 `projects`, `projects/<p>`, `projects/<p>/artifacts/<name>` (summary, versions, aliases),
 `projects/<p>/artifacts/<name>/versions/<n>` (manifest with files, consumers; `<n>` may also be a uid,
-an alias, or a label; a pending version has `version: null` and `pending: true`), `projects/<p>/artifacts/<name>/versions/<n>/run` (the Run panel's data: metrics and
+a short id, an alias, or a label; a pending version has `version: null` and `pending: true`; every version
+has its `short_id`; inputs, consumers and lineage references read `project:name@sel`), `projects/<p>/artifacts/<name>/versions/<n>/run` (the Run panel's data: metrics and
 system rows, numbers only, thinned to 2000; the last 64 KB of the logs; info.json; config),
 `lineage?ref=<project:name@sel>[&depth=1..3]` (inputs and consumers, assembled from
 one-level lookups, capped at 200 nodes), and `POST login`. Every call needs the session and the
@@ -1028,7 +1063,7 @@ never edited. The repo is private to its owner (mode 700).
 <project>/.cairn/                the repo
 ├── .gitignore                   "*"
 ├── repo.json                    the repo's uid, its layout version, and its remote's uid once learned
-├── metadata.sqlite3             projects, versions, aliases, lineage (WAL); not on a network filesystem
+├── metadata.sqlite3             versions, aliases, lineage (WAL); not on a network filesystem
 ├── blobs/<aa>/<sha256>          file contents, written once (temporary file, then rename), shared by all versions
 ├── outbox/<uid>/                versions on their way to the remote (manifest, state, heartbeat); only with a remote
 ├── versions/<uid>/files/        read-only folders that pulls return (made from the blobs; `cairn prune` trims them)
@@ -1040,7 +1075,8 @@ never edited. The repo is private to its owner (mode 700).
 └── tmp/                         uploads in progress, the hash cache
 ```
 
-A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has no project files around it.
+A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has no project files around it, and
+holds its projects side by side in the one database and the one `blobs/`.
 
 | What | Resolution |
 | --- | --- |
@@ -1057,6 +1093,8 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
    without a folder) creates `.cairn/` in the working directory and says so in one line on stderr. Commands that
    only look at a repo (`cairn status`, `verify`, `prune`, `sync`) say "no repo here (run `cairn init`)" and
    exit 1 instead.
+
+`cairn -C <folder> <command>` names the project folder instead of the walk.
 
 ```bash
 cairn init [FOLDER]     # create FOLDER/.cairn (default: here; $CAIRN_DIR if set); an existing repo is left as it is
@@ -1077,8 +1115,7 @@ output_dir = ".cairn/build"        # the built site (default: <repo>/build)
 dir = ".cairn"                     # the repo (default; or CAIRN_DIR)
 
 [repo]
-remote = "https://cairn.example.org"  # optional: the source of truth
-project = "my-study"                  # default: the project folder name
+remote = "https://cairn.example.org/my-study"  # optional: the source of truth, <server>/<project>
 token_file = "secrets/cairn-token"    # optional; the token is looked for in $CAIRN_TOKEN, this, .cairn/token, ~/.config/cairn/token
 allow_http = false                    # plain HTTP to a non-local remote
 interval = 30                         # seconds between live syncs of a running version

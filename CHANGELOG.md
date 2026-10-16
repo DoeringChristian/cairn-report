@@ -5,6 +5,35 @@
 This release introduces the design in `docs/architecture.md`. It is the new layout: Cairn was not in use
 before it, so there is no migration and no compatibility code, and a project starts a fresh repo.
 
+- **One project per repo; remotes are `<server>/<project>`.** Locally projects are gone from every surface:
+  references have no `project:` prefix (`descent@v3`), there is no `cairn project` command, no `--project`
+  option or `project` column (the global option naming the project folder is `-C`), no `[repo] project`
+  key, no `Project` object (`cairn.connect()` returns the project's `Repo`: `repo.artifact(...)`,
+  `repo.artifacts()`, `repo.version(...)`, `repo.retention`), and no `store=` argument on `cairn.use`,
+  `pull`, `publish`, `draft`, `alias`, `versions`, `lineage`, or `init`: there is no cross-project access.
+  `[repo] remote` names the project in its last path segment (`https://host/my-study`, also behind a path
+  prefix); a remote without one is a configuration error. A server hosts many projects in one repo folder,
+  each served as its own repo, sharing one database and one content-addressed `blobs/` (a file several
+  projects publish is stored once); the first sync with the owner token creates a project, a
+  project-scoped token only reaches its existing one. `cairn server` in a project serves its project under
+  the folder's name. `cairn token create <repo> --project <name>` stays (a server admin's command).
+- **Short ids.** Every version has one: the first 7 hex digits of the SHA-256 of its uid, longer when needed
+  to be unique in its project, fixed when it is made and the same in the repo and on the remote.
+  `name@<id>` and a bare `<id>` (any unique prefix of 4 or more digits, or the full uid) name a version in
+  the CLI (`show`, `pull`, `alias`, `delete`), `cairn.use`, and report inputs, after names, numbers, aliases,
+  and labels; an ambiguous prefix lists its candidates (`cairn.Ambiguous`). Listings, `cairn show`, the
+  messages that print published versions (`published descent@v3 (3f9a2c1; ...)`) and the UI's JSON
+  (`short_id`) show it.
+- **Errors raised at the caller's line.** Cairn's own errors (`StoreError` and its kinds, now also
+  `InvalidRef`, `Ambiguous`, `NoRun`) leave the public function or method called with their traceback cut
+  there, so it shows the caller's frames and one Cairn line (`in cairn.use`, `in Version.files`), then a
+  message naming what was looked for and where (`no artifact datasets/quadratic in the repo /path/.cairn
+  (found from the working directory)`, `... on the remote https://host/my-study`). Other exceptions keep
+  their full traceback; `CAIRN_DEBUG=1` keeps every frame. A failed run says in one line that its folder
+  is kept: `cairn: the run failed; its folder is kept (cairn drafts lists it)`.
+- **UI:** a local `cairn ui` lists exactly one project, named after the project folder or the remote's
+  project; `/ui-api/me` says `mode` (`local`: one project, `home`; `server`: many); versions carry
+  `short_id`; `cairn ui --remote <server>/<project>` opens one project of a server.
 - **`cairn.run` is the process's run from anywhere** (it was the function `cairn.run()`): `cairn.run.add(...)`
   after `cairn.init()`, with no run to pass around. With no run, using it raises; `bool(cairn.run)` is False.
 - **The repo is `.cairn/` itself**: `repo.json`, `metadata.sqlite3`, `blobs/<aa>/<sha256>`, `outbox/<uid>/`,
@@ -24,7 +53,7 @@ before it, so there is no migration and no compatibility code, and a project sta
 - **Network filesystems:** a repo on NFS, Lustre, GPFS, SMB and the like has no database; with a remote, jobs
   keep an outbox and blobs only (metadata from the remote) and a login node sends what they left; without a
   remote, Cairn refuses with the cluster setup to use. `[repo] allow_network_fs = true` overrides it.
-- **Configuration:** `[repo]` (remote, project, token_file, allow_http, interval, heartbeat_timeout,
+- **Configuration:** `[repo]` (remote, token_file, allow_http, interval, heartbeat_timeout,
   allow_network_fs, exclude) replaces `[store]` (now an unknown key); `[store] path` and `publish` mappings are
   gone (the repo is `[cairn] dir` / `CAIRN_DIR`). `CAIRN_TOKEN` replaces `CAIRN_STORE_TOKEN`; `CAIRN_DATA_DIR`,
   `CAIRN_CACHE_DIR`, and `--data-dir` are gone.

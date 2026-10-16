@@ -47,7 +47,7 @@ def main(config: dict) -> "cairn.Version":
     with cairn.draft("descent") as result:                      # the result artifact: an output of the run
         result.add_json("final", {"loss": loss, "steps": config["steps"], "learning_rate": rate}, {"dataset": data.ref})
         result.add_figure("trajectory", trajectory, {"steps": config["steps"]}, np.array(points), A)
-    print(f"published {result.version.ref} from {data.ref}")    # leaving the block published it, removed its folder
+    print(f"published {result.version.ref} ({result.version.short_id}) from {data.ref}")  # the block published it
     return result.version
 
 
