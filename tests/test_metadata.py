@@ -118,8 +118,12 @@ def test_processes_on_the_host_write_a_served_root_directly(tmp_path, capsys):
         with pytest.raises(SystemExit, match="already served"):
             make_server(root, port=0)  # one server per root
         init_root(tmp_path / "other")
-        with pytest.raises(SystemExit, match="in use"):  # a taken port is an error: clients' [repo] url names it
-            make_server(tmp_path / "other", port=server.server_address[1])
+        taken = server.server_address[1]
+        moved = make_server(tmp_path / "other", port=taken)  # a taken port moves the second server to a free one
+        try:
+            assert moved.moved_from == taken and moved.server_address[1] != taken
+        finally:
+            moved.server_close()
         client = Client(f"http://127.0.0.1:{server.server_address[1]}", read_token(root / "token"))
         assert [p["name"] for p in Server(client).projects()] == ["p"]  # the server sees the direct write
     finally:

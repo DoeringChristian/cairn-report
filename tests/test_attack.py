@@ -1209,11 +1209,18 @@ def test_a_server_stopped_and_killed_mid_run_changes_nothing_for_runs(tmp_path):
     taken.bind(("127.0.0.1", 0))
     taken.listen(1)
     other = project_at(tmp_path, "other")
-    third = spawn(other, "-m", "cairn", "server", tmp_path / "other-remote", "--port", taken.getsockname()[1], "--no-ui")
-    out, err = finish(third, 60)
-    taken.close()
-    assert third.returncode != 0 and str(taken.getsockname()[1] if False else "") in out + err, out + err
-    assert "in use" in (out + err).lower() or "address already" in (out + err).lower(), out + err  # never a silent move
+    port = taken.getsockname()[1]
+    third = spawn(other, "-m", "cairn", "server", tmp_path / "other-remote", "--port", port, "--no-ui")
+    try:  # a taken port moves the server to the next free one, and its startup block says so
+        deadline = time.time() + 60
+        while "Serving;" not in third.logs[0].read_text() and third.poll() is None and time.time() < deadline:
+            time.sleep(0.2)
+        out = third.logs[0].read_text()
+        assert f"port {port}" in out and "in use" in out and "Serving;" in out, out + third.logs[1].read_text()
+    finally:
+        third.terminate()
+        third.wait(timeout=20)
+        taken.close()
     server.stop()
 
 
