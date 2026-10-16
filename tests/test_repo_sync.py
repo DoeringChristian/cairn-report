@@ -868,6 +868,45 @@ def test_an_output_of_a_run_killed_after_it_is_sent_before_the_run_is_failed(ser
     assert outbox(project) == []
 
 
+def test_a_failed_run_waits_while_another_sender_has_its_output(server, tmp_path):
+    """Two senders of one outbox: while another one holds the output's claim, the failed run is not sent (the remote
+    would then refuse the output that names it); once the output is on the remote, the run's failure follows."""
+    import socket
+
+    server.start()
+    project = project_at(tmp_path, "study", server.url)
+    (project / "job.py").write_text(KILLED_AFTER_ITS_OUTPUT)
+    process = subprocess.Popen(
+        [sys.executable, "job.py"], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    deadline = time.time() + 60
+    while not (project / "started").exists() and time.time() < deadline:
+        time.sleep(0.05)
+    run_id = (project / "started").read_text()
+    for _ in range(100):
+        if [v["status"] for v in remote_versions(server, "runs/train")] == ["running"]:
+            break
+        time.sleep(0.1)
+    server.stop()
+    (project / "go").write_text("1")
+    process.communicate(timeout=60)
+    output_id = (project / "published").read_text()
+    claim = project / ".cairn" / "outbox" / output_id / f".flushing-{socket.gethostname()}-{os.getpid()}"
+    claim.write_text(json.dumps({"time": time.time(), "host": socket.gethostname(), "pid": os.getpid()}))  # alive
+    server.start()
+    first = cairn_cli(project, "sync")
+    assert "rejected" not in first.stdout + first.stderr, first.stdout + first.stderr
+    assert [v["status"] for v in remote_versions(server, "runs/train")] == ["running"]  # not failed before its output
+    assert remote_versions(server, "checkpoint") == []
+    claim.unlink()  # the other sender is done (here: it went away without sending)
+    second = cairn_cli(project, "sync")
+    assert second.returncode == 0 and "rejected" not in second.stdout + second.stderr, second.stdout + second.stderr
+    [run] = remote_versions(server, "runs/train")
+    [checkpoint] = remote_versions(server, "checkpoint")
+    assert run["status"] == "failed" and checkpoint["status"] == "completed" and checkpoint["inputs"] == [run_id]
+    assert outbox(project) == []
+
+
 def test_a_script_adopts_the_repos_own_versions_before_it_reads(server, tmp_path, monkeypatch):
     import cairn.client.repo as repo_module
 
