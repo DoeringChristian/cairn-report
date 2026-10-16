@@ -708,7 +708,7 @@ def main(argv: list[str] | None = None) -> None:
     store_serve = commands.add_parser("server", help="serve a repo to other machines (a new one gets an owner token); put an HTTPS reverse proxy in front")
     store_serve.add_argument("root", type=Path, nargs="?", help="the repo folder (default: the project's, .cairn; created if new)")
     store_serve.add_argument("--host", default="127.0.0.1")
-    store_serve.add_argument("--port", type=int, default=8800, help="the port; a taken port is an error (clients' remote URL names it)")
+    store_serve.add_argument("--port", type=int, default=8800, help="the port (default 8800); a taken one moves the server to the next free port, shown at start")
     store_serve.add_argument("--max-blob-gb", type=float, default=50, help="largest accepted file")
     store_serve.add_argument("--no-auth", action="store_true", help="no token, everyone acts as the owner (local testing; loopback hosts only)")
     store_serve.add_argument("--ui-port", type=int, help="port of the UI started beside the server (default: --port + 1)")

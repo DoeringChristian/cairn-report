@@ -112,8 +112,16 @@ def test_a_server_started_and_stopped_while_a_run_runs_changes_nothing_for_it(pr
             assert again.url.endswith("/login")
 
         port = re.search(r"Repo: http://127.0.0.1:(\d+)/", "\n".join(lines)).group(1)
-        second = run(project, sys.executable, "-m", "cairn", "server", str(project / "other-repo"), "--port", port)
-        assert second.returncode == 1 and f"port {port} on 127.0.0.1 is in use" in second.stderr, second  # never moved
+        second = subprocess.Popen([sys.executable, "-m", "cairn", "server", str(project / "other-repo"), "--port", port,
+                                   "--no-ui"], cwd=project, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        shown = read_until(second, lambda line: line.startswith("Serving;"))
+        try:  # a taken port moves the second server to the next free one, and says so before its address
+            text = "\n".join(shown)
+            assert f"port {port} is in use; serving on " in text, shown
+            moved = re.search(r"Repo: http://127.0.0.1:(\d+)/", text).group(1)
+            assert int(moved) > int(port) and f"cairn remote set http://127.0.0.1:{moved}/<project>" in text
+        finally:
+            stop(second)
     finally:
         stop(server)
     result = run(project, sys.executable, "-c", SCRIPT)

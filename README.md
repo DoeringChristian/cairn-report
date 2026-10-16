@@ -573,7 +573,8 @@ remote's). A server's own repo folder (`cairn server /srv/cairn`) has no project
 the ones clients sync to it. The server is just one more process
 that opens the repo: the project's scripts and commands on the same machine keep opening the folder
 directly while it runs, and starting or stopping it changes nothing for them. One server per repo
-(`server.lock`). A taken port is an error, never a silent move, because clients' remote URL names it.
+(`server.lock`). A taken port moves the server to the next free one
+(it says so, and the startup block shows the port to put in clients' remote: `http://fermat:8805/<project>`).
 
 The first `cairn server` run on a new folder creates it with a random owner token (owner-only, in
 `<repo>/token`); every launch prints `Repo: <url>`, `UI: <url>`, a one-time `Log in:` link (a random

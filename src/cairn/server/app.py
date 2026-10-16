@@ -627,6 +627,9 @@ def default_log(line: str, client) -> None:
     sys.stderr.write(f"[{time.strftime('%d/%b/%Y %H:%M:%S')}] {address} {line}\n")
 
 
+PORT_TRIES = 20  # a taken port moves the server to the next free one of these (the startup block shows it)
+
+
 class StoreServer:
     """A bound server, not yet serving: `serve_forever()` runs uvicorn on its socket until `shutdown()`
     (from another thread) or a signal. `server_address` is known as soon as it is made (port 0: any free port).
@@ -635,17 +638,23 @@ class StoreServer:
     def __init__(self, app: StoreApp, host: str, port: int, owner_token: str):
         self.app, self.owner_token, self.store = app, owner_token, app.store
         family = socket.AF_INET6 if ":" in host else socket.AF_INET
-        self.socket = socket.socket(family, socket.SOCK_STREAM)
-        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            self.socket.bind((host, port))
-            self.socket.listen(2048)
-        except OSError as error:
-            self.socket.close()
-            if error.errno == errno.EADDRINUSE:  # clients' remote URL names this port: never move it silently
-                raise SystemExit(f"port {port} on {host} is in use (another `cairn server`?); choose one with --port") from None
-            raise
+        self.moved_from = None  # the port asked for, when it was taken and the next free one was used
+        for candidate in [port] if port == 0 else range(port, min(port + PORT_TRIES, 65536)):
+            self.socket = socket.socket(family, socket.SOCK_STREAM)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                self.socket.bind((host, candidate))
+                self.socket.listen(2048)
+                break
+            except OSError as error:
+                self.socket.close()
+                if error.errno != errno.EADDRINUSE:
+                    raise
+        else:
+            raise SystemExit(f"ports {port}-{port + PORT_TRIES - 1} on {host} are all in use; choose one with --port")
         self.server_address = self.socket.getsockname()[:2]
+        if port and self.server_address[1] != port:
+            self.moved_from = port
         try:
             import uvloop  # noqa: F401
             loop = "uvloop"
@@ -753,6 +762,8 @@ def serve_store(root: Path, host: str = "127.0.0.1", port: int = 8800, max_blob:
         print(f"Created the repo {root.resolve()} with a new owner token ({created}, owner-only)", flush=True)
     actual = server.server_address[1]
     here = f"http://{url_host(host)}:{actual}/"  # this machine's name for 0.0.0.0, which nobody can connect to
+    if server.moved_from:
+        print(f"port {server.moved_from} is in use; serving on {actual}", flush=True)
     print(f"Repo: {here} (the repo {root.resolve()})", flush=True)
     child = None
     if ui_port is not None:

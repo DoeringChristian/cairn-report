@@ -126,8 +126,8 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
 - **Remote down:** versions wait in the outbox; the run is not slowed; the next command that reaches the
   remote sends them.
 - **Server start or stop:** changes nothing for processes on its machine (rule 1).
-- **Two servers on one repo:** refused (`server.lock`). A taken port is an error, never a silent move,
-  because clients' `remote` names it; only the UI takes a free port.
+- **Two servers on one repo:** refused (`server.lock`). A taken port moves the server to the next free one; its startup output
+  shows the port, and clients name it in their remote (`http://fermat:8805/<project>`).
 
 ## Access
 

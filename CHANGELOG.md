@@ -54,7 +54,7 @@ before it, so there is no migration and no compatibility code, and a project sta
   remote, Cairn refuses with the cluster setup to use. `[repo] allow_network_fs = true` overrides it.
 - **Configuration:** see "Simpler for one user" below. `CAIRN_TOKEN` replaces `CAIRN_STORE_TOKEN`; `CAIRN_DATA_DIR`,
   `CAIRN_CACHE_DIR`, and `--data-dir` are gone.
-- **Commands:** `cairn server [repo]` serves the project's repo by default (a taken port is an error);
+- **Commands:** `cairn server [repo]` serves the project's repo by default (a taken port moves it to the next free one, which its startup block shows);
   `cairn ui` opens the project's repo directly (`--remote URL`, `--repo FOLDER`); `cairn status` lists the
   pending, running, and rejected versions; `cairn verify [REF] [--repo FOLDER] [--repair]`; `cairn prune` trims
   read-only folders and contents only copies need. `cairn migrate` (the hub importer) is removed.
@@ -84,7 +84,7 @@ before it, so there is no migration and no compatibility code, and a project sta
 - **The example** (`examples/descent`) is four commands run from its folder; `run_example.py` is gone.
 - **Logging in to the UI:** `cairn ui` and `cairn server` print a one-time login link (a random code that
   works once; never the token), and `cairn ui` opens it in the browser (`--no-browser` to skip). A
-  taken UI port moves the UI to a free one; a taken server port is an error.
+  taken UI port moves the UI to a free one; a taken server port moves the server to the next free one.
 - **The UI's session cookie** is `Secure` exactly behind an HTTPS reverse proxy (`X-Forwarded-Proto: https`), and
   plain over HTTP (this machine, an SSH tunnel, a VPN), where browsers drop a `Secure` cookie.
 - **The repository** is github.com/DoeringChristian/cairn (formerly cairn-report).
