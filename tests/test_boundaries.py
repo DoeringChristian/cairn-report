@@ -7,6 +7,7 @@
     client/repo.py    the two compositions (without and with a remote) behind one interface
     client/open.py    the source-of-truth policy: the only place that reads [remote] url / [repo] allow_network_fs and the
                       filesystem type, and composes the layers below
+    term.py           how Cairn prints (one-line messages, hints, warnings, aligned blocks and tables): a leaf
     the rest          the object API, publishing, drafts, runs, CLI, UI, reports: through what open.py composes
 """
 
@@ -18,15 +19,15 @@ import pytest
 import cairn
 
 PACKAGE = Path(cairn.__file__).parent
-LEAVES = {"config", "ranges", "formats", "hosts", "_version"}  # import nothing from cairn
+LEAVES = {"config", "ranges", "formats", "hosts", "term", "_version"}  # import nothing from cairn
 ALLOWED = {
     "store": {"store", "ranges", "formats"},  # the repo core: no configuration, no client
     "api": {"store"},  # the error boundary of the public calls
-    "client": {"client", "store", "api", "config", "ranges", "formats", "_version"},  # formats: the run logger writes what it reads
-    "server": {"server", "store", "config", "ranges", "hosts", "_version"},
-    "ui": {"ui", "store", "client", "config", "ranges", "hosts", "_version"},
-    "reports": {"reports", "store", "client", "config", "ranges", "formats", "_version"},
-    "runs": {"runs", "store", "client", "config", "formats", "_version"},
+    "client": {"client", "term", "store", "api", "config", "ranges", "formats", "_version"},  # formats: the run logger writes what it reads
+    "server": {"server", "term", "store", "config", "ranges", "hosts", "_version"},
+    "ui": {"ui", "term", "store", "client", "config", "ranges", "hosts", "_version"},
+    "reports": {"reports", "term", "store", "client", "config", "ranges", "formats", "_version"},
+    "runs": {"runs", "term", "store", "client", "config", "formats", "_version"},
     "__init__": {"store", "client", "api", "_version"},  # the API (client lazily)
     "cli": set(),  # argument parsing: anything, lazily; checked separately
 }
@@ -108,11 +109,11 @@ def targets_of(node):
 
 CLIENT = PACKAGE / "client"
 CLIENT_LAYERS = {  # module -> the cairn modules it may import (anything in store/ is `store`)
-    "http": set(),
-    "remote": {"store", "client.http"},
-    "sync": {"store"},
-    "repo": {"store", "ranges", "client.http", "client.remote", "client.sync"},
-    "open": {"config", "store", "client.http", "client.remote", "client.repo"},
+    "http": {"term"},
+    "remote": {"store", "term", "client.http"},
+    "sync": {"store", "term"},
+    "repo": {"store", "ranges", "term", "client.http", "client.remote", "client.sync"},
+    "open": {"config", "store", "term", "client.http", "client.remote", "client.repo"},
 }
 
 
