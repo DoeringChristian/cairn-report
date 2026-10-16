@@ -13,9 +13,9 @@ import json
 import os
 from pathlib import Path
 
-from ..formats import read_jsonl
 from . import refs
 from .blobs import now
+from .errors import InvalidRef
 from .ids import is_id
 
 INPUTS_FILE = ".cairn-inputs.jsonl"
@@ -42,20 +42,51 @@ def record_input(id: str, shown: str | None = None) -> None:
             _append(sink, id, shown)
 
 
-def _reference(row: dict) -> str | None:
-    """What a recorded row names: the version's id; a row without one (written by hand), its reference, which must be
-    one (refs.parse). A row of Cairn 0.14 (`uid`) names the id `cairn upgrade` gave that version."""
-    if is_id(row.get("id")):
+def _reference(row, where: str) -> str:
+    """What a recorded row names: `{"id": <64 hex digits>}` (what Cairn writes); a row of Cairn 0.14 (`uid`) names the
+    id `cairn upgrade` gave that version; a row written by hand may name a reference instead (`{"ref": "data@v3"}`).
+    Anything else is an InvalidRef naming the file and line (`where`): a row is never dropped silently."""
+    if not isinstance(row, dict):
+        raise InvalidRef(f'{where}: a row is a JSON object such as {{"id": "<64 hex digits>"}}, not {row!r}')
+    if "id" in row:
+        if not is_id(row["id"]):
+            raise InvalidRef(f"{where}: {row['id']!r} is not a whole id (64 lowercase hex digits)")
         return row["id"]
-    if isinstance(row.get("uid"), str):
-        from .upgrade import legacy_id
+    if "uid" in row:
+        from .upgrade import is_uid, legacy_id
 
+        if not is_uid(row["uid"]):
+            raise InvalidRef(f"{where}: {row['uid']!r} is not a Cairn 0.14 uid")
         return legacy_id(row["uid"])
-    ref = row.get("ref")
-    if not isinstance(ref, str) or not ref:
-        return None
-    refs.parse(ref)
-    return ref
+    if "ref" in row:
+        if not isinstance(row["ref"], str):
+            raise InvalidRef(f"{where}: the reference {row['ref']!r} is not text")
+        try:
+            refs.parse(row["ref"])
+        except InvalidRef as error:
+            raise InvalidRef(f"{where}: {error}") from None
+        return row["ref"]
+    raise InvalidRef(f'{where}: the row names no version (an "id", or a "ref")')
+
+
+def _rows(path: Path) -> list[str]:
+    """The references of one inputs file, in order, each row checked (`_reference`); blank lines are skipped."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError) as error:
+        raise InvalidRef(f"{path}: cannot read the inputs file ({error})") from None
+    found = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError as error:
+            raise InvalidRef(f"{path}:{number}: not a JSON row ({error.msg})") from None
+        found.append(_reference(row, f"{path}:{number}"))
+    return found
 
 
 def open_sink(path: Path) -> None:
@@ -74,9 +105,8 @@ def close_sink(path: Path) -> None:
 def recorded(path: Path) -> list[str]:
     """The distinct references one inputs file holds, in order."""
     found: list[str] = []
-    for row in read_jsonl(path):
-        ref = _reference(row)
-        if ref and ref not in found:
+    for ref in _rows(path):
+        if ref not in found:
             found.append(ref)
     return found
 
@@ -88,9 +118,8 @@ def read_inputs(folder: Path) -> list[str]:
     for directory, folders, files in os.walk(folder):
         folders.sort()
         if INPUTS_FILE in files:
-            for row in read_jsonl(Path(directory) / INPUTS_FILE):
-                ref = _reference(row)
-                if ref and ref not in found:
+            for ref in _rows(Path(directory) / INPUTS_FILE):
+                if ref not in found:
                     found.append(ref)
     return found
 

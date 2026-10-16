@@ -34,7 +34,9 @@ A version's **id** is now its only identity, as a commit's hash is in git, and e
   every entry after the pending versions it names as inputs (a run's outputs after their run). Listings go by
   number, adoption and `cairn prune` by `created` and last access.
 - **Stored references are whole ids:** inputs (a reference given in any form is resolved to the id it names when the
-  version is recorded, offline from the repo, else refused), the inputs file, lineage, aliases, report manifests
+  version is recorded, offline from the repo, else refused), the inputs file (a row that names no version, such as
+  a short id, an uppercase id, a row without `id` or `ref`, or a line that is not JSON, is an error naming the file and
+  line, and the publish that reads it fails), lineage, aliases, report manifests
   (`inputs.<name>.id`, with `name` and `version`), Hydra sweeps (`metadata.sweep.id`, trial rows by id).
 - **The HTTP API is v3** (`/api/v3/...`): `GET /api/v3/repo` is the handshake (`{id, cairn, api}`); a 0.15 client
   refuses a 0.14 server and a 0.15 server answers every `/api/v2/` request with 400 and a message, so a server and
