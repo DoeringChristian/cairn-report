@@ -58,6 +58,11 @@ from .api import public
 from .store import (Ambiguous, BadRange, Conflict, Deleted, FileRead, Forbidden, InvalidRef, LocalRepo, MissingBlobs, NoRun, NotFound,
                     Protected, Ref, StoreError, Unauthorized, Unreachable)
 
+for _error in (Ambiguous, BadRange, Conflict, Deleted, Forbidden, InvalidRef, MissingBlobs, NoRun, NotFound, Protected,
+               StoreError, Unauthorized, Unreachable):
+    _error.__module__ = __name__  # tracebacks name them as they are imported: cairn.NotFound
+del _error
+
 if TYPE_CHECKING:
     from .client.drafts import Draft
     from .client.runs import Run
