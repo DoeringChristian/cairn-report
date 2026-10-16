@@ -131,7 +131,8 @@ class Remote:
             if timer is not None:
                 timer.cancel()
         if failed:
-            if any(isinstance(error, ClientError) and error.unreachable for error in errors):
+            if any(isinstance(error, ClientError) and (error.unreachable or (error.status or 0) >= 500) for error in errors):
+                # a remote that errors (5xx: a full disk, a crash) is a remote that does not answer now (as _translate)
                 raise Unreachable(f"{len(failed)} files were not uploaded to {self.url}: {errors[0]}")
             raise StoreError(f"{len(failed)} files were not uploaded to {self.url}; publish again")
 
