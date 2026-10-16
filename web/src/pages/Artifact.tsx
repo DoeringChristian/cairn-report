@@ -81,7 +81,7 @@ function Files({ project, name, version, files }: { project: string; name: strin
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [all, setAll] = useState(false);
   const href = (path: string, download = false) => fileHref(project, name, version, path, download);
-  const isImage = (f: Entry) => !!f.sha256 && previewKind(f.path) === "image";
+  const isImage = (f: Entry) => !!f.sha256 && (f.size ?? 0) > 0 && previewKind(f.path) === "image";  // an empty file is no image
   const images = useMemo(() => files.filter(isImage), [files]);  // eslint-disable-line react-hooks/exhaustive-deps
   const gallery = useMemo<GalleryItem[]>(() => images.map(f => ({
     src: href(f.path), title: f.path, caption: bytes(f.size ?? 0), download: href(f.path, true),
@@ -114,9 +114,9 @@ function Files({ project, name, version, files }: { project: string; name: strin
                   {f.sha256 ? <a href={href(f.path)}>{f.path}</a> : <span>{f.path} <span className="muted">&rarr; {f.link}</span></span>}
                 </span>
               </td>
-              <td className="muted nowrap">{f.sha256 ? bytes(f.size ?? 0) : "link"}</td>
+              <td className="muted nowrap">{f.sha256 ? ((f.size ?? 0) > 0 ? bytes(f.size ?? 0) : "empty") : "link"}</td>
               <td><RowActions>
-                {f.sha256 && kind && <Button small aria-expanded={isOpen} onClick={() => toggle(f.path)}>{isOpen ? "Hide" : "Preview"}</Button>}
+                {f.sha256 && kind && (f.size ?? 0) > 0 && <Button small aria-expanded={isOpen} onClick={() => toggle(f.path)}>{isOpen ? "Hide" : "Preview"}</Button>}
                 {f.sha256 && <LinkButton small href={href(f.path, true)}>Download</LinkButton>}
                 {f.sha256 && <CopyButton text={`${userRef(name, version)}//${f.path}`} label="Copy file reference" done="Reference copied" />}
               </RowActions></td>

@@ -131,7 +131,7 @@ export function Graph({ root, project }: { root: string; project: string }) {
   if (error) return <Hint>Lineage unavailable: {error}</Hint>;
   if (!model) return <Loading what="Loading lineage" />;
   const { placed, edges, width, height } = model;
-  if (edges.length === 0) return <Hint>This version has no inputs and no consumers.</Hint>;
+  const alone = edges.length === 0;  // still drawn: one node, and the toggle stays reachable
 
   const expandable = (p: Placed) => {
     if (p.col === 0) return false;
@@ -142,7 +142,9 @@ export function Graph({ root, project }: { root: string; project: string }) {
 
   return (
     <Card className="graph-card" bar={<>
-      <span className="muted">Inputs on the left, consumers on the right. Click a node to open it, + to expand one more level.</span>
+      <span className="muted">{alone
+        ? (dataOnly ? "No data inputs or consumers (only runs, hidden here)." : "This version has no inputs and no consumers yet.")
+        : "Inputs on the left, consumers on the right. Click a node to open it, + to expand one more level."}</span>
       {hasRuns && (
         <ToggleGroup label="Runs in the graph" value={dataOnly ? "data" : "runs"} onChange={v => setDataOnly(v === "data")}
           options={[{ value: "runs", label: "Show runs" }, { value: "data", label: "Data only" }]} />
