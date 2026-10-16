@@ -10,16 +10,22 @@ descent/
 ├── data/quadratic/problem.json    the dataset (a matrix and a start point)
 ├── descent.py                     the experiment: a run of runs/descent that publishes the result `descent`
 ├── reports/descent-study/report.md   the report: declares its inputs, reads only them
-└── run_example.py                 every step below, in Python
 ```
 
 Run it with Cairn installed (`pip install "cairn[ui] @ git+https://github.com/DoeringChristian/cairn.git"`
 plus matplotlib):
 
 ```bash
-python run_example.py      # dataset, run, result, report, then the result's lineage
-cairn ui                   # projects, runs (with their charts and logs), versions, files, the lineage graph, the report
+cd examples/descent                                      # its own repo: examples/descent/.cairn/
+cairn publish data/quadratic datasets/quadratic          # datasets/quadratic@v1
+python descent.py                                        # runs/descent@v1 and its result descent@v1
+cairn publish reports/descent-study                      # reports/descent-study@v1, pinned to its inputs
+cairn show descent@latest                                # the result, its run, and the data behind it
+cairn ui                                                 # projects, runs (charts, logs), versions, files, lineage, the report
 ```
+
+Run these from this folder: Cairn uses the repo of the folder it runs in (the nearest `.cairn/` or
+`cairn.toml` upward), so from elsewhere the commands would use another repo.
 
 `descent.py` is a run: `cairn.init` makes the process a version of `runs/descent` (running until the
 script exits), `cairn.use` records the dataset's exact version as the run's input, `run.add` logs the
@@ -42,28 +48,14 @@ The run also records its config, its output (`logs/stdout.txt`), the code (`code
 (`environment/`), and the machine (`system/`). The report declares the dataset, the result, and the run
 (`runs/descent@latest`, whose `metrics.jsonl` it reads with `read_series`).
 
-`run_example.py` is the whole flow; it runs `descent.py` as its own process, so the run completes when
-that script exits:
-
-```python
-project.artifact("datasets/quadratic").publish("data/quadratic")   # datasets/quadratic@v1
-subprocess.run([sys.executable, "descent.py"], check=True)          # runs/descent@v1 and descent@v1
-cairn.reports.publish("descent-study")                              # reports/descent-study@v1, pinned to all three
-result = project.artifact("descent").latest
-result.run, result.upstream(), result.consumers                     # its run, the data behind it, the report
-```
-
-The same steps from the command line: `cairn publish data/quadratic datasets/quadratic`,
-`python descent.py`, `cairn publish reports/descent-study`, `cairn show descent@latest` (it prints the
-run and the data behind it), `cairn show runs/descent@latest`.
-
 Things to try:
 
 - **Another config.** `python descent.py --learning-rate 0.08`: a new run (`runs/descent@v2`, its config
   in its metadata) and a new result with it as input. The UI's lineage graph shows both; "Data only"
   hides the runs.
-- **A new dataset version.** Change `x0` in `data/quadratic/problem.json` and run `python run_example.py`
-  again: the dataset becomes v2, and the next run uses it.
+- **A new dataset version.** Change `x0` in `data/quadratic/problem.json` and publish it
+  again (`cairn publish data/quadratic datasets/quadratic`): the dataset becomes v2, and the next
+  `python descent.py` uses it.
 - **An alias.** `cairn alias descent@v1 best`, then declare `descent: descent@best` in the report: the
   report pins whichever version `best` points to at build time.
 - **A failed run.** Raise an exception in `descent.py` after the loop: the run is marked failed (its

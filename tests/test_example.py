@@ -1,6 +1,5 @@
-"""The example project (examples/descent) runs end to end against a local store, as its README says: run_example.py
-in a fresh interpreter (which also checks that `import cairn.reports; cairn.reports.publish(...)` works without
-anything importing `cairn.reports.build` first)."""
+"""The example project (examples/descent) runs end to end against its own repo, as its README says: the dataset,
+the run (descent.py, a fresh interpreter), and the report, each a command run from the example's folder."""
 
 import json
 import os
@@ -28,15 +27,19 @@ def test_the_example_runs_dataset_run_report(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("CAIRN_DIR", raising=False)
     monkeypatch.delenv("CAIRN_INPUTS", raising=False)
 
-    result = subprocess.run([sys.executable, str(project / "run_example.py")], cwd=tmp_path, capture_output=True, text=True,
-                            env={**os.environ})
-    assert result.returncode == 0, result.stderr
-    out = result.stdout
-    assert "published descent-example:datasets/quadratic@v1" in out and "published descent-example:descent@v1" in out
-    assert "  run        descent-example:runs/descent@v1 (completed, config" in out  # the result's one input: its run
-    assert "  data       descent-example:datasets/quadratic@v1" in out  # the data the run used, through the run
-    assert "consumers  descent-example:reports/descent-study@v1" in out  # and its consumer, the report
-    assert "code, environment, logs, metrics.jsonl, system" in out  # what the run recorded
+    def step(*args: str) -> str:
+        result = subprocess.run([sys.executable, *args], cwd=project, capture_output=True, text=True, env={**os.environ})
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    out = step("-m", "cairn", "publish", "data/quadratic", "datasets/quadratic")
+    assert "published datasets/quadratic@v1" in out
+    assert "published descent-example:descent@v1" in step("descent.py")
+    assert "reports/descent-study@v1" in step("-m", "cairn", "publish", "reports/descent-study")
+    shown = step("-m", "cairn", "show", "descent@latest")
+    assert "descent-example:runs/descent@v1" in shown  # the result's one input: its run
+    assert "descent-example:datasets/quadratic@v1" in shown  # the data the run used, through the run
+    assert "descent-example:reports/descent-study@v1" in shown  # and its consumer, the report
     drafts = project / ".cairn" / "drafts"
     assert not drafts.exists() or not any(drafts.rglob("*.draft.json"))  # the draft and run folders are gone
     assert not (project / "runs").exists() and not (project / ".cairn-inputs.jsonl").exists()

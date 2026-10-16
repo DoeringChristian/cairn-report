@@ -69,7 +69,7 @@ The final error is {{ error }}.
 `cairn build` makes the page, `cairn publish reports/<slug>` stores it with its pinned inputs.
 
 A complete small project (dataset → run → report, with lineage) is in
-[`examples/descent/`](examples/descent/README.md); `python run_example.py` runs it end to end.
+[`examples/descent/`](examples/descent/README.md), run with four commands from its folder.
 
 ## How it works: the repo, a remote, sync
 
