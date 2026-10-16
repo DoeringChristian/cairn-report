@@ -11,6 +11,7 @@ import hashlib
 import http.client
 import json
 import os
+import posixpath
 import re
 import ssl
 import sys
@@ -231,12 +232,22 @@ def exclusion(patterns: list[str]):
     return lambda path: any(expression.fullmatch(path) for expression in expressions)
 
 
+def _points_inside(path: str, target: str) -> bool:
+    """Whether a symlink at `path` (inside the folder) with this target stays inside the folder (the rule the repo
+    applies to stored links, store.blobs.link_target)."""
+    if not target or target.startswith("/") or "\\" in target:
+        return False
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
+    return all(part not in ("", ".", "..") for part in resolved.split("/"))
+
+
 def skipped(name: str) -> bool:
     return name in SKIP_NAMES or name.endswith(".tmp")
 
 
 def scan(local: Path, prefix: str, project: Path, exclude: list[str] = (), skip_folder=None) -> dict[str, dict]:
-    """Every file and relative symlink under `local`, keyed `<prefix>/<path inside local>` (prefix may be "").
+    """Every file and symlink under `local` that points inside it (others are left out), keyed `<prefix>/<path inside
+    local>` (prefix may be "").
 
     `exclude` are gitignore-style globs on paths relative to the project folder `project` (`[repo] exclude`)."""
     found: dict[str, dict] = {}
@@ -270,7 +281,7 @@ def scan(local: Path, prefix: str, project: Path, exclude: list[str] = (), skip_
             key = f"{prefix}/{inside}" if prefix else inside
             if path.is_symlink():
                 target = os.readlink(path)
-                if not os.path.isabs(target):
+                if _points_inside(key, target):  # a link out of the folder (absolute or not) is left out
                     found[key] = {"link": target}
                 continue
             try:
