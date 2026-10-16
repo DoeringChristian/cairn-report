@@ -12,6 +12,8 @@
   in order (a path the version does not have is no change); a publish refuses them. A pending run carries its
   removals in its outbox entry, so `cairn sync` ends it with the right files on the remote. Clients of 0.14.1
   need a 0.14.1 server: a 0.14.0 server refuses removal entries.
+- **UI:** the lineage graph is drawn even when it has one node ("Data only" no longer ends in a dead end), and
+  an empty image file is shown as empty instead of as an image that cannot be loaded.
 
 ## 0.14.0: the repo, an optional remote, automatic sync
 

@@ -1,6 +1,6 @@
 [project]
 name = "cairn"
-version = "0.14.0"
+version = "0.14.1"
 description = "Cairn: an artifact store for research, with a server and a UI: runs and their results as versioned artifacts, and reports built from pinned artifacts."
 readme = "README.md"
 authors = [
