@@ -98,6 +98,29 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
   report `inputs:`, `.cairn-inputs.jsonl`, the server, and the UI's URLs (`/p/<project>/a/<name>@v3`,
   `/p/<project>/v/<id>`). Nothing rewrites a reference before it; no layer has a shortcut of its own.
 
+## Invariants (each with its reason; each has a test of its own, with constructed ids)
+
+1. **Ids never collide.** Each is 256 random bits made where the version is made; two machines would have to
+   draw the same number (probability about 2^-256). No coordination is needed, offline or online.
+2. **Only the source of truth assigns numbers.** With a remote, its server numbers versions in the order they
+   arrive; a repo without a remote numbers its own. So two machines publishing at once get consecutive numbers,
+   and a number never names two versions.
+3. **`@latest` is the highest completed number:** on a remote, the version that arrived last, not the one whose
+   creating machine's clock says it is newest. It needs no clock, and a report records exactly what it resolved.
+4. **Stored references are full ids, never short ids or numbers alone:** inputs, `.cairn-inputs.jsonl`, report
+   manifests, lineage, aliases. A short id is only for typing and showing; it may become ambiguous as a project
+   grows or on a remote that combines machines, and then it is refused with the candidates, never resolved wrong.
+5. **The four reference forms are disjoint by their characters** (the table above); nothing resolves by
+   precedence or by trying one reading after another.
+6. **One parser.** Only `store/refs.py` (and one shared module in the web code) takes references apart; a
+   boundary test fails on any other selector parsing.
+7. **Aliases and deletions change only on the source of truth;** offline they are refused, so two machines
+   cannot set an alias differently.
+
+**Before any change to identity, numbering or the reference syntax:** a table of the forms with their character
+sets showing they stay disjoint, a note on how git handles the same thing, and a test for every invariant it
+touches. A rule of the form "X is matched first" is a failed review.
+
 ## Upgrading a 0.14 repo
 
 `cairn upgrade [repo]` converts a repo made by 0.14 (a project's `.cairn/`, or a server's repo folder) in place,
