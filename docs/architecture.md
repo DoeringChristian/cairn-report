@@ -130,7 +130,7 @@ A server's repo (`cairn server /srv/cairn`) has the same layout; it simply has n
 - Over HTTP: the owner token or project-scoped tokens (`cairn token`), never in a URL. The UI logs in with
   a one-time link (a random code valid once for 10 minutes).
 
-## SSH access
+## SSH access (planned for the release after 0.14.0)
 
 As on GitHub: SSH carries sync, the CLI and the Python API, with the SSH key as the credential (no token);
 a browser talking to a server's UI stays on HTTP(S) with a login.
