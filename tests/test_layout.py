@@ -188,3 +188,25 @@ def test_snapshots_skip_the_cairn_folder():
     for part in (".cairn", "generated"):
         assert _denied(Path(part) / "x.py")
     assert _denied(Path(".cairn") / ".gitignore")
+
+
+def test_a_git_snapshot_of_a_project_in_a_subfolder_of_its_checkout(tmp_path):
+    import subprocess
+
+    from cairn.client.code import create_snapshot
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
+
+    project = tmp_path / "examples" / "demo"
+    project.mkdir(parents=True)
+    (project / "cairn.toml").write_text("")
+    (project / "train.py").write_text("print('hi')\n")
+    git("init", "-q")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "add", ".")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    (project / "train.py").write_text("print('changed')\n")
+    create_snapshot(project, tmp_path / "out", "git", 2_000_000, 50_000_000)
+    manifest = json.loads((tmp_path / "out" / "manifest.json").read_text())
+    assert "error" not in manifest
+    assert "train.py" in json.dumps(manifest)

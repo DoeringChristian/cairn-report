@@ -251,7 +251,7 @@ def create_snapshot(
         for relative in sorted(tracked):
             if _denied(Path(relative)) or not _source_type(Path(relative)):
                 continue
-            payload = _git(root, "show", f"{commit}:{relative}")
+            payload = _git(root, "show", f"{commit}:./{relative}")  # ./: relative to root, not to the git top level
             if len(payload) > max_file_bytes:
                 raise RuntimeError(
                     f"committed source file {relative} is {len(payload)} bytes; per-file limit is {max_file_bytes}"

@@ -197,7 +197,7 @@ class Run(Draft):
             return
         try:
             create_snapshot(root, code, snapshot_mode(root), 2_000_000, 50_000_000)
-        except (OSError, RuntimeError, ValueError) as error:
+        except Exception as error:  # best effort: any failure is recorded in the manifest, never a crash of the run
             import shutil
 
             shutil.rmtree(code, ignore_errors=True)
