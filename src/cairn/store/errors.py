@@ -28,7 +28,7 @@ class NotFound(StoreError, LookupError):
 
 
 class Ambiguous(StoreError, LookupError):
-    """A short id that names several versions; `candidates` lists them ({name, version, uid, short_id, status})."""
+    """An id prefix that names several versions; `candidates` lists them ({name, version, id, short_id, status})."""
 
     def __init__(self, message: str, candidates=()):
         super().__init__(message)
@@ -52,7 +52,7 @@ class BadRange(StoreError):
 
 
 class Conflict(StoreError):
-    """The request contradicts what is stored, e.g. a known version uid with different content (HTTP 409)."""
+    """The request contradicts what is stored, e.g. a known version id with different content (HTTP 409)."""
 
 
 class Unreachable(StoreError, OSError):
@@ -60,7 +60,7 @@ class Unreachable(StoreError, OSError):
 
 
 class Deleted(NotFound):
-    """The version was deleted: its tombstone keeps the number and uid, never reused (HTTP 410)."""
+    """The version was deleted: its tombstone keeps the number and id, never reused (HTTP 410)."""
 
 
 class Protected(Conflict):
@@ -82,3 +82,15 @@ class MissingBlobs(Conflict):
             or f"{len(self.missing)} blobs are not in the repo (yet), e.g. "
             f"{self.missing[0] if self.missing else '?'}: upload them first"
         )
+
+
+class OldRepo(StoreError):
+    """A repo made by an older Cairn (0.14): every command but `cairn upgrade` refuses it."""
+
+    def __init__(self, root, message: str | None = None):
+        self.root = root
+        super().__init__(message or f"{root}: this repo was made by Cairn 0.14: run `cairn upgrade`")
+
+
+class Incompatible(StoreError):
+    """A server and a client of different Cairn releases (their API versions differ): both upgrade together."""

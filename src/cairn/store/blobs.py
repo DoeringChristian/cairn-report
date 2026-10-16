@@ -11,10 +11,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import posixpath
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .fs import clone_or_copy
@@ -24,8 +25,20 @@ CONTROL = re.compile(r"[\x00-\x1f]")
 CHUNK = 4 << 20  # blobs are read, hashed and written in 4 MB pieces
 
 
+_last_now = [""]
+_now_lock = threading.Lock()
+
+
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """The time now, ISO 8601 in UTC with microseconds; strictly increasing within a process, so the order of what one
+    process made (`created`, `completed`) is the order of these stamps."""
+    with _now_lock:
+        stamp = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        if stamp <= _last_now[0]:
+            last = datetime.fromisoformat(_last_now[0])
+            stamp = (last + timedelta(microseconds=1)).isoformat(timespec="microseconds")
+        _last_now[0] = stamp
+    return stamp
 
 
 def valid_path(path) -> bool:

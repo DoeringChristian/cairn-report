@@ -1,12 +1,12 @@
-"""The read-only folders of versions that `pull` returns, in a repo, keyed by version uid.
+"""The read-only folders of versions that `pull` returns, in a repo, keyed by version id.
 
-    <repo>/versions/<uid>/manifest.json   the record: {"uid", "sync": "synced", "repo" (the uid of the repo or remote
+    <repo>/versions/<id>/manifest.json    the record: {"id", "sync": "synced", "repo" (the id of the repo or remote
                                           the version is from), "name", "version", "manifest",
                                           "accessed", "accessed_at"}
-    <repo>/versions/<uid>/files/          the version's files, read-only: what `pull` returns
+    <repo>/versions/<id>/files/           the version's files, read-only: what `pull` returns
     <repo>/blobs/<aa>/<sha256>            the contents they are made from (blobs.py)
 
-A version folder is named by its uid, never by name and number, so versions never collide. The folders are
+A version folder is named by its id, never by name and number, so versions never collide. The folders are
 derived from the blobs: deleting one loses nothing (the next pull makes it again), and `cairn prune` trims them.
 
 The repo may sit on a network filesystem (a cluster's shared project space, with an outbox and no database) and be
@@ -69,14 +69,14 @@ def place(temporary: Path, target: Path) -> bool:
     return True
 
 
-def version_folder(root: Path | str, uid: str) -> Path:
-    """`<root>/versions/<uid>`: the record and, under `files/`, the files."""
-    return Path(root) / "versions" / uid
+def version_folder(root: Path | str, id: str) -> Path:
+    """`<root>/versions/<id>`: the record and, under `files/`, the files."""
+    return Path(root) / "versions" / id
 
 
-def files_folder(root: Path | str, uid: str) -> Path:
-    """`<root>/versions/<uid>/files`: the read-only folder `pull` returns."""
-    return version_folder(root, uid) / FILES
+def files_folder(root: Path | str, id: str) -> Path:
+    """`<root>/versions/<id>/files`: the read-only folder `pull` returns."""
+    return version_folder(root, id) / FILES
 
 
 # ------------------------------------------------------------------ records
@@ -101,13 +101,13 @@ def write_json(path: Path, value) -> None:
 def read_record(folder: Path) -> dict | None:
     """A version folder's record, or None if the folder is not a finished one."""
     record = read_json(Path(folder) / RECORD)
-    return record if isinstance(record, dict) and record.get("uid") else None
+    return record if isinstance(record, dict) and record.get("id") else None
 
 
 def update_record(root: Path | str, manifest: dict, repo: str | None = None) -> None:
     """The version a folder was made from got its final manifest (the remote numbered it): the folder's record says so
     from now on. Never raises (the record only describes the folder)."""
-    folder = version_folder(root, manifest["uid"])
+    folder = version_folder(root, manifest["id"])
     record = read_record(folder)
     if record is None or record.get("manifest") == manifest:
         return
@@ -120,11 +120,11 @@ def update_record(root: Path | str, manifest: dict, repo: str | None = None) -> 
         pass
 
 
-def cached(root: Path | str, uid: str | None) -> dict | None:
+def cached(root: Path | str, id: str | None) -> dict | None:
     """The record of a version folder `pull` made in the repo `root` (with `manifest`), or None."""
-    if not uid:
+    if not id:
         return None
-    folder = version_folder(root, uid)
+    folder = version_folder(root, id)
     record = read_record(folder)
     return record if record and record.get("sync") == "synced" and (folder / FILES).is_dir() else None
 
@@ -220,10 +220,10 @@ def materialize_version(store, name: str, version: dict, root: Path | str) -> Pa
     blob). Each file and the manifest digest are verified (`link_files`); a mismatch fails the pull and removes
     the partial folder. The folder is built under a scratch name and renamed into place (see the module doc).
     """
-    uid = version.get("uid")
-    if not uid:
-        raise StoreError(f"{name}@v{version['version']} has no uid")
-    folder = version_folder(root, uid)
+    id = version.get("id")
+    if not id:
+        raise StoreError(f"{name}@v{version['version']} has no id")
+    folder = version_folder(root, id)
     record = read_record(folder)
     if record and (folder / FILES).is_dir():
         touch(folder, record)
@@ -232,7 +232,7 @@ def materialize_version(store, name: str, version: dict, root: Path | str) -> Pa
     build = scratch(folder)
     try:
         build.mkdir()
-        label = refs.exact(name, version["version"]) if version.get("version") is not None else f"{name}@{uid}"
+        label = refs.shown(name, version)
         link_files(
             version["files"],
             build / FILES,
@@ -243,9 +243,9 @@ def materialize_version(store, name: str, version: dict, root: Path | str) -> Pa
         write_json(
             build / RECORD,
             {
-                "uid": uid,
+                "id": id,
                 "sync": "synced",
-                "repo": getattr(store, "uid", None),
+                "repo": getattr(store, "id", None),
                 "name": name,
                 "version": version["version"],
                 "manifest": version,
@@ -276,7 +276,7 @@ def inside(folder: Path, ref: refs.Ref, label: str) -> Path:
 
 def materialize(store, ref, root: Path | str) -> Path:
     """Resolve `ref`, materialize its version in the repo `root`, and return the `files/` folder (or the file after `//`)."""
-    ref = refs.parse(ref) if isinstance(ref, str) else ref
+    ref = refs.parse(ref)
     name, version = store.resolve(ref)
     folder = materialize_version(store, name, version, root)
     return inside(folder, ref, refs.exact(name, version["version"]))
@@ -294,5 +294,5 @@ def pull(store, ref: str, record: bool = True) -> Path:
     folder = materialize_version(store, name, version, store.root)
     path = inside(folder, parsed, refs.exact(name, version["version"]))
     if record:
-        record_input(refs.exact(name, version["version"]), version["uid"])
+        record_input(version["id"], refs.exact(name, version["version"]))
     return path

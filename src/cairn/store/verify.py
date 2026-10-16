@@ -4,9 +4,10 @@
     sha256_file(path)                   (hex digest, size) of a file
     check_entries(folder, entries, ...) a read-only `files/` folder against the manifest entries it was made from
     check_blobs(blobs, report, ...)     every blob against its name
-    verify_folders(root, repair)        every read-only folder `pull` made in a repo (`versions/<uid>/`)
-    verify_store(store)                 a LocalRepo's database: every version's blobs exist (with their size) and its
-                                        manifest digest matches its files
+    verify_folders(root, repair)        every read-only folder `pull` made in a repo (`versions/<id>/`)
+    verify_store(store)                 a LocalRepo's database: every version has an id, its blobs exist (with their
+                                        size), its manifest digest matches its files, and its inputs are versions of its
+                                        project
 
 Nothing here changes anything except `repair=True`, which removes what can be made again: a broken read-only folder
 (the next pull makes it again) and a broken blob whose hash is not in `keep` (the caller keeps everything that may be
@@ -165,7 +166,7 @@ def check_blobs(blobs: Path, report: Report, repair: bool = False, keep=()) -> N
 
 
 def verify_folders(root: Path | str, repair: bool = False) -> Report:
-    """Every read-only folder `pull` made in the repo `root` (`versions/<uid>/files/`) against the manifest it was made
+    """Every read-only folder `pull` made in the repo `root` (`versions/<id>/files/`) against the manifest it was made
     from (and its digest). With `repair`, a broken folder is removed: the next pull makes it again from the blobs."""
     root, report = Path(root), Report()
     base = root / "versions"
@@ -176,7 +177,9 @@ def verify_folders(root: Path | str, repair: bool = False) -> Report:
         manifest = record.get("manifest") or {}
         entries, digest = manifest.get("files") or [], manifest.get("digest")
         report.count("versions")
-        label = f"{record.get('name')}@{record['uid']}"
+        label = f"{record.get('name')} ({record['id'][:7]})"
+        if record["id"] != folder.name or manifest.get("id") not in (None, record["id"]):
+            report.add("version", folder, f"{label}: the folder's record names another id")
         files = folder / FILES
         if not files.is_dir():
             problem = report.add("version", folder, f"{label} has no files folder")
@@ -193,40 +196,56 @@ def verify_folders(root: Path | str, repair: bool = False) -> Report:
 
 
 def verify_store(store) -> Report:
-    """A LocalRepo (every project of it): every blob matches its name; every version's blobs exist (with the recorded
-    size) and a completed version's manifest digest matches its files."""
+    """A LocalRepo (every project of it): every blob matches its name; every version has an id; its blobs exist (with
+    the recorded size); a completed version's manifest digest matches its files; and the inputs of a version the repo
+    made (not a copy of a remote's, whose inputs need not be copied) are ids of versions of its project."""
+    from .ids import is_id
+
     report = Report()
     check_blobs(store.root / "blobs", report)
     for project in store.projects():
-        for name in store.artifacts(project["name"]):
-            for version in store.versions(project["name"], name):
-                label = f"{name}@v{version['version']}" + (f" (project {project['name']})" if project["name"] else "")
-                report.count("versions")
-                for entry in version["files"]:
-                    if "sha256" not in entry:
-                        continue
-                    report.count("files")
-                    try:
-                        size = os.stat(store.blob_path(entry["sha256"])).st_size
-                    except FileNotFoundError:
-                        report.add("blob", label, f"{entry['path']}: the blob {entry['sha256'][:16]}... is missing")
-                        continue
-                    if size != entry["size"]:
-                        report.add(
-                            "blob",
-                            label,
-                            f"{entry['path']}: the blob is {size} bytes, the manifest says {entry['size']}",
-                        )
-                if version["status"] != "completed":
+        listed = [
+            (name, version)
+            for name in store.artifacts(project["name"])
+            for version in store.versions(project["name"], name)
+        ]
+        known = store.version_ids(project["name"])  # tombstones too: a deleted input keeps its edge
+        bound = bool(store.meta("remote"))  # a remote's cache: an input may be a version it never copied
+        for name, version in listed:
+            label = f"{name}@v{version['version']}" + (f" (project {project['name']})" if project["name"] else "")
+            report.count("versions")
+            if not is_id(version.get("id")):
+                report.add("version", label, f"its id {version.get('id')!r} is not 64 hex digits")
+            for input_id in version.get("inputs") or []:
+                if not is_id(input_id):
+                    report.add("lineage", label, f"the input {input_id!r} is not an id")
+                elif input_id not in known and not version.get("origin") and not bound:
+                    report.add("lineage", label, f"the input {input_id[:12]}... is no version of the project")
+            for entry in version["files"]:
+                if "sha256" not in entry:
                     continue
-                if not version.get("digest"):
-                    report.add("digest", label, "the version has no manifest digest")
-                elif manifest_digest(version["files"]) != version["digest"]:
+                report.count("files")
+                try:
+                    size = os.stat(store.blob_path(entry["sha256"])).st_size
+                except FileNotFoundError:
+                    report.add("blob", label, f"{entry['path']}: the blob {entry['sha256'][:16]}... is missing")
+                    continue
+                if size != entry["size"]:
                     report.add(
-                        "digest",
+                        "blob",
                         label,
-                        f"its files hash to {manifest_digest(version['files'])}, not the recorded {version['digest']}",
+                        f"{entry['path']}: the blob is {size} bytes, the manifest says {entry['size']}",
                     )
+            if version["status"] != "completed":
+                continue
+            if not version.get("digest"):
+                report.add("digest", label, "the version has no manifest digest")
+            elif manifest_digest(version["files"]) != version["digest"]:
+                report.add(
+                    "digest",
+                    label,
+                    f"its files hash to {manifest_digest(version['files'])}, not the recorded {version['digest']}",
+                )
     return report
 
 
@@ -236,7 +255,7 @@ def verify_outbox(outbox, root: Path) -> Report:
 
     report = Report()
     for record in outbox.records():
-        label = f"{record['name']}@{record['uid']}"
+        label = f"{record['name']} ({record['id'][:7]})"
         report.count("versions")
         entries = record.get("files") or []
         if (
@@ -297,7 +316,7 @@ def verify_version(root: Path | None, label: str, version: dict, own: bool, repa
         report.add("digest", label, "the version has no manifest digest")
     if root is None:
         return report
-    folder = files_folder(root, version["uid"])
+    folder = files_folder(root, version["id"])
     if folder.is_dir():
         check_entries(folder, entries, report, None, label)
     for entry in entries:

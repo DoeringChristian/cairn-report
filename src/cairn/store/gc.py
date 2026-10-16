@@ -1,6 +1,6 @@
 """Retention rules and garbage collection of a store root.
 
-Deleting a version (LocalRepo.delete_version) leaves a tombstone in the metadata: its number and uid are never
+Deleting a version (LocalRepo.delete_version) leaves a tombstone in the metadata: its number and id are never
 handed out again, its file list is dropped, and its blobs may become garbage. `LocalRepo.gc` then
 
 1. applies the retention rules (per project, or per artifact-name prefix; the longest matching prefix wins):
@@ -38,7 +38,7 @@ GRACE = 24 * 3600.0
 STALE_UPLOAD = 3600.0  # a temporary upload file untouched this long (or the grace period, if longer) is a dead upload
 DAY = 86400.0
 UNITS = {"s": 1, "m": 60, "h": 3600, "d": DAY, "w": 7 * DAY}
-HEX = re.compile(r"[0-9a-f]+")
+BLOB_HEX = re.compile(r"[0-9a-f]+")
 
 
 def parse_duration(text) -> float:
@@ -153,7 +153,7 @@ def blob_files(blobs_folder: str):
         return
     with folders:
         for folder in folders:
-            if len(folder.name) != 2 or not HEX.fullmatch(folder.name) or not folder.is_dir(follow_symlinks=False):
+            if len(folder.name) != 2 or not BLOB_HEX.fullmatch(folder.name) or not folder.is_dir(follow_symlinks=False):
                 continue
             with os.scandir(folder.path) as entries:
                 for entry in entries:
@@ -161,7 +161,7 @@ def blob_files(blobs_folder: str):
                     if (
                         len(sha) == 64
                         and sha.startswith(folder.name)
-                        and HEX.fullmatch(sha)
+                        and BLOB_HEX.fullmatch(sha)
                         and entry.is_file(follow_symlinks=False)
                     ):
                         yield sha, entry.path

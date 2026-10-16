@@ -4,17 +4,17 @@ summary row per artifact, in one SQLite file (`<root>/metadata.sqlite3`, WAL mod
     projects   (name) -> record (JSON: name, title, description, created), generation (bumped by every write
                to the project, so a listing can be cached until it changes)
     artifacts  (project, name) -> latest, versions, updated, metadata (of latest), aliases (JSON, current)
-    versions   (project, name, number) -> uid, label, status, manifest (JSON: the whole version record), idhash
-               (the SHA-256 of the uid, which short ids are prefixes of); indexed by uid, by label, and by idhash
-    aliases    (project, name, alias) -> number, position (aliases keep the order they first appeared in)
-    alias_log  every alias move, in order: project, name, alias, number, time
-    consumers  (project, input ref) -> consumer ref, in the order they were recorded (refs: `name@v<n>`)
+    versions   (project, name, number) -> id, label, status, manifest (JSON: the whole version record); indexed by
+               id (unique in the repo; a short id is a prefix of it, looked up as a range of the index), and by label
+    aliases    (project, name, alias) -> id of the version it points at, position (the order aliases first appeared in)
+    alias_log  every alias move, in order: project, name, alias, id ('' when the alias was removed), time
+    consumers  (project, input id) -> consumer id, in the order they were recorded
     retention  (project, prefix) -> rule (JSON: keep_last, keep_days, keep_aliased; see gc.py); made when first set
     meta       schema, sweeps (how many blob sweeps ran; gc.py)
 
 A server's repo holds many projects; a project's own repo (`.cairn/`) holds one, under the project name "" (local.py,
 OWN). A deleted version stays in `versions` as a tombstone (status `deleted`, its file list dropped), so its number and
-uid are never handed out again; `artifacts.versions` counts the versions that are not deleted.
+id are never handed out again; `artifacts.versions` counts the versions that are not deleted.
 
 Every write is one short transaction (`BEGIN IMMEDIATE`), so a crash leaves either all of a publish or
 none of it. Writers in one process queue on a lock before they take SQLite's; writers in other processes
@@ -32,8 +32,10 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from .errors import OldRepo
+
 FILE = "metadata.sqlite3"
-SCHEMA = 1
+SCHEMA = 2  # 0.15: versions, aliases, and lineage by id (0.14's schema 1 is converted by store/upgrade.py)
 BUSY_SECONDS = 60
 
 TABLES = """
@@ -45,21 +47,23 @@ CREATE TABLE IF NOT EXISTS artifacts (
     updated TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}', aliases TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (project, name)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS versions (
-    project TEXT NOT NULL, name TEXT NOT NULL, number INTEGER NOT NULL, uid TEXT NOT NULL, label TEXT,
-    status TEXT NOT NULL, manifest TEXT NOT NULL, idhash TEXT NOT NULL, PRIMARY KEY (project, name, number)) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS versions_by_uid ON versions (uid);
-CREATE INDEX IF NOT EXISTS versions_by_idhash ON versions (project, idhash);
+    project TEXT NOT NULL, name TEXT NOT NULL, number INTEGER NOT NULL, id TEXT NOT NULL, label TEXT,
+    status TEXT NOT NULL, manifest TEXT NOT NULL, PRIMARY KEY (project, name, number)) WITHOUT ROWID;
+CREATE UNIQUE INDEX IF NOT EXISTS versions_by_id ON versions (id);
+CREATE INDEX IF NOT EXISTS versions_by_project_id ON versions (project, id);
 CREATE INDEX IF NOT EXISTS versions_by_label ON versions (project, name, label, status);
 CREATE TABLE IF NOT EXISTS aliases (
-    project TEXT NOT NULL, name TEXT NOT NULL, alias TEXT NOT NULL, number INTEGER NOT NULL, position INTEGER NOT NULL,
+    project TEXT NOT NULL, name TEXT NOT NULL, alias TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL,
     PRIMARY KEY (project, name, alias)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS aliases_by_id ON aliases (id);
 CREATE TABLE IF NOT EXISTS alias_log (
-    seq INTEGER PRIMARY KEY, project TEXT NOT NULL, name TEXT NOT NULL, alias TEXT NOT NULL, number INTEGER NOT NULL,
+    seq INTEGER PRIMARY KEY, project TEXT NOT NULL, name TEXT NOT NULL, alias TEXT NOT NULL, id TEXT NOT NULL,
     time TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS alias_log_by_artifact ON alias_log (project, name, seq);
 CREATE TABLE IF NOT EXISTS consumers (
     seq INTEGER PRIMARY KEY, project TEXT NOT NULL, input TEXT NOT NULL, consumer TEXT NOT NULL, time TEXT NOT NULL,
     UNIQUE (project, input, consumer));
+CREATE INDEX IF NOT EXISTS consumers_by_consumer ON consumers (project, consumer);
 """
 RETENTION_TABLE = (
     "CREATE TABLE IF NOT EXISTS retention (project TEXT NOT NULL, prefix TEXT NOT NULL, rule TEXT NOT NULL, "
@@ -86,15 +90,17 @@ def _wal(connection: sqlite3.Connection) -> None:
 class Database:
     """One store root's metadata database: a connection per thread, and `write()` transactions."""
 
-    def __init__(self, root: Path, store_uid: str):
+    def __init__(self, root: Path, store_id: str):
         self.root, self.path = Path(root), Path(root) / FILE
-        self.store_uid = store_uid
+        self.store_id = store_id
         self._local = threading.local()
         self.write_lock = threading.Lock()  # this process's writers queue here, not in SQLite's busy loop
         fresh = not self.path.exists()
         connection = self.connection()
         if not fresh and self._ready(connection):  # the usual open: a read, no write lock
             return
+        if not fresh and self._old(connection):
+            raise OldRepo(self.root)
         with self.write_lock:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -116,6 +122,15 @@ class Database:
         except sqlite3.OperationalError:  # no meta table yet
             return False
         return row is not None and row[0] == str(SCHEMA)
+
+    @staticmethod
+    def _old(connection: sqlite3.Connection) -> bool:
+        """The database of an older layout (0.14's schema 1)."""
+        try:
+            row = connection.execute("SELECT value FROM meta WHERE key = 'schema'").fetchone()
+        except sqlite3.OperationalError:
+            return False
+        return row is not None and row[0] != str(SCHEMA)
 
     def connection(self) -> sqlite3.Connection:
         connection = getattr(self._local, "connection", None)
@@ -173,8 +188,8 @@ def export(database: Database, folder: Path) -> dict[str, int]:
                 lambda row: {"project": row[0], "name": row[1], **json.loads(row[2])},
             ),
             "aliases.jsonl": (
-                "SELECT project, name, alias, number, time FROM alias_log ORDER BY seq",
-                lambda row: {"project": row[0], "name": row[1], "alias": row[2], "version": row[3], "time": row[4]},
+                "SELECT project, name, alias, id, time FROM alias_log ORDER BY seq",
+                lambda row: {"project": row[0], "name": row[1], "alias": row[2], "id": row[3] or None, "time": row[4]},
             ),
             "consumers.jsonl": (
                 "SELECT project, input, consumer, time FROM consumers ORDER BY seq",

@@ -16,7 +16,7 @@ from pathlib import Path
 from ..formats import read_jsonl
 from . import refs
 from .blobs import now
-from .uids import UID
+from .ids import is_id
 
 INPUTS_FILE = ".cairn-inputs.jsonl"
 INPUTS_ENV = "CAIRN_INPUTS"
@@ -24,35 +24,38 @@ INPUTS_ENV = "CAIRN_INPUTS"
 _SINKS: list[Path] = []  # further inputs files every pull of this process is recorded in
 
 
-def _append(target: Path, exact: str, uid: str | None) -> None:
-    row = {"ref": exact, **({"uid": uid} if uid else {}), "time": now()}
+def _append(target: Path, id: str, shown: str | None) -> None:
+    row = {"id": id, **({"ref": shown} if shown else {}), "time": now()}
     with Path(target).open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row) + "\n")
 
 
-def record_input(exact: str, uid: str | None = None) -> None:
-    """Append one exact reference (and the version's uid) to the inputs file the environment names (else the working
-    directory's), and to every sink (each file once)."""
+def record_input(id: str, shown: str | None = None) -> None:
+    """Append one version (its id; `shown`, how it was named then, e.g. `data@v3`, only for a reader of the file) to the
+    inputs file the environment names (else the working directory's), and to every sink (each file once)."""
     target = Path(os.environ.get(INPUTS_ENV) or INPUTS_FILE)
     done = {os.path.abspath(target)}
-    _append(target, exact, uid)
+    _append(target, id, shown)
     for sink in list(_SINKS):
         if os.path.abspath(sink) not in done:
             done.add(os.path.abspath(sink))
-            _append(sink, exact, uid)
+            _append(sink, id, shown)
 
 
 def _reference(row: dict) -> str | None:
-    """What a recorded row names: the version by its uid when the row has one. A number this repo gave its own version
-    changes when a remote added later numbers it (client/sync.py adopts it); its uid never does."""
-    ref, uid = row.get("ref"), row.get("uid")
-    if not ref or not isinstance(uid, str) or not UID.fullmatch(uid):
-        return ref or None
-    try:
-        parsed = refs.parse(ref)
-    except ValueError:
-        return ref
-    return str(refs.Ref(parsed.name, uid, parsed.path))
+    """What a recorded row names: the version's id; a row without one (written by hand), its reference, which must be
+    one (refs.parse). A row of Cairn 0.14 (`uid`) names the id `cairn upgrade` gave that version."""
+    if is_id(row.get("id")):
+        return row["id"]
+    if isinstance(row.get("uid"), str):
+        from .upgrade import legacy_id
+
+        return legacy_id(row["uid"])
+    ref = row.get("ref")
+    if not isinstance(ref, str) or not ref:
+        return None
+    refs.parse(ref)
+    return ref
 
 
 def open_sink(path: Path) -> None:

@@ -16,7 +16,7 @@ hex). In Python:
     json.dumps(sorted(items, key=lambda item: item["path"]), sort_keys=True, separators=(",", ":"),
                ensure_ascii=False).encode("utf-8")
 
-Nothing else enters the digest: not the metadata, label, inputs, source, aliases, version number, uid, or any
+Nothing else enters the digest: not the metadata, label, inputs, source, aliases, version number, id, or any
 timestamp (including a file's `mtime`). Two versions with the same files therefore have the same digest,
 wherever and whenever they were made. The empty file list hashes `[]`.
 

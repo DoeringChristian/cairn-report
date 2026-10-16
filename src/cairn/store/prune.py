@@ -1,7 +1,7 @@
 """`cairn prune`: trim a repo's read-only folders, and the contents it keeps of a remote's versions, by last access;
 never what only this repo has.
 
-Read-only folders (`<repo>/versions/<uid>/`, what `pull` made) go, least recently used first, when their `accessed`
+Read-only folders (`<repo>/versions/<id>/`, what `pull` made) go, least recently used first, when their `accessed`
 time (written into the record by pulls, not the filesystem's atime) is older than `older_than`, and then until the
 repo is under `max_size`. A folder is made again from the blobs on the next pull.
 
@@ -64,9 +64,9 @@ def prune(
 ) -> dict:
     """Remove read-only folders (and, with `keep`, unreferenced blobs) from the repo `root` (see the module doc).
 
-    Returns {"versions": [uids of folders removed], "blobs": count, "freed": bytes, "size": bytes left}."""
+    Returns {"versions": [ids of folders removed], "blobs": count, "freed": bytes, "size": bytes left}."""
     root = Path(root)
-    versions, inodes = [], {}  # (accessed, uid, folder, shas, owned inodes); inode -> [size, paths left]
+    versions, inodes = [], {}  # (accessed, made, id, folder, shas, owned inodes); inode -> [size, paths left]
     base = root / "versions"
     for folder in sorted(base.iterdir()) if base.is_dir() else []:
         record = None if ".tmp-" in folder.name else read_record(folder)
@@ -79,7 +79,8 @@ def prune(
             inodes.setdefault(key, [info.st_size, 0])[1] += 1
             owned.append(key)
         accessed = record.get("accessed_at") or epoch(record.get("accessed"))
-        versions.append((accessed, record["uid"], folder, shas, owned))
+        made = (record.get("manifest") or {}).get("created") or ""
+        versions.append((accessed, made, record["id"], folder, shas, owned))
     blobs = {}
     for path, info in _files(root / "blobs"):
         if ".tmp-" in path.name:
@@ -99,10 +100,10 @@ def prune(
                 gained += entry[0]
         return gained
 
-    versions.sort()
+    versions.sort(key=lambda item: item[:2])  # least recently used first, then oldest: never by id
     now = time.time()
     left = []
-    for accessed, uid, folder, shas, owned in versions:
+    for accessed, made, id, folder, shas, owned in versions:
         old = older_than is not None and now - accessed > older_than
         big = max_size is not None and size > max_size
         if old or big:
@@ -110,7 +111,7 @@ def prune(
                 remove(folder)
             gained = release(owned)
             size, freed = size - gained, freed + gained
-            removed.append(uid)
+            removed.append(id)
         else:
             left.append(shas)
     if keep is not None:

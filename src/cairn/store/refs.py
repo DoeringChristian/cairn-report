@@ -1,36 +1,44 @@
-"""Artifact references: `name[@v<n>|@<uid>|@<short id>|@alias|@label][//path/in/artifact]`, or a bare `<short id>`.
+"""References: the one parser of every reference Cairn reads, wherever it comes from (the CLI, the Python API, report
+`inputs:`, `.cairn-inputs.jsonl`, the server's API, the UI's URLs). Nothing rewrites a reference before `parse`, and
+no other module takes one apart.
 
-    descent@latest//figures/trajectory.png      datasets/crops@v3      models/denoiser@best      3f9a2c1
-    datasets/crops@0192f3a4-5b6c-7d8e-9f01-23456789abcd      datasets/crops@3f9a2c1
+A reference has exactly one of four forms, told apart by its shape alone, before anything is looked up:
 
-A reference names a version of the project it is used in: there is no project in it (a repo holds one project;
-a server serves each of its projects as if it were its own repo). Names are slash paths, so the file path inside
-the artifact follows a `//`. After `@`, `v<n>` is an exact version number and a UUIDv7 (`uids.UID`, lowercase with
-dashes) an exact version uid; both are reserved, so no alias or label can take either form. Anything else is an
-alias (movable, per artifact), a label (chosen at publish), or a short id (hex digits, 4 or more: a prefix of the
-SHA-256 of the version's uid, see `short_id`). Hex digits are also a valid alias, label, or artifact name, so
-resolving matches names, numbers, aliases, and labels first and short ids last (`pick`).
+    <id>              3f9a2c1                one version: 4 to 64 hex digits, a prefix of its id (ids.py)
+    <name>            descent                the artifact's newest completed version (`@latest`)
+    <name>@v<n>       descent@v3             version n of the artifact
+    <name>@<word>     models/denoiser@best   the version an alias (`best`, `latest`) or a label names
+
+and a file inside the version may follow after `//` (`descent@v3//figures/a.png`, `3f9a2c1//figures/a.png`).
+
+The forms cannot overlap: an id has no `@`; `v<n>` is never a word; an artifact name, an alias, and a label are never 4
+or more hex digits alone (`cafe`, `1234`, `DEADBEEF`: refused when one is created, matched case-insensitively), so a
+bare word is an id or a name by its shape, and a word after `@` is a number or a word. A reference names a version of
+the project it is used in: there is no project in it.
+
+A short id is the shortest prefix of at least SHORT digits that no other id of the project starts with (`short_id`);
+any prefix of 4 or more digits names the version while it is unique, and one that matches several versions is
+Ambiguous, listing them (`pick`).
 """
 
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass
 
 from .errors import Ambiguous, InvalidRef, NotFound
-from .uids import UID
+from .ids import ID
 
 PROJECT = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 SEGMENT = re.compile(r"[a-z0-9][a-z0-9_.-]*")
 WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")  # aliases and labels
-LABEL = re.compile(
-    r"[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*"
-)  # labels may also be words joined by `/`
+LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)*")  # words, maybe joined by `/`
 VERSION = re.compile(r"v(0|[1-9][0-9]*)")
-HEX = re.compile(r"[0-9a-f]{4,64}")  # what may be a short id
+NUMBERED = re.compile(r"v[0-9]+")  # what a word may never be
+HEX = re.compile(r"[0-9a-fA-F]{4,}")  # never a name, an alias, or a label alone
 MAX_NAME = 200
-SHORT = 7  # hex digits of a short id, unless more are needed to tell it apart
+MIN_PREFIX = 4
+SHORT = 7  # digits of a short id, unless more are needed to tell it apart
 
 
 def valid_project(project: str) -> str:
@@ -40,9 +48,20 @@ def valid_project(project: str) -> str:
     return project
 
 
+def hex_alone(text) -> bool:
+    """Whether `text` is 4 or more hex digits and nothing else (case-insensitive): the shape of an id."""
+    return isinstance(text, str) and HEX.fullmatch(text) is not None
+
+
 def valid_name(name: str) -> str:
+    """An artifact name: slash-separated lowercase segments, never 4 or more hex digits alone (that is an id)."""
     if not isinstance(name, str) or not name or len(name) > MAX_NAME:
         raise InvalidRef(f"invalid artifact name {name!r}")
+    if hex_alone(name):
+        raise InvalidRef(
+            f"invalid artifact name {name!r}: 4 or more hex digits alone are an id, never a name (add a letter "
+            f"outside a-f, a '-', or a folder, e.g. 'data-{name}')"
+        )
     for segment in name.split("/"):
         if not SEGMENT.fullmatch(segment) or ".." in segment:
             raise InvalidRef(
@@ -52,13 +71,13 @@ def valid_name(name: str) -> str:
 
 
 def valid_word(word: str, what: str) -> str:
-    """An alias or label: never `v<n>`, which always means a version."""
+    """An alias or a label word: never `v<n>` (a version) and never 4 or more hex digits alone (an id)."""
     if not isinstance(word, str) or not WORD.fullmatch(word) or len(word) > 128:
         raise InvalidRef(f"invalid {what} {word!r}: use [A-Za-z0-9][A-Za-z0-9_.-]*")
-    if VERSION.fullmatch(word) or re.fullmatch(r"v[0-9]+", word):
+    if NUMBERED.fullmatch(word):
         raise InvalidRef(f"invalid {what} {word!r}: v<number> is reserved for versions")
-    if UID.fullmatch(word.lower()):
-        raise InvalidRef(f"invalid {what} {word!r}: a UUIDv7 is reserved for version uids")
+    if hex_alone(word):
+        raise InvalidRef(f"invalid {what} {word!r}: 4 or more hex digits alone are an id, never an alias or a label")
     return word
 
 
@@ -66,50 +85,89 @@ def valid_label(label: str) -> str:
     """A label: a word, or words joined by single slashes (a multirun trial's `<sweep-time>/<n>`)."""
     if not isinstance(label, str) or not LABEL.fullmatch(label) or len(label) > 128:
         raise InvalidRef(f"invalid label {label!r}: use [A-Za-z0-9][A-Za-z0-9_.-]* (words may be joined by '/')")
+    if "/" not in label:
+        return valid_word(label, "label")
     for word in label.split("/"):
-        valid_word(word, "label")
+        if NUMBERED.fullmatch(word):
+            raise InvalidRef(f"invalid label {label!r}: v<number> is reserved for versions")
     return label
+
+
+def new_label(label: str) -> str:
+    """A label a new version may get: a valid label, and not `latest` (the alias of every artifact)."""
+    valid_label(label)
+    if label == "latest":
+        raise InvalidRef("invalid label 'latest': it is the alias of every artifact's newest version")
+    return label
+
+
+def new_alias(alias: str) -> str:
+    """An alias that may be set: a valid word, and not `latest` (it moves by itself)."""
+    valid_word(alias, "alias")
+    if alias == "latest":
+        raise InvalidRef("'latest' moves automatically when a version completes")
+    return alias
+
+
+def default_label(text: str | None) -> str | None:
+    """`text` as a label when a new version may have it (a folder's name), else None."""
+    try:
+        return new_label(text) if text else None
+    except InvalidRef:
+        return None
 
 
 @dataclass(frozen=True)
 class Ref:
-    name: str
+    """A parsed reference: the id form (`id`, a prefix of 4 to 64 hex digits, and no name), or a name with an optional
+    selector (`v<n>`, or an alias or label; None is `latest`); either with an optional path inside the version."""
+
+    name: str | None = None
     selector: str | None = None
     path: str | None = None
+    id: str | None = None
+
+    @classmethod
+    def of(cls, id: str, path: str | None = None) -> "Ref":
+        """The reference of a version by its id (whole, or a prefix)."""
+        return cls(None, None, path, id)
 
     @property
     def version(self) -> int | None:
-        """The exact version number if the selector is `v<n>`."""
+        """The number of `name@v<n>`."""
         return int(self.selector[1:]) if self.selector and VERSION.fullmatch(self.selector) else None
 
     @property
-    def uid(self) -> str | None:
-        """The exact version uid if the selector is one."""
-        return self.selector if self.selector and UID.fullmatch(self.selector) else None
+    def word(self) -> str | None:
+        """The alias or label of `name@<word>`; `latest` for a bare name; None for `v<n>` and the id form."""
+        if self.id is not None or self.version is not None:
+            return None
+        return self.selector or "latest"
+
+    @property
+    def whole(self) -> bool:
+        """Whether this is the id form with a whole id (64 digits)."""
+        return self.id is not None and ID.fullmatch(self.id) is not None
 
     @property
     def exact(self) -> bool:
-        """Whether the selector names one version for good (`v<n>` or a uid), not an alias, label, or short id."""
-        return self.version is not None or self.uid is not None
+        """Whether it names one version for good: `name@v<n>`, or a whole id (not an alias, a label, or a prefix)."""
+        return self.version is not None or self.whole
 
-    @property
-    def id(self) -> str | None:
-        """The short id (or uid) this reference may stand for when no name, alias, or label matches: a selector of hex
-        digits, or, without a selector, a bare name of hex digits or a uid (a version of any artifact)."""
-        if self.selector is not None:
-            return self.selector if HEX.fullmatch(self.selector) else None
-        return self.name if HEX.fullmatch(self.name) or UID.fullmatch(self.name) else None
-
-    @property
-    def bare(self) -> bool:
-        """No selector and a name that may be an id: if no artifact has that name, it names a version of any artifact."""
-        return self.selector is None and self.id is not None
+    def at(self, path: str | None) -> "Ref":
+        """The same version, another path inside it."""
+        return Ref(self.name, self.selector, path, self.id)
 
     def __str__(self) -> str:
-        return self.name + (f"@{self.selector}" if self.selector else "") + (f"//{self.path}" if self.path else "")
+        head = self.id if self.id is not None else self.name + (f"@{self.selector}" if self.selector else "")
+        return head + (f"//{self.path}" if self.path else "")
 
 
-def parse(text: str) -> Ref:
+def parse(text) -> Ref:
+    """The reference `text` (see the module doc); InvalidRef when it has none of the four forms. A Ref is returned
+    as it is."""
+    if isinstance(text, Ref):
+        return text
     if not isinstance(text, str) or not text.strip() or text != text.strip():
         raise InvalidRef(f"invalid reference {text!r}")
     head, separator, path = text.partition("//")
@@ -123,86 +181,130 @@ def parse(text: str) -> Ref:
             raise InvalidRef(f"invalid reference {text!r}: bad path after '//'")
     if ":" in head:
         raise InvalidRef(
-            f"invalid reference {text!r}: a reference names an artifact of this project (name@version), "
-            "without a project"
+            f"invalid reference {text!r}: a reference names a version of this project (an id, a name, name@v<n>, or "
+            "name@<alias or label>), without a project"
         )
+    path = path if separator else None
     name, at, selector = head.partition("@")
+    if not at:
+        if hex_alone(head):
+            if len(head) > 64:
+                raise InvalidRef(f"invalid reference {text!r}: an id has at most 64 hex digits")
+            return Ref(None, None, path, head.lower())
+        valid_name(head)
+        return Ref(head, None, path)
+    if hex_alone(name):
+        raise InvalidRef(
+            f"invalid reference {text!r}: {name} is an id (4 or more hex digits), which names one version alone, "
+            "without '@'"
+        )
     valid_name(name)
-    if at:
-        if VERSION.fullmatch(selector) is None and UID.fullmatch(selector) is None:
-            if re.fullmatch(r"v[0-9]+", selector):
-                raise InvalidRef(f"invalid reference {text!r}: version numbers have no leading zeros")
-            valid_label(selector) if "/" in selector else valid_word(selector, "alias or label")
-    return Ref(name, selector if at else None, path if separator else None)
+    if not selector:
+        raise InvalidRef(f"invalid reference {text!r}: nothing after '@' (v<n>, an alias, or a label)")
+    if VERSION.fullmatch(selector):
+        return Ref(name, selector, path)
+    if NUMBERED.fullmatch(selector):
+        raise InvalidRef(f"invalid reference {text!r}: version numbers have no leading zeros")
+    if hex_alone(selector):
+        raise InvalidRef(
+            f"invalid reference {text!r}: {selector} is an id, which names a version alone: write "
+            f"{selector.lower()}{f'//{path}' if path else ''} (aliases and labels are never hex digits)"
+        )
+    valid_label(selector)
+    return Ref(name, selector, path)
+
+
+def version_segment(version: int | str) -> str:
+    """How an API path names a version made by code: `v<n>` for a number, the whole id for an id."""
+    if isinstance(version, bool) or not (isinstance(version, int) or ID.fullmatch(str(version))):
+        raise InvalidRef(f"a version is a number or an id (64 hex digits), not {version!r}")
+    return f"v{version}" if isinstance(version, int) else version
+
+
+def version_key(segment: str) -> int | str:
+    """The version an API path segment names (`version_segment`): `v<n>` is the number n, 64 hex digits an id."""
+    if isinstance(segment, str) and VERSION.fullmatch(segment):
+        return int(segment[1:])
+    if isinstance(segment, str) and ID.fullmatch(segment):
+        return segment
+    raise InvalidRef(f"invalid version {segment!r} in the path: v<n>, or an id (64 hex digits)")
+
+
+def of_artifact(name: str, selector: int | str) -> Ref:
+    """The reference to a version of the artifact `name` by a selector (`Artifact.version`): a number, `v<n>`, an alias
+    or a label, or an id (4 or more hex digits alone, which names a version by itself)."""
+    if isinstance(selector, bool) or not isinstance(selector, (int, str)):
+        raise TypeError("a version is a number, 'v<n>', an alias, a label, or an id")
+    if isinstance(selector, int):
+        return parse(f"{valid_name(name)}@v{selector}")
+    if hex_alone(selector):
+        return parse(selector)
+    return parse(f"{name}@{selector}")
 
 
 def exact(name: str, version: int) -> str:
-    """The reference manifests store for a consumed version: `name@v<n>`."""
-    return str(Ref(name, f"v{version}"))
+    """`name@v<n>`: a numbered version, as messages and listings show it."""
+    return f"{name}@v{version}"
 
 
 # ------------------------------------------------------------------ short ids
 
 
-def id_hash(uid: str) -> str:
-    """The SHA-256 (hex) of a version uid: short ids are its prefixes."""
-    return hashlib.sha256(uid.encode()).hexdigest()
+def common(a: str, b: str) -> int:
+    """How many leading digits two ids share."""
+    count = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        count += 1
+    return count
 
 
-def default_short_id(uid: str) -> str:
-    """A version's short id unless more digits were needed to tell it from another one: SHORT hex digits."""
-    return id_hash(uid)[:SHORT]
+def short_id(id: str, others) -> str:
+    """The short id of `id` among `others` (ids of the same project; `id` itself is skipped): the shortest prefix of at
+    least SHORT digits that none of them starts with. Passing the nearest ids in sorted order is enough."""
+    length = SHORT
+    for other in others:
+        if other and other != id:
+            length = max(length, common(id, other) + 1)
+    return id[: min(length, len(id))]
 
 
-def short_id(uid: str, taken) -> str:
-    """The short id of a new version: the first SHORT hex digits of `id_hash(uid)`, more while `taken(prefix)` says
-    another version's hash starts with them."""
-    full = id_hash(uid)
-    for length in range(SHORT, len(full)):
-        if not taken(full[:length]):
-            return full[:length]
-    return full
+def shown(name: str, manifest: dict, short: str | None = None) -> str:
+    """How a message names a version: `name@v<n>`, or `name (3f9a2c1)` while the source of truth has not numbered it."""
+    if manifest.get("version") is not None:
+        return exact(name, manifest["version"])
+    return f"{name} ({short or manifest['id'][:SHORT]})"
 
 
-def short_of(manifest: dict) -> str:
-    """The short id of a version manifest (its own, else the default for its uid)."""
-    return manifest.get("short_id") or default_short_id(manifest["uid"])
-
-
-def candidate(name: str, manifest: dict) -> dict:
-    """A version as an id lookup lists it: {name, version, uid, short_id, status}."""
+def candidate(name: str, manifest: dict, short: str) -> dict:
+    """A version as an id lookup lists it: {name, version, id, short_id, status}."""
     return {
         "name": name,
         "version": manifest.get("version"),
-        "uid": manifest["uid"],
-        "short_id": short_of(manifest),
+        "id": manifest["id"],
+        "short_id": short,
         "status": manifest.get("status"),
     }
 
 
 def describe(item: dict) -> str:
-    """`name@v<n> (3f9a2c1)`, or `name@<uid> (3f9a2c1)` while the version has no number."""
-    selector = f"v{item['version']}" if item.get("version") is not None else item["uid"]
-    return f"{item['name']}@{selector} ({item['short_id']})"
+    """`name@v<n> (3f9a2c1)`, or `name (3f9a2c1, pending)` while the version has no number."""
+    if item.get("version") is not None:
+        return f"{item['name']}@v{item['version']} ({item['short_id']})"
+    return f"{item['name']} ({item['short_id']}, pending)"
 
 
-def matches(text: str, uid: str) -> bool:
-    """Whether a short id (or a uid) may name the version with this uid."""
-    return uid == text if UID.fullmatch(text) else id_hash(uid).startswith(text)
-
-
-def pick(text: str, candidates: list[dict], where: str = "") -> dict:
-    """The one version a short id (or a uid) names among `candidates` (versions whose uid it may name, `matches`): a
-    version whose short id is exactly `text` wins (short ids are fixed when a version is made, so an older one keeps
-    its digits when a newer one needed more), else the only one. NotFound without one, Ambiguous with several."""
-    found = [item for item in candidates if matches(text, item["uid"])]
-    found = [item for item in found if item["short_id"] == text] or found
-    unique = list({item["uid"]: item for item in found}.values())
+def pick(prefix: str, candidates: list[dict], where: str = "") -> dict:
+    """The one version whose id starts with `prefix` among `candidates` ({name, version, id, short_id, status}):
+    NotFound without one, Ambiguous (listing each as `name@v<n> (short id)`) with several."""
+    unique = list({item["id"]: item for item in candidates if item["id"].startswith(prefix)}.values())
     if not unique:
-        raise NotFound(f"no version with the id {text}{where}")
+        raise NotFound(f"no version with the id {prefix}{where}")
     if len(unique) > 1:
         listed = ", ".join(
-            describe(item) for item in sorted(unique, key=lambda item: (item["name"], item["version"] or 0))
+            describe(item)
+            for item in sorted(unique, key=lambda item: (item["name"], item["version"] is None, item["version"] or 0))
         )
-        raise Ambiguous(f"the id {text} names {len(unique)} versions{where}: {listed}; give more digits", unique)
+        raise Ambiguous(f"the id {prefix} names {len(unique)} versions{where}: {listed}; give more digits", unique)
     return unique[0]
