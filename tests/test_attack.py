@@ -78,6 +78,22 @@ def script(project: Path, name: str, code: str) -> Path:
 
 
 _LOGS = iter(range(10**9))
+_SPAWNED: list[subprocess.Popen] = []
+_PROXIES: list = []  # FaultProxy
+
+
+@pytest.fixture(autouse=True)
+def _no_process_outlives_its_test():
+    """Every process a test spawned (servers, jobs, a login node's `cairn sync --watch`) ends with the test, also when
+    the test fails before it stops them."""
+    yield
+    while _PROXIES:
+        _PROXIES.pop().close()
+    while _SPAWNED:
+        process = _SPAWNED.pop()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
 
 
 def _interruptible() -> None:
@@ -106,11 +122,17 @@ def spawn(project: Path, *argv, env=None, **kwargs) -> subprocess.Popen:
             **kwargs,
         )
     process.logs = (out, err)
+    _SPAWNED.append(process)
     return process
 
 
 def finish(process: subprocess.Popen, timeout=600) -> tuple[str, str]:
-    process.wait(timeout=timeout)
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:  # the test fails; the process must not outlive it
+        process.kill()
+        process.wait()
+        raise
     return process.logs[0].read_text(), process.logs[1].read_text()
 
 
@@ -616,6 +638,7 @@ class FaultProxy:
         self.port = self.listener.getsockname()[1]
         self.url = f"http://127.0.0.1:{self.port}"
         self.held, self.connections, self.closed = [], 0, False
+        _PROXIES.append(self)
         threading.Thread(target=self._accept, daemon=True).start()
 
     def _accept(self) -> None:
@@ -2050,6 +2073,52 @@ def test_a_run_ends_only_once_its_large_output_is_on_a_healthy_remote(tmp_path):
     verify_clean(project, env)
     proxy.close()
     server.stop()
+
+
+FAILING_ATTACK = """
+import gc, os, sys
+sys.path.insert(0, {tests!r})
+import test_attack
+from test_attack import _no_process_outlives_its_test  # autouse here too
+
+
+def test_fails_with_its_server_and_proxy_running(tmp_path):
+    server = test_attack.RealServer(tmp_path / "remote").start()
+    proxy = test_attack.FaultProxy(server.port)
+    test_attack.Path({pid!r}).write_text(str(server.process.pid))
+    assert False, "an assertion before server.stop() and proxy.close()"
+
+
+def test_fails_next():  # its failure lets go of the first one's traceback (sys.last_traceback)
+    assert False
+
+
+def test_a_static_test_after_them():  # as test_boundaries.py runs after this module
+    gc.collect()
+"""
+
+
+def test_a_failed_test_leaves_no_process_behind_to_fail_a_later_one(tmp_path):
+    """A test of this module that fails before it stops its server left the `cairn server` running; when the garbage
+    collector later freed its Popen (`ResourceWarning: subprocess N is still running`, an error under the suite's
+    filterwarnings), pytest reported it in whatever test ran then (a static test of test_boundaries.py). Now every
+    process a test spawned ends with it, and every proxy closes."""
+    pid = tmp_path / "server.pid"
+    test = tmp_path / "test_failing.py"
+    test.write_text(FAILING_ATTACK.format(tests=str(Path(__file__).parent), pid=str(pid)))
+    root = Path(__file__).parent.parent
+    ran = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(root / "pyproject.toml"), str(test)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=base_env(),
+        timeout=300,
+    )
+    assert "2 failed, 1 passed" in ran.stdout, ran.stdout[-3000:]
+    assert "Unraisable" not in ran.stdout and "still running" not in ran.stdout, ran.stdout[-3000:]
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid.read_text()), 0)  # the server is gone
 
 
 def test_a_spawned_process_stops_on_sigint_when_the_runner_ignores_it(tmp_path):
