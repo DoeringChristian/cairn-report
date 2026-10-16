@@ -43,6 +43,7 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
     inputs = list(dict.fromkeys(item["resolved"] for item in build.inputs.values()))
     name = f"reports/{slug}"
     store = open_repo(config)
+    store.quiet_pending = True  # the line it prints says why a version is pending
     with tempfile.TemporaryDirectory(prefix="cairn-") as temporary:
         stage = Path(temporary) / slug
         shutil.copytree(folder, stage / "source", symlinks=True)
@@ -59,9 +60,7 @@ def publish_report(config: Config, folder: Path, *, quiet: bool = False) -> int 
             return latest["version"]
         version = publish_version(store, name, stage, metadata=metadata, inputs=inputs, label=time.strftime("%Y-%m-%d_%H-%M-%S"),
                                   config=config)
-    if version.number is None and version.manifest.get("uid") in getattr(store, "announced", ()):
-        return None  # the repo said it is pending (on stderr), with the reason
-    line = published(name, version.manifest, before)
+    line = published(name, version.manifest, before, getattr(store, "pending_reasons", {}).get(version.manifest.get("uid")))
     new = version.number is not None and version.number > before
     say(line[:-1] + f"; {plural(len(inputs), 'input')})" if new and line.endswith(")") else line, flush=True)
     return version.number

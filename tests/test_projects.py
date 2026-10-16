@@ -76,14 +76,14 @@ def test_the_cli_has_no_project_command_and_shows_no_project(study, capsys):
     main(["publish", str(data), "data"])
     out = capsys.readouterr().out
     version = cairn.connect().artifact("data").latest
-    assert out.strip() == f"published data@v1 ({version.short_id}; 1 files, 0.0 MB)"
+    assert out.strip() == f"published data@v1 ({version.short_id}, 1 file, 1 B)"
     with pytest.raises(SystemExit):
         main(["project", "list"])
     capsys.readouterr()
     main(["versions", "data"])
-    assert capsys.readouterr().out.split("\t")[:2] == ["v1", version.short_id]
+    assert capsys.readouterr().out.splitlines()[1].split()[:2] == ["v1", version.short_id]
     main(["artifacts"])
-    assert ":" not in capsys.readouterr().out.split("\t")[0]
+    assert ":" not in capsys.readouterr().out.splitlines()[1].split()[0]
 
 
 def test_remote_urls_name_their_project_in_the_last_segment():

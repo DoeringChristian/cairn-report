@@ -153,7 +153,7 @@ def test_a_fresh_folder_gets_one_repo_at_the_launch_folder(hydra_project):
     assert not (hydra_project / ".cairn").exists()
     single = run(hydra_project)
     assert single.returncode == 0, single.stderr
-    assert single.stderr.count("created the repo") == 1 and str(hydra_project / ".cairn") in single.stderr
+    assert single.stderr.count("created the repo") == 1 and "created the repo .cairn " in single.stderr
     sweep = run(hydra_project, "-m", "experiment.fail=false,false")
     assert sweep.returncode == 0, sweep.stderr
     assert "created the repo" not in sweep.stderr  # found: the launch folder holds .cairn/repo.json now

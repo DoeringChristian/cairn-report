@@ -228,8 +228,7 @@ def test_plain_http_to_a_non_local_store_works_with_one_warning(capsys, monkeypa
     RemoteBackend("http://store.example.org:8800")
     RemoteBackend("http://store.example.org:8800")
     err = capsys.readouterr().err
-    assert err.count("warning: plain HTTP to store.example.org: the token is sent unencrypted; fine over a VPN (Tailscale) "
-                     "or an SSH tunnel") == 1
+    assert err.count("warning: plain HTTP to store.example.org: the token is sent unencrypted") == 1
 
 
 # --------------------------------------------------------------------- pages
@@ -479,7 +478,8 @@ def test_serve_ui_prints_where_it_runs(server, capsys, monkeypatch):
     monkeypatch.setattr(ui_server.ThreadingHTTPServer, "serve_forever", lambda self: self.server_close())
     ui_server.serve_ui(RemoteBackend(server.url), port=0)
     out = capsys.readouterr().out
-    assert re.fullmatch(rf"UI: http://127\.0\.0\.1:\d+/ \(repo: {re.escape(server.url)}\)\n", out) and server.token not in out
+    assert re.fullmatch(rf"Cairn UI +http://127\.0\.0\.1:\d+/\n  Repo +{re.escape(server.url)}\nServing; Ctrl-C stops it.\n", out), out
+    assert server.token not in out
 
 
 # -------------------------------------------------------------- end to end

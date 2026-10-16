@@ -107,7 +107,7 @@ def test_outside_any_project_opening_creates_the_repo_here_and_looking_refuses(t
     result = subprocess.run([sys.executable, "-c", script], cwd=bare, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert (bare / ".cairn" / "repo.json").is_file()
-    assert result.stderr.count("created the repo") == 1 and str(bare.resolve() / ".cairn") in result.stderr
+    assert result.stderr.count("created the repo") == 1 and "created the repo .cairn " in result.stderr
     assert subprocess.run([sys.executable, "-m", "cairn", "status"], cwd=bare, capture_output=True).returncode == 0
 
 

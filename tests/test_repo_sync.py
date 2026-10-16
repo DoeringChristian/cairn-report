@@ -97,13 +97,13 @@ def test_offline_publishes_wait_and_the_next_command_syncs_them_once_even_after_
     for index in range(3):
         data = folder(tmp_path, f"d{index}", {"a.txt": f"version {index}", "big.bin": f"{index}" * 200_000})
         result = cairn_cli(project, "publish", str(data), "data")
-        assert result.returncode == 0 and "pending data" in result.stdout + result.stderr, result.stderr
+        assert result.returncode == 0 and "pending data" in result.stdout, result.stderr
     pending = outbox(project)
     assert len(pending) == 3
     status = cairn_cli(project, "status").stdout
-    assert status.count("pending\tdata\t-\t") == 3
+    assert len(re.findall(r"^pending +data +- ", status, re.M)) == 3, status
     listing = cairn_cli(project, "versions", "data").stdout  # offline: the repo's pending versions, by uid
-    assert len(re.findall(r"^pending\t[0-9a-f]{7}\tpending", listing, re.M)) == 3
+    assert len(re.findall(r"^pending +[0-9a-f]{7} +pending ", listing, re.M)) == 3, listing
 
     server.start()
     killed = subprocess.run([sys.executable, "kill.py", "upload"], cwd=project, capture_output=True, text=True, timeout=120)
@@ -115,11 +115,11 @@ def test_offline_publishes_wait_and_the_next_command_syncs_them_once_even_after_
 
     result = cairn_cli(project, "versions", "data")  # the next command sends everything first
     assert result.returncode == 0, result.stderr
-    assert result.stderr.count("uploaded data@v") == 3
+    assert result.stderr.count("sent data@v") == 3
     on_remote = remote_versions(server, "data")
     assert [v["version"] for v in on_remote] == [1, 2, 3] and sorted(v["uid"] for v in on_remote) == pending  # no duplicates
     assert outbox(project) == []
-    assert [line.split("\t")[0] for line in result.stdout.splitlines()] == ["v1", "v2", "v3"]
+    assert [line.split()[0] for line in result.stdout.splitlines()[1:]] == ["v1", "v2", "v3"]
     repo = LocalRepo(project / ".cairn")
     assert [(v["version"], v["uid"]) for v in repo.versions(OWN, "data")] == [(v["version"], v["uid"]) for v in on_remote]
     assert [v["short_id"] for v in repo.versions(OWN, "data")] == [v["short_id"] for v in on_remote]  # the same short ids
@@ -260,9 +260,9 @@ def test_on_a_network_filesystem_jobs_keep_an_outbox_and_a_login_node_sends_it(s
     assert len(outbox(project)) == 8  # every run and every result, one folder each
     assert not (project / ".cairn" / "metadata.sqlite3").exists()  # never a database on the network filesystem
     status = cairn_cli(project, "status", env=env)
-    assert len(re.findall(r"^pending\t", status.stdout, re.M)) == 8, status.stderr
+    assert len(re.findall(r"^pending ", status.stdout, re.M)) == 8, status.stderr
     down = cairn_cli(project, "versions", "result", env=env)
-    assert down.returncode == 0 and len(re.findall(r"^pending\t[0-9a-f]{7}\tpending\t", down.stdout, re.M)) == 4  # the outbox
+    assert down.returncode == 0 and len(re.findall(r"^pending +[0-9a-f]{7} +pending ", down.stdout, re.M)) == 4  # the outbox
 
     server.start()
     login = cairn_cli(project, "sync", env=env)  # the login node
@@ -360,7 +360,7 @@ def test_a_publish_killed_halfway_leaves_no_partial_version(server, tmp_path):
     assert repo.versions(OWN, "data") == []  # the transaction rolled back: nothing half there
     assert repo.verify().ok
     result = cairn_cli(project, "publish", str(data), "data")
-    assert result.returncode == 0 and re.search(r"published data@v1 \([0-9a-f]{7}; 2 files", result.stdout), result.stderr
+    assert result.returncode == 0 and re.search(r"published data@v1 \([0-9a-f]{7}, 2 files", result.stdout), result.stderr
 
     synced = project_at(tmp_path, "synced", server.url)
     (synced / "kill.py").write_text(SLOW_OUTBOX)
@@ -651,7 +651,7 @@ def test_a_refused_token_leaves_versions_pending_not_rejected(server, online, tm
     with pytest.raises(cairn.Unauthorized, match="refused"):
         cairn.connect().artifact("a").publish(folder(tmp_path, "a", {"x.txt": "a"}))
     status = cairn_cli(online, "status")
-    assert status.stdout.startswith("pending\ta\t"), status.stdout  # pending, not rejected
+    assert re.search(r"\npending +a +- ", status.stdout), status.stdout  # pending, not rejected
     monkeypatch.setenv("CAIRN_TOKEN", server.token)
     assert cairn_cli(online, "sync").returncode == 0 and [v["version"] for v in remote_versions(server, "a")] == [1]
 

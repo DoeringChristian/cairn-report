@@ -320,7 +320,7 @@ def test_publish_watch_syncs_a_running_version_to_the_server(server, env, capsys
         main(["publish", str(out), "sweep", "--interval", "0.5", "--", sys.executable, "-c", script, str(out)])
     watcher.join()
     out = capsys.readouterr().out
-    assert exit.value.code == 0 and "published sweep@v1 (" in out and "; 2 files" in out
+    assert exit.value.code == 0 and "published sweep@v1 (" in out and ", 2 files" in out
     assert any(status == "running" and files == ["first.txt"] for status, files in seen), seen
     [version] = store.versions("sweep")
     assert version["status"] == "completed" and [f["path"] for f in version["files"]] == ["first.txt", "second.txt"]
@@ -427,8 +427,8 @@ def test_store_serve_starts_its_ui_as_a_child_with_the_token_in_its_environment_
         token = (root / "token").read_text().strip()
         text = "\n".join(lines)
         ui_port = port + 1
-        assert f"Repo: http://127.0.0.1:{port}/" in text and f"Token: {token}" in text
-        assert any(line.startswith(f"UI: http://127.0.0.1:{ui_port}/ (repo: http://127.0.0.1:{port}") for line in lines), lines
+        assert re.search(rf"\n  API +http://127.0.0.1:{port}/\n", text) and re.search(rf"\n  Token +{token} ", text), text
+        assert re.search(rf"\n  UI +http://127.0.0.1:{ui_port}/\n", text), text
     except Exception:
         stop_process(process)
         raise
@@ -461,7 +461,7 @@ def test_store_serve_starts_its_ui_as_a_child_with_the_token_in_its_environment_
 def test_store_serve_no_ui_and_ui_port(tmp_path):
     process, port, lines, root = launch(tmp_path, "--no-ui")
     try:
-        assert not any(line.startswith("UI:") for line in lines) and children_of(process.pid) == []
+        assert not any(line.startswith("  UI ") for line in lines) and children_of(process.pid) == []
     finally:
         stop_process(process)
     tmp = tmp_path / "second"
@@ -469,8 +469,8 @@ def test_store_serve_no_ui_and_ui_port(tmp_path):
     process, port, lines, root = launch(tmp, "--ui-port", str(free_port()))
     try:
         [(child, command)] = children_of(process.pid)
-        [shown] = [line for line in lines if line.startswith("UI:")]
-        assert re.fullmatch(r"UI: http://127\.0\.0\.1:(\d+)/ \(repo: http://127\.0\.0\.1:\d+\)", shown)
+        [shown] = [line for line in lines if line.startswith("  UI ")]
+        assert re.fullmatch(r"  UI +http://127\.0\.0\.1:(\d+)/", shown), shown
         assert f"--port {shown.split(':')[2].split('/')[0]}" in command
     finally:
         stop_process(process)
@@ -479,7 +479,7 @@ def test_store_serve_no_ui_and_ui_port(tmp_path):
 def test_store_serve_no_auth_runs_the_ui_without_a_login(tmp_path):
     process, port, lines, root = launch(tmp_path, "--no-auth")
     try:
-        assert not any("Token:" in line for line in lines)
+        assert not any(line.startswith("  Token ") for line in lines) and any("Auth" in line for line in lines)
         ui = SimpleNamespace(port=port + 1, token="")
         assert call(ui, "GET", "/", token=None)[0] == 200  # no login in front of the UI either
         [(child, command)] = children_of(process.pid)
@@ -509,8 +509,8 @@ def test_the_spawned_ui_exits_when_the_server_is_killed(tmp_path):
                               stdout=subprocess.PIPE, text=True)
     try:
         lines = [server.stdout.readline() for _ in range(4)]
-        ui = next(line for line in lines if line.startswith("UI:"))
-        port = int(ui.split(":")[3].split("/")[0])
+        ui = next(line for line in lines if line.startswith("  UI "))
+        port = int(re.search(r":(\d+)/", ui).group(1))
         os.kill(server.pid, signal.SIGKILL)  # no handler in the server runs
         server.wait()
         deadline = time.monotonic() + 10

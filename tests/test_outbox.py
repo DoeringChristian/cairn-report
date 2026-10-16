@@ -15,6 +15,7 @@ import pytest
 
 import cairn
 from cairn.cli import main
+from cairn.store import refs
 
 from test_identity import Server
 from test_offline import down, run  # noqa: F401
@@ -45,7 +46,7 @@ def test_pending_lives_in_the_repo_and_survives_removing_the_read_only_folders(d
     shutil.rmtree(repo / "versions")  # derived from the blobs: removing it loses nothing
     capsys.readouterr()
     down.start()
-    assert f"uploaded data@v1 ({version.short_id})" in run(capsys, "sync")[0]
+    assert f"sent data@v1 ({version.short_id})" in run(capsys, "sync")[0]
     assert outbox_versions(env) == []
 
 
@@ -109,7 +110,7 @@ def test_pending_version_is_usable_before_upload(down, env, capsys, monkeypatch)
     fit = store.artifact("fit").publish(env / "job")
     assert fit.inputs == [f"data@{uid}"]
     out, _ = run(capsys, "status")
-    assert out.count("pending\t") == 2 and uid in out
+    assert out.count("\npending ") == 2 and refs.default_short_id(uid) in out
 
     down.start()
     run(capsys, "sync")

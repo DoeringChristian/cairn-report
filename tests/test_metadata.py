@@ -4,6 +4,7 @@ writer per served root."""
 import hashlib
 import io
 import json
+import re
 import sqlite3
 import subprocess
 import sys
@@ -41,7 +42,7 @@ def test_export_metadata(tmp_path, capsys):
     store.publish("models", "fit", [two])
     main(["export-metadata", str(root), str(tmp_path / "out")])
     out = capsys.readouterr().out
-    assert "versions.jsonl  4 rows" in out and "aliases.jsonl  4 rows" in out
+    assert re.search(r"versions.jsonl +4 rows", out) and re.search(r"aliases.jsonl +4 rows", out), out
     versions = [json.loads(line) for line in (tmp_path / "out" / "versions.jsonl").read_text().splitlines()]
     assert [(v["project"], v["name"], v["version"]) for v in versions] == [("data", "fit", 1), ("data", "sets/crops", 1),
                                                                         ("data", "sets/crops", 2), ("models", "fit", 1)]

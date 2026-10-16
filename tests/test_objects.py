@@ -137,6 +137,6 @@ def test_cli_artifacts_versions_show(configured, env, capsys):
     assert "consumers    models/fit@v1" in out and "aliases      latest, paper" in out and "\n  b.txt  2 B\n" in out
     assert "inputs       datasets/crops@v1" in run(capsys, "show", "models/fit")
     status = run(capsys, "status")
-    assert ("nothing pending" if configured else "has no remote") in status
+    assert ("nothing pending" if configured else "no remote") in status
     sync = run(capsys, "sync")
     assert ("nothing to sync" if configured else "nothing to sync") in sync

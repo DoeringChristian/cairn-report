@@ -21,7 +21,7 @@ def test_publish_folder_records_label_alias_and_meta(env, capsys):
     out = run(capsys, "publish", str(data), "crops", "--label", "first", "--alias", "paper", "--alias", "keep",
               "--meta", "psnr=31.2", "--meta", "note=hello")
     [version] = store.versions("crops")
-    assert out.startswith(f"published crops@v1 ({version['short_id']}; 2 files, ")
+    assert out.startswith(f"published crops@v1 ({version['short_id']}, 2 files, ")
     assert version["label"] == "first" and version["metadata"] == {"psnr": 31.2, "note": "hello"}
     assert store.pull("crops@paper") == store.pull("crops@keep") == store.pull("crops@first")
 
@@ -30,7 +30,7 @@ def test_unchanged_republish_creates_no_version(env, capsys):
     data = folder(env, "data", {"a.txt": "one"})
     run(capsys, "publish", str(data), "crops")
     short = store.versions("crops")[0]["short_id"]
-    assert run(capsys, "publish", str(data), "crops").strip() == f"crops@v1 ({short}) unchanged"
+    assert run(capsys, "publish", str(data), "crops").strip() == f"unchanged crops@v1 ({short})"
     (data / "a.txt").write_text("changed")
     assert run(capsys, "publish", str(data), "crops").startswith("published crops@v2")
     assert [v["version"] for v in store.versions("crops")] == [1, 2]
@@ -82,7 +82,7 @@ def watch(capsys, target, code):
 
 def test_watch_command_makes_one_completed_version(env, capsys):
     code, output = watch(capsys, env / "out", 0)
-    assert code == 0 and "published sweep@v1 (" in output.out and "; 3 files" in output.out
+    assert code == 0 and "published sweep@v1 (" in output.out and ", 3 files" in output.out
     [version] = store.versions("sweep")
     assert version["status"] == "completed" and [e["path"] for e in version["files"]] == ["first.txt", "log.txt", "second.txt"]
     assert "synced" in output.out  # synced while the command still ran

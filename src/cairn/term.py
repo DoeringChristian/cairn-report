@@ -58,7 +58,8 @@ def error_line(text: str) -> str:
         if text.startswith(prefix):
             text = text[len(prefix):]
     text = short_paths(text)
-    return text if text.startswith("cairn: ") else f"cairn: {text}"
+    text = text[len("cairn: "):] if text.startswith("cairn: ") else text
+    return f"{style('cairn:', 'red', sys.stderr)} {text}"
 
 
 def short_paths(text: str) -> str:

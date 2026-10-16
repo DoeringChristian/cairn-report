@@ -438,7 +438,7 @@ def test_republishing_an_unchanged_report_creates_no_version(project, capsys):
     main(["publish", "reports/alpha"])
     capsys.readouterr()
     main(["publish", "reports/alpha"])
-    assert re.search(r"reports/alpha@v1 \([0-9a-f]{7}\) unchanged", capsys.readouterr().out)
+    assert re.search(r"unchanged reports/alpha@v1 \([0-9a-f]{7}\)", capsys.readouterr().out)
     assert [v["version"] for v in store.versions("reports/alpha")] == [1]
     alpha = project / "reports" / "alpha" / "report.md"
     alpha.write_text(alpha.read_text() + "\nMore text.\n")
@@ -459,7 +459,7 @@ def test_lineage_connects_the_report_and_its_input(project):
 
 
 def test_publish_refuses_options_on_a_report_folder(project):
-    with pytest.raises(SystemExit, match="publishes as reports/<slug> on its own"):
+    with pytest.raises(SystemExit, match="a report folder publishes as reports/<slug>"):
         main(["publish", "reports/alpha", "other"])
 
 

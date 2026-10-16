@@ -171,7 +171,7 @@ def test_config_becomes_metadata(env, capsys):
     capsys.readouterr()
     main(["show", "fit@latest"])
     shown = capsys.readouterr().out
-    assert "config\n  lr = 0.1\n  model.depth = 3\n  model.widths = [8, 16]\n" in shown
+    assert re.search(r"config\n  lr += 0.1\n  model.depth += 3\n  model.widths += \[8, 16\]\n", shown), shown
 
 
 def test_watch_keeps_a_running_version_synced(configured, env):
@@ -235,15 +235,15 @@ def test_cli_lists_publishes_and_discards_kept_drafts(configured, env, capsys):
     cairn.run.finish()  # this process's run: it is a draft too, until it ends
     capsys.readouterr()
     main(["drafts"])
-    listed = capsys.readouterr().out.splitlines()
-    assert [line.split("\t")[0] for line in listed] == ["jobs/first", "jobs/second", "jobs/third"]
+    listed = capsys.readouterr().out.splitlines()[1:]  # under the header
+    assert [line.split()[0] for line in listed] == ["jobs/first", "jobs/second", "jobs/third"]
     found = drafts.drafts()
-    assert all(line.split("\t")[1] == found[i].short_id and line.split("\t")[2] == found[i].uid and line.split("\t")[3] == "kept"
+    assert all(line.split()[1] == found[i].short_id and line.split()[2].rstrip("…") in found[i].uid and line.split()[3] == "kept"
                and line.endswith(found[i].uid) for i, line in enumerate(listed))
     first, second, third = drafts.drafts()
 
     main(["drafts", "publish", first.uid[:30]])
-    assert capsys.readouterr().out.startswith(f"published jobs/first@v1 ({first.short_id}; 1 files")
+    assert capsys.readouterr().out.startswith(f"published jobs/first@v1 ({first.short_id}, 1 file,")
     main(["drafts", "discard", str(second.folder)])
     assert not second.folder.exists()
     with pytest.raises(SystemExit, match="says failed"):

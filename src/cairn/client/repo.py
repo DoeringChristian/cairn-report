@@ -318,7 +318,8 @@ class SyncedRepo(ProjectRepo):
         self.heartbeat_timeout = heartbeat_timeout
         self.outbox = Outbox(self.root)
         self.engine = Sync(self.outbox, remote, copies, self.root, heartbeat_timeout)
-        self.announced: set[str] = set()  # uids whose pending state a warning already told (publish prints no second line)
+        self.quiet_pending = False  # `cairn publish` says itself why a version is pending (on stdout, with the reason)
+        self.pending_reasons: dict[str, str] = {}  # uid -> why it stayed pending
         self._down_until = 0.0  # the remote did not answer: reads and background sends skip it until then
         self._quick: SyncedRepo | None = None  # this repo with short request timeouts (`quick`)
         self._reached = False  # reach() looked at the remote once (and adopted what the repo numbered itself)
@@ -920,16 +921,18 @@ class SyncedRepo(ProjectRepo):
             if isinstance(error.__cause__, (Unauthorized, Forbidden)):  # the caller should know at once; it stays pending
                 raise type(error.__cause__)(f"{error.__cause__}; {record['name']} ({refs.default_short_id(record['uid'])}) "
                                             "stays pending until a token that may write sends it") from None
-            _warn(f"pending {record['name']} ({refs.default_short_id(record['uid'])}): {reason(error)}")
-            self.announced.add(record["uid"])
+            self.pending_reasons[record["uid"]] = reason(error)
+            if not self.quiet_pending:
+                _warn(f"pending {record['name']} ({refs.default_short_id(record['uid'])}): {reason(error)}")
             start_uploader(self)
         except Unreachable as error:
             if not isinstance(error, NotRecorded):
                 self._failed(began)
             what = "failed" if record["status"] == "failed" else "pending"
-            _warn(f"{what} {record['name']} ({refs.default_short_id(record['uid'])}): {reason(error)}\n"
-                  + hint("run `cairn sync` to send it now", sys.stderr))
-            self.announced.add(record["uid"])
+            self.pending_reasons[record["uid"]] = reason(error)
+            if not self.quiet_pending:
+                _warn(f"{what} {record['name']} ({refs.default_short_id(record['uid'])}): {reason(error)}\n"
+                      + hint("run `cairn sync` to send it now", sys.stderr))
             start_uploader(self)
         return self._settled(record)
 

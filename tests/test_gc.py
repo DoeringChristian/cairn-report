@@ -500,10 +500,10 @@ def test_cli_delete_retention_gc(configured, env, capsys):
     with pytest.raises(SystemExit, match="alias best"):
         main(["delete", "data@v1"])
     main(["retention", "set", "--keep-last", "1"])
-    assert capsys.readouterr().out == "(every artifact)\tkeep_last=1\n"
+    assert capsys.readouterr().out == "(every artifact)  keep_last=1\n"
     main(["retention", "set", "--prefix", "runs/", "--keep-days", "7"])
     main(["retention", "show"])
-    assert capsys.readouterr().out.splitlines()[-2:] == ["(every artifact)\tkeep_last=1", "runs/\tkeep_days=7"]
+    assert capsys.readouterr().out.splitlines()[-2:] == ["(every artifact)  keep_last=1", "runs/             keep_days=7"]
     main(["gc", "--dry-run", "--grace", "0"])
     out = capsys.readouterr().out
     gone = "data@v2" if not configured.remote else "data@v2 (project study)"  # the server's report names the project
@@ -515,7 +515,7 @@ def test_cli_delete_retention_gc(configured, env, capsys):
     main(["delete", "--artifact", "data", "--force"])
     assert capsys.readouterr().out == "deleted data@v1\ndeleted data@v3\n"
     main(["retention", "clear"])
-    assert capsys.readouterr().out == "runs/\tkeep_days=7\n"
+    assert capsys.readouterr().out == "runs/  keep_days=7\n"
     if not configured.remote:
         main(["gc", str(configured.root), "--grace", "0"])
         assert "removed 2 blobs" in capsys.readouterr().out

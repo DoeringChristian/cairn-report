@@ -218,12 +218,12 @@ def describe(version: dict) -> str:
     return files_text(version["files"])
 
 
-def published(name: str, version: dict, before: int = 0) -> str:
+def published(name: str, version: dict, before: int = 0, why: str | None = None) -> str:
     """The line a publish prints: `published descent@v3 (3f9a2c1, 2 files, 12 KB)`, `unchanged descent@v3 (3f9a2c1)`,
     or `pending descent (3f9a2c1): remote not reachable` while the remote does not answer."""
     short = refs.short_of(version)
     if version.get("version") is None:
-        return f"pending {name} ({short}): remote not reachable\n" + hint("run `cairn sync` to send it now")
+        return f"pending {name} ({short}): {why or 'remote not reachable'}\n" + hint("run `cairn sync` to send it now")
     if version["version"] <= before:
         return f"unchanged {name}@v{version['version']} ({short})"
     return f"published {name}@v{version['version']} ({short}, {describe(version)})"
@@ -233,6 +233,7 @@ def publish_folder(config: Config, folder: Path, name: str, label: str | None, a
                    allow_incomplete: bool = False) -> None:
     """Publish one folder and print what happened."""
     store = open_repo(config)
+    store.quiet_pending = True  # the line below says why
     target = _target(name)
     try:
         before = max((v["version"] or 0 for v in store.versions(target)), default=0)
@@ -240,9 +241,8 @@ def publish_folder(config: Config, folder: Path, name: str, label: str | None, a
         before = 0
     version = publish_version(store, target, folder, metadata=meta, aliases=aliases, label=label, config=config,
                               allow_incomplete=allow_incomplete)
-    if version.manifest.get("version") is None and version.manifest.get("uid") in getattr(store, "announced", ()):
-        return  # the repo said so already (on stderr), with the reason
-    print(published(target, version.manifest, before), flush=True)
+    why = getattr(store, "pending_reasons", {}).get(version.manifest.get("uid"))
+    print(published(target, version.manifest, before, why), flush=True)
 
 
 def signature(folder: Path, config: Config) -> dict:
